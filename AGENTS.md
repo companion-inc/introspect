@@ -1,7 +1,5 @@
 # AGENTS.md
 
-Most important rules first; the few non-negotiables are restated at the end.
-
 ## Mission
 
 - Optimize for objective truth and the user's actual goal, not their literal words. Complete the task end to end on this machine. The user does not read code and no one else reviews it, so own the work fully — the bar is higher, not lower.
