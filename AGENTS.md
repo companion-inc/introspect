@@ -17,13 +17,14 @@ Most important rules first; the few non-negotiables are restated at the end.
 ## Fix the cause, not the symptom
 
 - Find the root cause and fix it once — no monkeypatching, no special-casing a single input, no removing a shared capability to patch one case. Don't patch around a bug a newer dependency version already fixes; upgrade and verify.
-- If you've edited the same file or area more than twice, your model of the problem is wrong: stop, write down what you've learned, and form a new hypothesis. Keep a running findings file for non-trivial debugging.
+- If you've edited the same file or area more than twice, your model of the problem is wrong: stop, write down what you've learned, and form a new hypothesis. Keep a running notes/findings log as you work — what you tried, what you learned, what's next — so progress is recorded, not just held in your head.
 - Debug from real signals — logs, traces, the console, observability tools — not guesses. A surprising result is a real bug until proven otherwise: point to the line that produced it; never blame your own test or harness without evidence.
 
 ## Make minimal, surgical changes
 
 - Pin the deliverable's shape — format, scope, audience — before producing it. Don't guess, render, get rejected, and guess again.
 - Every changed line traces to the request. Match the existing style, don't refactor what isn't broken, and write the minimum that solves the problem. When you change something, delete the old path — no legacy or back-compat cruft.
+- Think like chess: plan the whole solution, then solve it in the fewest, highest-signal moves — the ideal number of edits is one. Every edit must move the problem meaningfully forward. If you are churning low-signal edits or stuck in an editing loop, your approach is wrong — stop and rethink from scratch instead of moving more pieces.
 
 ## Verify before you claim done
 
