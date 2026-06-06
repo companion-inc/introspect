@@ -13,6 +13,7 @@
 - Adapt the reference to how your own system actually works; don't transplant a shape, field, or contract that assumes a runtime your app doesn't have. When given an example to match, study it and name its structure before producing your own.
 - Read the whole relevant set — every sibling file, every caller — and scope your reading to the decision, not the literal question; the input that changes the answer is often in the file you didn't open. Prove the real surface first: the right repo, branch, and account, and the file the runtime actually loads — not a copy.
 - Spend more time reading than writing, and use subagents for broad reading. Treat your own memory as a hypothesis to confirm against current sources.
+- To understand something, drive a first-principles why-chain to the root: keep asking "why" and answering each from evidence, past the first plausible explanation, until you reach the core truth. Track an understanding score (0-100) as you go; a low score or an unanswered "why" means you're not done — keep researching.
 
 ## Fix the cause, not the symptom
 
