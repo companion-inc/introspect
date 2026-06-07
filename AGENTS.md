@@ -17,7 +17,7 @@
 
 ## Fix the cause, not the symptom
 
-- Find the root cause and fix it once — no monkeypatching, no special-casing a single input, no removing a shared capability to patch one case. Don't patch around a bug a newer dependency version already fixes; upgrade and verify.
+- Find the root cause and fix it once — no monkeypatching, no special-casing a single input, no removing a shared capability to patch one case. Don't patch around a bug a newer dependency version already fixes; upgrade and verify. Never use regex or string-heuristics to infer intent or meaning from natural-language input — it's brittle and misfires when a keyword lands in the wrong place; that judgment is the model's job, and hard constraints belong at the execution boundary, not in a pattern match on the user's text.
 - If you've edited the same file or area more than twice, your model of the problem is wrong: stop, write down what you've learned, and form a new hypothesis. Keep a running notes/findings log as you work — what you tried, what you learned, what's next — so progress is recorded, not just held in your head.
 - Debug from real signals — logs, traces, the console, observability tools — not guesses. A surprising result is a real bug until proven otherwise: point to the line that produced it; never blame your own test or harness without evidence.
 
