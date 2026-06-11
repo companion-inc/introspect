@@ -7,30 +7,33 @@
   },
   "skills": [
     {
-      "id": "writing-agent-prompt",
-      "path": "skills/writing-agent-prompt/SKILL.md",
+      "id": "agent-md-creator",
+      "path": "skills/agent-md-creator/SKILL.md",
       "status": "active",
       "tier": "core-maintenance",
-      "description": "Edit, review, prune, and debug AGENTS.md without bloating the global prompt.",
+      "description": "Create, edit, prune, review, and debug AGENTS.md without bloating the global prompt.",
       "activation_signals": [
+        "reflector considering core_prompt",
         "AGENTS.md edit",
+        "CLAUDE.md edit",
         "global prompt rule",
         "prompt bloat",
-        "instruction not firing",
-        "reflector considering core_prompt"
+        "instruction not firing"
       ]
     },
     {
-      "id": "writing-agent-skills",
-      "path": "skills/writing-agent-skills/SKILL.md",
+      "id": "skill-creator",
+      "path": "skills/skill-creator/SKILL.md",
       "status": "active",
       "tier": "core-maintenance",
-      "description": "Create, update, prune, and validate scoped agent skills without bloating AGENTS.md.",
+      "description": "Create, update, prune, and validate agent-loop skills without bloating AGENTS.md.",
       "activation_signals": [
         "reflector considering skill_new",
         "reflector considering skill_update",
-        "new agent skill",
-        "update existing skill",
+        "reflector considering skill_prune",
+        "create agent skill",
+        "update agent skill",
+        "prune agent skill",
         "skill source gate",
         "skill validation"
       ]

@@ -274,10 +274,10 @@ Skills directory:
 Workflow:
 1. Read the recent turns for the relevant transcript/session and identify the agent behavior that caused the frustration, not the wording of the user's message.
 2. Run {REPO}/hooks/frustration-stats.sh and compare the current prompt version against prior versions.
-3. Classify the change target as exactly one of: no_change, core_prompt, skill_new, skill_update.
-4. Use core_prompt only for an always-loaded invariant that should apply across nearly every task. Read the prompt-maintenance skill in the skills directory if present before editing AGENTS.md.
-5. Use skill_new or skill_update for scoped workflows, domains, repeated failure shapes, or instructions that should load only in relevant situations. Before creating or editing a skill, read skills/writing-agent-skills/SKILL.md, the skills index, and the closest existing skill. Prefer updating a close skill over creating a duplicate.
-6. For skill changes, write or edit a self-contained skills/<slug>/SKILL.md in this repo, update skills/index.json, and run AGENTS_MD_SKILLS_DIR={SKILLS_DIR} {REPO}/scripts/validate-skills.py.
+3. Classify the change target as exactly one of: no_change, core_prompt, skill_new, skill_update, skill_prune.
+4. Use core_prompt only for an always-loaded invariant that should apply across nearly every task. Before editing AGENTS.md, read skills/agent-md-creator/SKILL.md.
+5. Use skill_new or skill_update for scoped workflows, domains, repeated failure shapes, or instructions that should load only in relevant situations. Use skill_prune for stale, duplicated, overbroad, unsupported, or harmful skills. Before any skill operation, read skills/skill-creator/SKILL.md, its source map, the skills index, and the closest existing skill. Prefer updating or pruning a close skill over creating a duplicate.
+6. For skill changes, write or edit a self-contained skills/<slug>/SKILL.md in this repo, update skills/index.json, and run AGENTS_MD_SKILLS_DIR={SKILLS_DIR} {REPO}/scripts/validate-skills.py. For skill_prune, prefer marking status deprecated or narrowing activation before deleting files.
 7. If the frustration rate rose after a recent AGENTS.md change, prefer reverting or narrowing that change over adding another rule.
 8. Commit with a behavioral message and push.
 9. If no change is justified, make no file changes and say why in the log output.

@@ -39,13 +39,15 @@ AGENTS_MD_SKILLS_DIR="$PWD/skills" ./scripts/validate-skills.py
 2. `hooks/frustration-reflect.sh` logs prompt metadata to `feedback/events.jsonl`.
 3. If the prompt contains an explicit frustration word, the hook appends it to `feedback/frustration-queue.jsonl`.
 4. `hooks/frustration-worker.py` debounces bursts, holds a lock, applies cooldowns, and runs at most one reflector process.
-5. The reflector inspects the transcript and stats, then chooses one target: `no_change`, `core_prompt`, `skill_new`, or `skill_update`.
+5. The reflector inspects the transcript and stats, then chooses one target: `no_change`, `core_prompt`, `skill_new`, `skill_update`, or `skill_prune`.
 
 ## Files
 
 - `AGENTS.md`: live prompt loaded by Claude and Codex.
 - `skills/index.json`: skill routing index.
 - `skills/*/SKILL.md`: scoped skill files.
+- `skills/agent-md-creator/SKILL.md`: edits the always-loaded AGENTS.md / CLAUDE.md prompt.
+- `skills/skill-creator/SKILL.md`: creates, updates, prunes, and validates scoped skills.
 - `hooks/frustration-reflect.sh`: prompt hook entrypoint.
 - `hooks/frustration-worker.py`: locked background batch worker.
 - `hooks/frustration-stats.sh`: feedback scoreboard by prompt commit.
