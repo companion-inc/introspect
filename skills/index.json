@@ -33,6 +33,20 @@
         "missing research",
         "high consequence recommendation"
       ]
+    },
+    {
+      "id": "agent-control-channels",
+      "path": "skills/agent-control-channels/SKILL.md",
+      "status": "active",
+      "tier": "domain-workflow",
+      "description": "How an LLM agent should emit a structured decision (mode flag, control action, state change) to its host — tool call, not a typed marker that leaks into the transcript.",
+      "activation_signals": [
+        "model signaling a mode or action",
+        "quiet run or silent run feature",
+        "marker or tag leaking into transcript",
+        "regex parsing the model output",
+        "registering or naming an agent tool"
+      ]
     }
   ]
 }
