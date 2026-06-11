@@ -11,6 +11,20 @@ Editing the file here updates the live prompt; every revision is a commit.
 - Edit `AGENTS.md`
 - `git commit -am "..."` && `git push`
 
+## Frustration feedback loop
+Every user prompt in Claude Code and Codex passes through
+[`hooks/frustration-reflect.sh`](hooks/frustration-reflect.sh) (a `UserPromptSubmit` hook wired in
+`~/.claude/settings.json` and `~/.codex/hooks.json`). It logs each prompt to
+`feedback/events.jsonl` (gitignored, machine-local) tagged with the `AGENTS.md`
+commit that was live, and marks prompts containing frustration language. On a
+frustrated prompt it also injects an instruction telling the agent to
+root-cause the trigger and evolve — or revert — `AGENTS.md` per the skill.
+
+[`hooks/frustration-stats.sh`](hooks/frustration-stats.sh) is the scoreboard: frustration rate per
+prompt version. The objective is to minimize it; a version whose rate rose
+after a change is evidence to revert that change
+(`git checkout <best-version> -- AGENTS.md`).
+
 ## How to edit this prompt
 Read [`skills/writing-agents-md/SKILL.md`](skills/writing-agents-md/SKILL.md) first.
 It's the distilled, primary-source-grounded guide to writing and maintaining this file —
