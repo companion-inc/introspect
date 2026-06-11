@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Validate the local self-healing skill library."""
+"""Validate the local agent-loop skill library."""
 
 from __future__ import annotations
 

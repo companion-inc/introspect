@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-FRAMEWORK_REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
-HOOK="$FRAMEWORK_REPO/hooks/frustration-reflect.sh"
+REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
+HOOK="$REPO/hooks/frustration-reflect.sh"
 STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
 export STAMP
 
@@ -16,7 +16,7 @@ usage() {
 Usage: $0 [--uninstall] [--prompt PATH] [--skills PATH] [--feedback-dir PATH]
 
 install      Link this repo's prompt and install Claude/Codex UserPromptSubmit hooks.
---uninstall  Remove this framework's prompt links and frustration hooks.
+--uninstall  Remove this repo's prompt links and frustration hooks.
 EOF
 }
 
@@ -66,8 +66,8 @@ quote() {
 }
 
 if [[ -z "$PROMPT" ]]; then
-  if [[ -f "$FRAMEWORK_REPO/AGENTS.md" ]]; then
-    PROMPT="$FRAMEWORK_REPO/AGENTS.md"
+  if [[ -f "$REPO/AGENTS.md" ]]; then
+    PROMPT="$REPO/AGENTS.md"
   else
     echo "missing --prompt PATH" >&2
     exit 2
@@ -76,11 +76,11 @@ fi
 
 PROMPT="$(expand_path "$PROMPT")"
 if [[ -z "$SKILLS_DIR" ]]; then
-  SKILLS_DIR="$FRAMEWORK_REPO/skills"
+  SKILLS_DIR="$REPO/skills"
 fi
 SKILLS_DIR="$(expand_path "$SKILLS_DIR")"
 if [[ -z "$FEEDBACK_DIR" ]]; then
-  FEEDBACK_DIR="$FRAMEWORK_REPO/feedback"
+  FEEDBACK_DIR="$REPO/feedback"
 fi
 FEEDBACK_DIR="$(expand_path "$FEEDBACK_DIR")"
 
@@ -93,7 +93,7 @@ if [[ ! -f "$HOOK" ]]; then
   exit 1
 fi
 
-chmod +x "$HOOK" "$FRAMEWORK_REPO/hooks/frustration-worker.py" "$FRAMEWORK_REPO/hooks/frustration-stats.sh" "$FRAMEWORK_REPO/hooks/launch-reflector.sh"
+chmod +x "$HOOK" "$REPO/hooks/frustration-worker.py" "$REPO/hooks/frustration-stats.sh" "$REPO/hooks/launch-reflector.sh"
 
 install_link() {
   local target="$1"
@@ -130,7 +130,7 @@ else
   uninstall_link "$PROMPT" "$HOME/.codex/AGENTS.md"
 fi
 
-HOOK_COMMAND="env AGENTS_MD_REPO=$(quote "$FRAMEWORK_REPO") AGENTS_MD_PROMPT=$(quote "$PROMPT") AGENTS_MD_SKILLS_DIR=$(quote "$SKILLS_DIR") AGENTS_MD_FEEDBACK_DIR=$(quote "$FEEDBACK_DIR") $(quote "$HOOK")"
+HOOK_COMMAND="env AGENTS_MD_REPO=$(quote "$REPO") AGENTS_MD_PROMPT=$(quote "$PROMPT") AGENTS_MD_SKILLS_DIR=$(quote "$SKILLS_DIR") AGENTS_MD_FEEDBACK_DIR=$(quote "$FEEDBACK_DIR") $(quote "$HOOK")"
 
 python3 - "$MODE" "$HOOK_COMMAND" "$HOME/.claude/settings.json" "$HOME/.codex/hooks.json" <<'PY'
 import json
@@ -249,7 +249,7 @@ for settings_path in settings_paths:
 PY
 
 if [[ "$MODE" == "install" ]]; then
-  echo "installed agent-loop hooks from $FRAMEWORK_REPO"
+  echo "installed agent-loop hooks from $REPO"
 else
-  echo "uninstalled agent-loop hooks from $FRAMEWORK_REPO"
+  echo "uninstalled agent-loop hooks from $REPO"
 fi
