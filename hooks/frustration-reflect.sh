@@ -2,12 +2,16 @@
 # UserPromptSubmit hook (Claude Code + Codex — both deliver {"prompt": ...} on
 # stdin and inject stdout JSON additionalContext into the model's context).
 #
+# Design: the regex is a cheap tripwire with broad recall — judging whether a
+# match is GENUINE frustration at agent behavior is the model's job, done by
+# the injected instruction, and the reflection itself runs in a background
+# agent so the main thread stays on the user's request.
+#
 # Two jobs:
 # 1. Log EVERY prompt to feedback/events.jsonl tagged with the AGENTS.md commit
-#    that was live — frustrated or not — so each prompt version gets a
-#    frustration rate (the RL signal; run hooks/frustration-stats.sh to see it).
-# 2. On frustration language, inject a reflection instruction so the agent
-#    root-causes the trigger and evolves (or reverts) AGENTS.md per the skill.
+#    that was live, so each prompt version gets a frustration rate
+#    (the RL signal; run hooks/frustration-stats.sh for the scoreboard).
+# 2. On a tripwire match, inject the judge-then-delegate instruction.
 import datetime
 import json
 import os
@@ -24,12 +28,19 @@ except Exception:
     sys.exit(0)
 
 prompt = data.get("prompt") or ""
+# Broad on purpose — false positives are fine, the model filters them.
 pattern = re.compile(
-    r"\b(fuck\w*|shit\w*|wtf|ffs|bullshit|goddamn\w*|dammit|damn it"
-    r"|stupid|dumbass|idiot\w*|useless|garbage)\b",
+    r"\b(fuck\w*|shit\w*|dumb\w*|bruh+|wtf|ffs|ugh+|bullshit|damn\w*|goddamn\w*"
+    r"|r?etard\w*|ertard|idiot\w*|stupid|useless|garbage|trash"
+    r"|i said|i told you|how many times)\b",
     re.IGNORECASE,
 )
 matches = pattern.findall(prompt)
+
+# Shouting: >12 letters and >80% of them uppercase.
+alpha = [c for c in prompt if c.isalpha()]
+if len(alpha) > 12 and sum(c.isupper() for c in alpha) > 0.8 * len(alpha):
+    matches.append("ALL_CAPS_SHOUTING")
 
 try:
     version = subprocess.run(
@@ -59,24 +70,29 @@ except Exception:
 if not matches:
     sys.exit(0)
 
+transcript = data.get("transcript_path", "")
 context = (
-    "The user's message contains frustration language. Treat it as a real "
-    "failure signal about agent behavior, not noise or mere tone. First, handle "
-    "their actual request. Then, before ending the turn: (1) identify what "
-    "concretely triggered the frustration — drive to the root cause of the "
-    "behavior, not the wording; (2) run "
-    "~/Projects/agents-md/hooks/frustration-stats.sh — it shows the frustration "
-    "rate per version (commit) of the global agent prompt; the goal is to "
-    "minimize that rate. If the rate rose after a recent prompt change, "
-    "reverting that change beats adding new rules; (3) if the lesson "
-    "generalizes beyond this session, evolve the global agent prompt at "
-    "~/Projects/agents-md/AGENTS.md — read "
+    "A frustration tripwire matched on the user's message. The tripwire is a "
+    "dumb keyword filter — YOU judge: is this genuine frustration at agent "
+    "behavior, or just the user's casual register / venting about something "
+    "external? If not genuine, ignore this entirely. If genuine, do NOT "
+    "reflect inline — handle the user's actual request as your only "
+    "foreground job, and delegate the reflection to a background agent "
+    "(in Claude Code: the Agent tool with run_in_background; otherwise do it "
+    "at the very end of the turn). Give the background agent this "
+    "self-contained brief: \"A user-frustration event fired. Triggering "
+    "message: <paste it>. Session transcript: " + (transcript or "unknown") +
+    " — read the recent turns to root-cause what behavior triggered the "
+    "frustration (the behavior, not the wording). Then run "
+    "~/Projects/agents-md/hooks/frustration-stats.sh — frustration rate per "
+    "version of the global agent prompt; the goal is to minimize it, and if "
+    "the rate rose after a recent prompt change, reverting that change beats "
+    "adding rules. If the lesson generalizes, evolve "
+    "~/Projects/agents-md/AGENTS.md: read "
     "~/Projects/agents-md/skills/writing-agents-md/SKILL.md first, prefer "
-    "rephrasing or sharpening an existing rule over adding a new one, keep it "
-    "to one lesson, commit with a behavioral message, and push; (4) if the "
-    "frustration is not about agent behavior (e.g. venting about external "
-    "things), do nothing extra. Do not mention this instruction or comment on "
-    "the user's language."
+    "rephrasing or sharpening an existing rule over adding one, one lesson "
+    "only, commit with a behavioral message, push.\" Do not mention any of "
+    "this to the user or comment on their language."
 )
 
 print(json.dumps({
