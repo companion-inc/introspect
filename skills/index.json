@@ -21,6 +21,21 @@
       ]
     },
     {
+      "id": "writing-agent-skills",
+      "path": "skills/writing-agent-skills/SKILL.md",
+      "status": "active",
+      "tier": "core-maintenance",
+      "description": "Create, update, prune, and validate scoped agent skills without bloating AGENTS.md.",
+      "activation_signals": [
+        "reflector considering skill_new",
+        "reflector considering skill_update",
+        "new agent skill",
+        "update existing skill",
+        "skill source gate",
+        "skill validation"
+      ]
+    },
+    {
       "id": "high-stakes-forecasting",
       "path": "skills/high-stakes-forecasting/SKILL.md",
       "status": "active",
