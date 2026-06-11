@@ -16,9 +16,14 @@ Every user prompt in Claude Code and Codex passes through
 [`hooks/frustration-reflect.sh`](hooks/frustration-reflect.sh) (a `UserPromptSubmit` hook wired in
 `~/.claude/settings.json` and `~/.codex/hooks.json`). It logs each prompt to
 `feedback/events.jsonl` (gitignored, machine-local) tagged with the `AGENTS.md`
-commit that was live, and marks prompts containing frustration language. On a
-frustrated prompt it also injects an instruction telling the agent to
-root-cause the trigger and evolve — or revert — `AGENTS.md` per the skill.
+commit that was live, and marks prompts containing frustration language.
+
+Frustration matches are queued to `feedback/frustration-queue.jsonl`; the hook
+does not inject reflection instructions into the foreground model. A detached
+single-worker batch processor, [`hooks/frustration-worker.py`](hooks/frustration-worker.py),
+debounces bursts, holds `feedback/reflector.lock`, applies cooldowns, combines
+the queued events into one reflector prompt, and then runs at most one reflector
+agent at a time.
 
 [`hooks/frustration-stats.sh`](hooks/frustration-stats.sh) is the scoreboard: frustration rate per
 prompt version. The objective is to minimize it; a version whose rate rose

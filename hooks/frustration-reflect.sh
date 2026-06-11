@@ -1,17 +1,18 @@
 #!/usr/bin/env python3
 # UserPromptSubmit hook (Claude Code + Codex — both deliver {"prompt": ...} on
-# stdin and inject stdout JSON additionalContext into the model's context).
+# stdin).
 #
 # Design: the regex is a cheap tripwire with broad recall — judging whether a
-# match is GENUINE frustration at agent behavior is the model's job, done by
-# the injected instruction, and the reflection itself runs in a background
-# agent so the main thread stays on the user's request.
+# match is GENUINE frustration at agent behavior is the reflector's job, done
+# out-of-band by hooks/frustration-worker.py. The foreground model never gets a
+# spawned-agent instruction from this hook.
 #
 # Two jobs:
 # 1. Log EVERY prompt to feedback/events.jsonl tagged with the AGENTS.md commit
 #    that was live, so each prompt version gets a frustration rate
 #    (the RL signal; run hooks/frustration-stats.sh for the scoreboard).
-# 2. On a tripwire match, inject the judge-then-delegate instruction.
+# 2. On a tripwire match, enqueue the event and kick the single-worker batch
+#    reflector. The worker handles debouncing, cooldowns, and locking.
 import datetime
 import json
 import os
@@ -19,8 +20,18 @@ import re
 import subprocess
 import sys
 
-REPO = os.path.expanduser("~/Projects/agents-md")
-EVENTS = os.path.join(REPO, "feedback", "events.jsonl")
+if os.environ.get("AGENTS_MD_REFLECTOR") == "1":
+    # The background reflector prompt contains frustration snippets. Do not let
+    # the reflector recursively trigger itself.
+    sys.exit(0)
+
+REPO = os.path.expanduser(os.environ.get("AGENTS_MD_REPO", "~/Projects/agents-md"))
+FEEDBACK_DIR = os.path.expanduser(
+    os.environ.get("AGENTS_MD_FEEDBACK_DIR", os.path.join(REPO, "feedback"))
+)
+EVENTS = os.path.join(FEEDBACK_DIR, "events.jsonl")
+QUEUE = os.path.join(FEEDBACK_DIR, "frustration-queue.jsonl")
+WORKER = os.path.join(REPO, "hooks", "frustration-worker.py")
 
 try:
     data = json.load(sys.stdin)
@@ -30,9 +41,11 @@ except Exception:
 prompt = data.get("prompt") or ""
 # Broad on purpose — false positives are fine, the model filters them.
 pattern = re.compile(
-    r"\b(fuck\w*|shit\w*|dumb\w*|bruh+|wtf|ffs|ugh+|bullshit|damn\w*|goddamn\w*"
-    r"|r?etard\w*|ertard|idiot\w*|stupid|useless|garbage|trash"
-    r"|i said|i told you|how many times)\b",
+    r"\b(fuck\w*|shit\w*|dumb\w*|dumbfuck\w*|bruh+|wtf|ffs|ugh+|bullshit"
+    r"|damn\w*|goddamn\w*|r?etard\w*|ertard|idiot\w*|stupid|useless"
+    r"|garbage|trash|moron\w*|clown\w*|asshole\w*|bitch\w*|cunt\w*"
+    r"|fag\w*|nigg\w*|dipshit\w*|brain[- ]?dead|i said|i told you"
+    r"|how many times)\b",
     re.IGNORECASE,
 )
 matches = pattern.findall(prompt)
@@ -50,54 +63,65 @@ try:
 except Exception:
     version = "unknown"
 
+
+def json_append(path, obj):
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "a") as f:
+        f.write(json.dumps(obj, ensure_ascii=False) + "\n")
+
+
+def pick(*names):
+    for name in names:
+        value = data.get(name)
+        if value:
+            return value
+    return ""
+
+
 try:
-    os.makedirs(os.path.dirname(EVENTS), exist_ok=True)
     event = {
         "ts": datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds"),
         "version": version,
         "frustrated": bool(matches),
-        "session_id": data.get("session_id", ""),
-        "cwd": data.get("cwd", ""),
+        "session_id": pick("session_id", "sessionId"),
+        "cwd": pick("cwd"),
+        "transcript_path": pick("transcript_path", "transcriptPath"),
     }
     if matches:
         event["matched"] = sorted({m.lower() for m in matches})
         event["snippet"] = prompt[:300]
-    with open(EVENTS, "a") as f:
-        f.write(json.dumps(event) + "\n")
+    json_append(EVENTS, event)
 except Exception:
     pass  # logging must never block the prompt
 
 if not matches:
     sys.exit(0)
 
-transcript = data.get("transcript_path", "")
-context = (
-    "A frustration tripwire matched on the user's message. The tripwire is a "
-    "dumb keyword filter — YOU judge: is this genuine frustration at agent "
-    "behavior, or just the user's casual register / venting about something "
-    "external? If not genuine, ignore this entirely. If genuine, do NOT "
-    "reflect inline — handle the user's actual request as your only "
-    "foreground job, and delegate the reflection to a background agent "
-    "(in Claude Code: the Agent tool with run_in_background; otherwise do it "
-    "at the very end of the turn). Give the background agent this "
-    "self-contained brief: \"A user-frustration event fired. Triggering "
-    "message: <paste it>. Session transcript: " + (transcript or "unknown") +
-    " — read the recent turns to root-cause what behavior triggered the "
-    "frustration (the behavior, not the wording). Then run "
-    "~/Projects/agents-md/hooks/frustration-stats.sh — frustration rate per "
-    "version of the global agent prompt; the goal is to minimize it, and if "
-    "the rate rose after a recent prompt change, reverting that change beats "
-    "adding rules. If the lesson generalizes, evolve "
-    "~/Projects/agents-md/AGENTS.md: read "
-    "~/Projects/agents-md/skills/writing-agents-md/SKILL.md first, prefer "
-    "rephrasing or sharpening an existing rule over adding one, one lesson "
-    "only, commit with a behavioral message, push.\" Do not mention any of "
-    "this to the user or comment on their language."
-)
+try:
+    queued = dict(event)
+    queued["prompt"] = prompt[:4000]
+    json_append(QUEUE, queued)
+except Exception:
+    sys.exit(0)
 
-print(json.dumps({
-    "hookSpecificOutput": {
-        "hookEventName": "UserPromptSubmit",
-        "additionalContext": context,
-    }
-}))
+try:
+    subprocess.Popen(
+        [sys.executable, WORKER, "--kick"],
+        cwd=REPO,
+        env=os.environ.copy(),
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        start_new_session=True,
+    )
+except Exception:
+    try:
+        json_append(
+            os.path.join(FEEDBACK_DIR, "reflector-launch-errors.jsonl"),
+            {
+                "ts": datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds"),
+                "worker": WORKER,
+            },
+        )
+    except Exception:
+        pass
