@@ -39,21 +39,54 @@ except Exception:
     sys.exit(0)
 
 prompt = data.get("prompt") or ""
-# Broad on purpose — false positives are fine, the model filters them.
-pattern = re.compile(
-    r"\b(fuck\w*|shit\w*|dumb\w*|dumbfuck\w*|bruh+|wtf|ffs|ugh+|bullshit"
-    r"|damn\w*|goddamn\w*|r?etard\w*|ertard|idiot\w*|stupid|useless"
-    r"|garbage|trash|moron\w*|clown\w*|asshole\w*|bitch\w*|cunt\w*"
-    r"|fag\w*|nigg\w*|dipshit\w*|brain[- ]?dead|i said|i told you"
-    r"|how many times)\b",
-    re.IGNORECASE,
-)
-matches = pattern.findall(prompt)
-
-# Shouting: >12 letters and >80% of them uppercase.
-alpha = [c for c in prompt if c.isalpha()]
-if len(alpha) > 12 and sum(c.isupper() for c in alpha) > 0.8 * len(alpha):
-    matches.append("ALL_CAPS_SHOUTING")
+# Exact words only. No prefix matching and no phrase triggers; keep this as a
+# literal recall list so ordinary words do not trip the hook accidentally.
+BAD_WORDS = {
+    "arse",
+    "ass",
+    "asshole",
+    "bastard",
+    "bitch",
+    "bullshit",
+    "crap",
+    "cunt",
+    "damn",
+    "dipshit",
+    "dumb",
+    "dumbass",
+    "dumbfuck",
+    "fag",
+    "faggot",
+    "ffs",
+    "fuck",
+    "fucked",
+    "fucker",
+    "fuckers",
+    "fuckin",
+    "fucking",
+    "fucks",
+    "goddamn",
+    "idiot",
+    "idiots",
+    "mf",
+    "moron",
+    "morons",
+    "motherfucker",
+    "motherfuckers",
+    "motherfucking",
+    "nigga",
+    "niggas",
+    "nigger",
+    "niggers",
+    "retard",
+    "retarded",
+    "retards",
+    "shit",
+    "shitty",
+    "stupid",
+    "wtf",
+}
+matches = [word for word in re.findall(r"[a-z]+", prompt.lower()) if word in BAD_WORDS]
 
 try:
     version = subprocess.run(
