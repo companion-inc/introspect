@@ -254,7 +254,7 @@ def build_prompt(events: list[dict]) -> str:
     transcript_paths = sorted({event.get("transcript_path") for event in events if event.get("transcript_path")})
     transcript_block = "\n".join(f"- {path}" for path in transcript_paths) or "- none supplied; use session_id/cwd from events"
 
-    return f"""You are the self-evolving-agents-md reflector.
+    return f"""You are the agents-md frustration reflector.
 
 A batch of user-frustration tripwires fired. The regex is broad recall only. Judge whether each event is genuine frustration at agent behavior or just casual register / external venting. Do not change anything for false positives.
 
