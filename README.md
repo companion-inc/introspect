@@ -1,47 +1,54 @@
-# agent-instructions
+# agent-loop
 
-Private agent instructions for this machine.
+Private one-repo setup for this machine's Claude/Codex agent instructions and feedback loop.
 
-This repo contains the real always-loaded `AGENTS.md`, the private skill library, and ignored local feedback logs. It is intentionally private. The public hook framework lives in `advaitpaliwal/agent-feedback-loop`.
+This repo contains both pieces:
+
+- `AGENTS.md` and `skills/`: the real private instructions.
+- `hooks/` and `scripts/`: the feedback loop that logs frustration signals, batches them, and routes improvements into the prompt or skills.
+
+It should stay private because it contains personal operating instructions, local feedback logs, and prompt history.
+
+## Install
+
+```bash
+./scripts/install-hooks.sh
+```
+
+This links:
+
+```text
+~/.claude/CLAUDE.md -> ./AGENTS.md
+~/.codex/AGENTS.md -> ./AGENTS.md
+```
+
+It also installs Claude/Codex `UserPromptSubmit` hooks that run `hooks/frustration-reflect.sh`.
+
+## Verify
+
+```bash
+readlink ~/.claude/CLAUDE.md
+readlink ~/.codex/AGENTS.md
+rg "frustration-reflect.sh" ~/.claude/settings.json ~/.codex/hooks.json
+AGENTS_MD_SKILLS_DIR="$PWD/skills" ./scripts/validate-skills.py
+```
+
+## How It Works
+
+1. Claude Code or Codex submits a user prompt.
+2. `hooks/frustration-reflect.sh` logs prompt metadata to `feedback/events.jsonl`.
+3. If the prompt contains an explicit frustration word, the hook appends it to `feedback/frustration-queue.jsonl`.
+4. `hooks/frustration-worker.py` debounces bursts, holds a lock, applies cooldowns, and runs at most one reflector process.
+5. The reflector inspects the transcript and stats, then chooses one target: `no_change`, `core_prompt`, `skill_new`, or `skill_update`.
 
 ## Files
 
-- `AGENTS.md`: live prompt symlinked into Claude Code and Codex.
-- `skills/index.json`: routing index for scoped skills.
-- `skills/*/SKILL.md`: private skill files.
+- `AGENTS.md`: live prompt loaded by Claude and Codex.
+- `skills/index.json`: skill routing index.
+- `skills/*/SKILL.md`: scoped skill files.
+- `hooks/frustration-reflect.sh`: prompt hook entrypoint.
+- `hooks/frustration-worker.py`: locked background batch worker.
+- `hooks/frustration-stats.sh`: feedback scoreboard by prompt commit.
+- `scripts/install-hooks.sh`: installs/uninstalls prompt links and hooks.
+- `scripts/validate-skills.py`: validates the skill index and skill files.
 - `feedback/`: ignored local queue, stats, and reflector logs.
-
-## Installed Runtime
-
-The public framework is installed from:
-
-```text
-/Users/advaitpaliwal/Projects/agent-feedback-loop
-```
-
-The live prompt links point here:
-
-```text
-~/.claude/CLAUDE.md -> /Users/advaitpaliwal/Projects/agent-instructions/AGENTS.md
-~/.codex/AGENTS.md -> /Users/advaitpaliwal/Projects/agent-instructions/AGENTS.md
-```
-
-The Claude/Codex hook command uses the public framework while writing feedback to these private instructions.
-
-## Validate
-
-Run the public validator against this private skill directory:
-
-```bash
-AGENTS_MD_SKILLS_DIR=/Users/advaitpaliwal/Projects/agent-instructions/skills \
-  /Users/advaitpaliwal/Projects/agent-feedback-loop/scripts/validate-skills.py
-```
-
-## Reinstall Hooks
-
-```bash
-/Users/advaitpaliwal/Projects/agent-feedback-loop/scripts/install-hooks.sh \
-  --instructions-repo /Users/advaitpaliwal/Projects/agent-instructions \
-  --prompt /Users/advaitpaliwal/Projects/agent-instructions/AGENTS.md \
-  --skills /Users/advaitpaliwal/Projects/agent-instructions/skills
-```
