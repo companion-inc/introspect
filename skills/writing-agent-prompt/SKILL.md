@@ -1,5 +1,5 @@
 ---
-name: writing-agents-md
+name: writing-agent-prompt
 description: How to write, edit, review, and debug an agent system prompt (AGENTS.md / CLAUDE.md). Use whenever creating or changing agent instructions, adding a rule after an agent misbehaved, reviewing or pruning an existing prompt, or deciding whether something belongs in the prompt vs a hook vs a skill — especially when a rule "isn't working" and the instinct is to add another. Grounded in primary-source research on why agents fail and how prompts actually steer behavior.
 ---
 

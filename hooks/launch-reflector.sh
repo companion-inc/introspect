@@ -5,7 +5,7 @@ set -euo pipefail
 
 TRANSCRIPT="${1:-}"
 MESSAGE="${2:-}"
-REPO="${AGENTS_MD_REPO:-$HOME/Projects/agents-md}"
+REPO="${AGENTS_MD_REPO:-$HOME/Projects/self-healing-agent-md}"
 FEEDBACK_DIR="${AGENTS_MD_FEEDBACK_DIR:-$REPO/feedback}"
 QUEUE="$FEEDBACK_DIR/frustration-queue.jsonl"
 

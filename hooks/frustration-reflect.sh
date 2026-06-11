@@ -25,7 +25,7 @@ if os.environ.get("AGENTS_MD_REFLECTOR") == "1":
     # the reflector recursively trigger itself.
     sys.exit(0)
 
-REPO = os.path.expanduser(os.environ.get("AGENTS_MD_REPO", "~/Projects/agents-md"))
+REPO = os.path.expanduser(os.environ.get("AGENTS_MD_REPO", "~/Projects/self-healing-agent-md"))
 FEEDBACK_DIR = os.path.expanduser(
     os.environ.get("AGENTS_MD_FEEDBACK_DIR", os.path.join(REPO, "feedback"))
 )

@@ -22,7 +22,7 @@ import time
 from pathlib import Path
 
 
-REPO = Path(os.path.expanduser(os.environ.get("AGENTS_MD_REPO", "~/Projects/agents-md")))
+REPO = Path(os.path.expanduser(os.environ.get("AGENTS_MD_REPO", "~/Projects/self-healing-agent-md")))
 FEEDBACK_DIR = Path(
     os.path.expanduser(os.environ.get("AGENTS_MD_FEEDBACK_DIR", str(REPO / "feedback")))
 )
@@ -254,7 +254,7 @@ def build_prompt(events: list[dict]) -> str:
     transcript_paths = sorted({event.get("transcript_path") for event in events if event.get("transcript_path")})
     transcript_block = "\n".join(f"- {path}" for path in transcript_paths) or "- none supplied; use session_id/cwd from events"
 
-    return f"""You are the agents-md frustration reflector.
+    return f"""You are the self-healing-agent-md frustration reflector.
 
 A batch of user-frustration tripwires fired. The regex is broad recall only. Judge whether each event is genuine frustration at agent behavior or just casual register / external venting. Do not change anything for false positives.
 
@@ -268,7 +268,7 @@ Workflow:
 1. Read the recent turns for the relevant transcript/session and identify the agent behavior that caused the frustration, not the wording of the user's message.
 2. Run ./hooks/frustration-stats.sh and compare the current prompt version against prior versions.
 3. If the frustration rate rose after a recent AGENTS.md change, prefer reverting that change over adding another rule.
-4. If one general lesson remains after that check, read ./skills/writing-agents-md/SKILL.md, then evolve AGENTS.md with one lesson only. Prefer sharpening or pruning an existing rule over adding a new line.
+4. If one general lesson remains after that check, read ./skills/writing-agent-prompt/SKILL.md, then evolve AGENTS.md with one lesson only. Prefer sharpening or pruning an existing rule over adding a new line.
 5. Commit with a behavioral message and push.
 6. If no prompt change is justified, make no file changes and say why in the log output.
 
@@ -304,7 +304,7 @@ def invoke_reflector(events: list[dict]) -> int:
             "Glob",
             "Bash(git *)",
             "Bash(./hooks/frustration-stats.sh)",
-            "Bash(/Users/advaitpaliwal/Projects/agents-md/hooks/frustration-stats.sh)",
+            "Bash(/Users/advaitpaliwal/Projects/self-healing-agent-md/hooks/frustration-stats.sh)",
         ]
     )
     env = os.environ.copy()

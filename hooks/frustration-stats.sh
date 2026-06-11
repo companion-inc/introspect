@@ -8,7 +8,7 @@ import os
 import subprocess
 import sys
 
-REPO = os.path.expanduser("~/Projects/agents-md")
+REPO = os.path.expanduser(os.environ.get("AGENTS_MD_REPO", "~/Projects/self-healing-agent-md"))
 EVENTS = os.path.join(REPO, "feedback", "events.jsonl")
 
 if not os.path.exists(EVENTS):
@@ -54,4 +54,4 @@ for v in order:
 
 if best:
     print(f"\nBest version with >=5 prompts: {best[0]} ({best[1]:.1%}). "
-          f"To revert AGENTS.md to it: git -C ~/Projects/agents-md checkout {best[0]} -- AGENTS.md")
+          f"To revert AGENTS.md to it: git -C {REPO} checkout {best[0]} -- AGENTS.md")
