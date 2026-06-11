@@ -177,23 +177,33 @@ def session_key(event: dict) -> str:
     )
 
 
-def cooldown_remaining(state: dict, events: list[dict]) -> float:
+def global_cooldown_remaining(state: dict) -> float:
     now = utc_now()
     last_global = parse_ts(state.get("last_run_at"))
     if last_global:
         remaining = GLOBAL_COOLDOWN_SECONDS - (now - last_global).total_seconds()
         if remaining > 0:
             return remaining
+    return 0.0
 
+
+def split_by_session_cooldown(state: dict, events: list[dict]) -> tuple[list[dict], list[dict], float]:
+    now = utc_now()
     sessions = state.get("sessions", {})
+    eligible: list[dict] = []
+    blocked: list[dict] = []
     waits: list[float] = []
-    for key in sorted({session_key(event) for event in events}):
+    for event in events:
+        key = session_key(event)
         last_session = parse_ts(sessions.get(key))
         if last_session:
             remaining = SESSION_COOLDOWN_SECONDS - (now - last_session).total_seconds()
             if remaining > 0:
+                blocked.append(event)
                 waits.append(remaining)
-    return min(waits) if waits else 0.0
+                continue
+        eligible.append(event)
+    return eligible, blocked, min(waits) if waits else 0.0
 
 
 def schedule_retry(delay: float, state: dict) -> None:
@@ -345,35 +355,47 @@ def main() -> int:
         return 0
 
     state = read_json(STATE, {})
-    remaining = cooldown_remaining(state, events)
+    remaining = global_cooldown_remaining(state)
     if remaining > 0:
-        log(f"cooldown active for {remaining:.0f}s; requeueing {len(events)} event(s)")
+        log(f"global cooldown active for {remaining:.0f}s; requeueing {len(events)} event(s)")
         requeue(events)
         schedule_retry(remaining, state)
         return 0
 
+    eligible, blocked, session_wait = split_by_session_cooldown(state, events)
+    if blocked:
+        log(
+            f"session cooldown blocked {len(blocked)} event(s) for {session_wait:.0f}s; "
+            f"{len(eligible)} event(s) eligible"
+        )
+        requeue(blocked)
+    if not eligible:
+        schedule_retry(session_wait, state)
+        return 0
+
     try:
-        code = invoke_reflector(events)
+        code = invoke_reflector(eligible)
     except subprocess.TimeoutExpired:
         log("reflector timed out; requeueing batch")
-        requeue(events)
+        requeue(eligible)
         return 124
     except Exception as exc:
         log(f"reflector failed before launch: {exc!r}; requeueing batch")
-        requeue(events)
+        requeue(eligible)
         return 1
 
     if code != 0:
         log(f"reflector returned nonzero code={code}; requeueing batch")
-        requeue(events)
+        requeue(eligible)
         state = read_json(STATE, {})
         schedule_retry(GLOBAL_COOLDOWN_SECONDS, state)
         return code
 
-    update_state_after_run(state, events)
+    update_state_after_run(state, eligible)
     if QUEUE.exists():
         state = read_json(STATE, {})
-        schedule_retry(GLOBAL_COOLDOWN_SECONDS, state)
+        delay = max(GLOBAL_COOLDOWN_SECONDS, session_wait if blocked else 0)
+        schedule_retry(delay, state)
     return code
 
 
