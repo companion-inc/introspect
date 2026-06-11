@@ -267,15 +267,19 @@ Transcript paths to inspect:
 Workflow:
 1. Read the recent turns for the relevant transcript/session and identify the agent behavior that caused the frustration, not the wording of the user's message.
 2. Run ./hooks/frustration-stats.sh and compare the current prompt version against prior versions.
-3. If the frustration rate rose after a recent AGENTS.md change, prefer reverting that change over adding another rule.
-4. If one general lesson remains after that check, read ./skills/writing-agent-prompt/SKILL.md, then evolve AGENTS.md with one lesson only. Prefer sharpening or pruning an existing rule over adding a new line.
-5. Commit with a behavioral message and push.
-6. If no prompt change is justified, make no file changes and say why in the log output.
+3. Classify the change target as exactly one of: no_change, core_prompt, skill_new, skill_update.
+4. Use core_prompt only for an always-loaded invariant that should apply across nearly every task. Read ./skills/writing-agent-prompt/SKILL.md before editing AGENTS.md.
+5. Use skill_new or skill_update for scoped workflows, domains, repeated failure shapes, or instructions that should load only in relevant situations. Read ./skills/index.json and the closest existing skill before writing. Prefer updating a close skill over creating a duplicate.
+6. For skill changes, write or edit a self-contained skills/<slug>/SKILL.md, update ./skills/index.json, and run ./scripts/validate-skills.py.
+7. If the frustration rate rose after a recent AGENTS.md change, prefer reverting or narrowing that change over adding another rule.
+8. Commit with a behavioral message and push.
+9. If no change is justified, make no file changes and say why in the log output.
 
 Constraints:
 - One batch, one decision. Do not spawn more agents.
 - Do not edit for casual profanity, slurs used as examples, or frustration about an external system.
 - Keep changes short and reversible.
+- Do not use "when user asks", "when_to_apply", or "when to apply" as skill language. Use activation_signals.
 """
 
 
@@ -305,6 +309,8 @@ def invoke_reflector(events: list[dict]) -> int:
             "Bash(git *)",
             "Bash(./hooks/frustration-stats.sh)",
             "Bash(/Users/advaitpaliwal/Projects/self-healing-agent-md/hooks/frustration-stats.sh)",
+            "Bash(./scripts/validate-skills.py)",
+            "Bash(mkdir -p skills/*)",
         ]
     )
     env = os.environ.copy()

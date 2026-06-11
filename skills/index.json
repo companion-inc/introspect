@@ -1,0 +1,38 @@
+{
+  "version": 1,
+  "selection": {
+    "mode": "keyword_first",
+    "max_loaded_skills": 4,
+    "upgrade_path": "Add embedding retrieval only after keyword routing becomes noisy."
+  },
+  "skills": [
+    {
+      "id": "writing-agent-prompt",
+      "path": "skills/writing-agent-prompt/SKILL.md",
+      "status": "active",
+      "tier": "core-maintenance",
+      "description": "Edit, review, prune, and debug AGENTS.md without bloating the global prompt.",
+      "activation_signals": [
+        "AGENTS.md edit",
+        "global prompt rule",
+        "prompt bloat",
+        "instruction not firing",
+        "reflector considering core_prompt"
+      ]
+    },
+    {
+      "id": "high-stakes-forecasting",
+      "path": "skills/high-stakes-forecasting/SKILL.md",
+      "status": "active",
+      "tier": "domain-workflow",
+      "description": "Forecasting and decision support for trades, deadlines, and irreversible choices where shallow uncertainty language would be harmful.",
+      "activation_signals": [
+        "trade decision",
+        "investment forecast",
+        "prediction under uncertainty",
+        "missing research",
+        "high consequence recommendation"
+      ]
+    }
+  ]
+}

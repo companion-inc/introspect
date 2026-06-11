@@ -2,7 +2,7 @@
 
 Global `AGENTS.md` prompt management plus a frustration-feedback hook loop for Claude Code and Codex.
 
-This repo keeps one machine-wide agent prompt under version control, installs it into both Claude and Codex, logs user frustration signals, and runs a single background reflector that can improve `AGENTS.md` when the evidence supports a prompt change.
+This repo keeps one machine-wide agent prompt under version control, installs it into both Claude and Codex, logs user frustration signals, and runs a single background reflector that can improve the right layer when the evidence supports a change: the always-loaded prompt for universal rules, or a scoped skill for domain/workflow lessons.
 
 ## What It Installs
 
@@ -125,6 +125,33 @@ After moving or renaming the checkout, rerun:
 
 The foreground agent does not receive injected reflection instructions from the hook.
 
+## Prompt Kernel And Skills
+
+`AGENTS.md` is the kernel: it should contain only always-loaded invariants that are broadly useful across tasks. Scoped behavior belongs in `skills/`, where it can be loaded only for matching situations instead of bloating the global prompt.
+
+Skill routing is tracked in `skills/index.json`. Each entry has:
+
+- `id`: stable skill identifier.
+- `path`: `SKILL.md` path.
+- `status`: `candidate`, `active`, or `deprecated`.
+- `activation_signals`: keyword-style signals used by humans or future retrieval code.
+- `description`: one-sentence purpose.
+
+Validate the skill library after edits:
+
+```bash
+./scripts/validate-skills.py
+```
+
+The current rule is simple: keyword-first routing, at most four loaded skills, and no embedding retrieval until keyword routing becomes noisy. This follows the practical shape of the best reference systems without importing their heavy RL training stack.
+
+The reflector now chooses exactly one target for each batch:
+
+- `no_change`: profanity was casual, external, or not actionable.
+- `core_prompt`: a universal invariant belongs in `AGENTS.md`.
+- `skill_new`: a scoped lesson deserves a new `skills/<slug>/SKILL.md`.
+- `skill_update`: an existing skill should absorb the lesson.
+
 ## Configuration
 
 Environment variables:
@@ -142,10 +169,13 @@ Environment variables:
 - `AGENTS.md`: global prompt loaded by Claude and Codex.
 - `scripts/install-hooks.sh`: installer and uninstaller for prompt links and hooks.
 - `hooks/frustration-reflect.sh`: `UserPromptSubmit` hook entrypoint.
-- `hooks/frustration-worker.py`: locked background batch worker.
+- `hooks/frustration-worker.py`: locked background batch worker and change-target router.
 - `hooks/frustration-stats.sh`: prompt-version frustration scoreboard.
 - `hooks/launch-reflector.sh`: compatibility wrapper for manually queueing a reflection event.
+- `skills/index.json`: skill routing index.
 - `skills/writing-agent-prompt/SKILL.md`: guide for editing `AGENTS.md` without bloating it.
+- `skills/high-stakes-forecasting/SKILL.md`: decision-support workflow for trades, forecasts, and consequential choices.
+- `scripts/validate-skills.py`: local skill index and skill-file validator.
 - `feedback/`: gitignored local logs, queues, locks, state, and reflector prompts.
 
 ## Troubleshooting
@@ -201,3 +231,7 @@ Maintained by Advait Paliwal for this machine's Claude Code and Codex setup.
 ## References
 
 - GitHub Docs, [About READMEs](https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/about-readmes)
+- [SkillX](https://github.com/zjunlp/SkillX): best practical reference for turning trajectories into a structured skill library.
+- [SkillRL](https://github.com/aiming-lab/SkillRL): useful reference for keyword-first vs embedding skill retrieval and dynamic updates.
+- [MS-Agent Skill Module](https://github.com/modelscope/ms-agent/blob/main/ms_agent/skill/README.md): useful reference for `SKILL.md` packaging and progressive loading.
+- [SAGE](https://github.com/amazon-science/SAGE): research reference for skill-augmented self-improvement, too heavy for this local hook loop.
