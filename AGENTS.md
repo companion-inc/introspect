@@ -40,6 +40,8 @@
 - Let CI/CD build and deploy; nothing is done until the build is green.
 - Output the real measurement, not a proxy — the actual data, or what's blocking it.
 - A summary is not completion: produce the artifact, change, or deploy that was asked for.
+- Verify against cases you didn't design, not just your own demo script — for judgment or model-facing behavior especially, probe off-script inputs (the greeting, the edge case, the message a real user would actually send) before claiming it works. If the user's first real use finds the bug, the verification was theater.
+- "Are you sure?" must never surface evidence you already had. If anything in your own test output, screenshot, or logs looks off, report it alongside the done-claim — admitting a known flaw only after pushback is the worst version of overclaiming.
 - Before handing back, state what you didn't check. If that list is uncomfortable, you're not done.
 
 ## Authority and judgment
