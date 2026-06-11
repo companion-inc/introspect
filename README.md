@@ -1,56 +1,203 @@
 # self-healing-agent-md
 
-The self-healing agent prompt (`AGENTS.md`), loaded globally by every coding agent on this machine:
+Global `AGENTS.md` prompt management plus a frustration-feedback hook loop for Claude Code and Codex.
 
-- `~/.claude/CLAUDE.md` → symlink to `AGENTS.md` here (Claude Code, all projects)
-- `~/.codex/AGENTS.md` → symlink to `AGENTS.md` here (Codex, all runs, layered under any project-local `AGENTS.md`)
+This repo keeps one machine-wide agent prompt under version control, installs it into both Claude and Codex, logs user frustration signals, and runs a single background reflector that can improve `AGENTS.md` when the evidence supports a prompt change.
 
-Editing the file here updates the live prompt; every revision is a commit.
+## What It Installs
+
+- `~/.claude/CLAUDE.md` -> this repo's `AGENTS.md`
+- `~/.codex/AGENTS.md` -> this repo's `AGENTS.md`
+- `~/.claude/settings.json` `UserPromptSubmit` hook -> `hooks/frustration-reflect.sh`
+- `~/.codex/hooks.json` `UserPromptSubmit` hook -> `hooks/frustration-reflect.sh`
+
+The installer is idempotent. It backs up files it replaces and removes stale `frustration-reflect.sh` hook entries before adding the current one.
+
+## Requirements
+
+- `bash`
+- `python3`
+- `git`
+- Claude Code and/or Codex using their local hook config files
+- `claude` on `PATH` for real background reflection runs
 
 ## Install
 
-From this repo:
+Clone or move the repo to the expected path:
+
+```bash
+mkdir -p ~/Projects
+git clone https://github.com/advaitpaliwal/self-healing-agent-md.git ~/Projects/self-healing-agent-md
+cd ~/Projects/self-healing-agent-md
+```
+
+Install the prompt links and both hooks:
 
 ```bash
 ./scripts/install-hooks.sh
 ```
 
-The installer is idempotent. It:
+If this repo is already cloned somewhere else, run the installer from that checkout. The hook paths will point at the checkout you run it from.
 
-- links `~/.claude/CLAUDE.md` to this repo's `AGENTS.md`;
-- links `~/.codex/AGENTS.md` to this repo's `AGENTS.md`;
-- installs `hooks/frustration-reflect.sh` as a `UserPromptSubmit` hook in `~/.claude/settings.json`;
-- installs the same hook in `~/.codex/hooks.json`;
-- removes stale `frustration-reflect.sh` hook entries that point at an old repo path.
+## Verify
 
-## Workflow
+Check the prompt links:
 
-- Edit `AGENTS.md`
-- `git commit -am "..."` && `git push`
-- Run `./scripts/install-hooks.sh` after moving or renaming the repo
+```bash
+readlink ~/.claude/CLAUDE.md
+readlink ~/.codex/AGENTS.md
+```
 
-## Frustration feedback loop
-Every user prompt in Claude Code and Codex passes through
-[`hooks/frustration-reflect.sh`](hooks/frustration-reflect.sh) (a `UserPromptSubmit` hook wired in
-`~/.claude/settings.json` and `~/.codex/hooks.json`). It logs each prompt to
-`feedback/events.jsonl` (gitignored, machine-local) tagged with the `AGENTS.md`
-commit that was live, and marks prompts containing frustration language.
+Both should print:
 
-Frustration matches are queued to `feedback/frustration-queue.jsonl`; the hook
-does not inject reflection instructions into the foreground model. A detached
-single-worker batch processor, [`hooks/frustration-worker.py`](hooks/frustration-worker.py),
-debounces bursts, holds `feedback/reflector.lock`, applies cooldowns, combines
-the queued events into one reflector prompt, and then runs at most one reflector
-agent at a time.
+```text
+/Users/advaitpaliwal/Projects/self-healing-agent-md/AGENTS.md
+```
 
-[`hooks/frustration-stats.sh`](hooks/frustration-stats.sh) is the scoreboard: frustration rate per
-prompt version. The objective is to minimize it; a version whose rate rose
-after a change is evidence to revert that change
-(`git checkout <best-version> -- AGENTS.md`).
+Check the hook commands:
 
-## How to edit this prompt
-Read [`skills/writing-agent-prompt/SKILL.md`](skills/writing-agent-prompt/SKILL.md) first.
-It's the distilled, primary-source-grounded guide to writing and maintaining this file —
-how prompts actually steer behavior, what belongs in the prompt vs a hook vs a skill, and
-(critically) why the fix for a rule that "isn't working" is almost always to prune or
-rephrase, not add another rule. Built so this doesn't have to be re-derived every time.
+```bash
+python3 - <<'PY'
+import json
+from pathlib import Path
+
+expected = "/Users/advaitpaliwal/Projects/self-healing-agent-md/hooks/frustration-reflect.sh"
+for path in ["~/.claude/settings.json", "~/.codex/hooks.json"]:
+    data = json.loads(Path(path).expanduser().read_text())
+    commands = [
+        hook.get("command")
+        for group in data["hooks"]["UserPromptSubmit"]
+        for hook in group.get("hooks", [])
+    ]
+    print(path, commands)
+    assert commands.count(expected) == 1
+PY
+```
+
+Run a dry-run hook test:
+
+```bash
+tmp_feedback="$(mktemp -d)"
+AGENTS_MD_FEEDBACK_DIR="$tmp_feedback" \
+FRUSTRATION_REFLECTOR_DRY_RUN=1 \
+FRUSTRATION_DISABLE_SCHEDULE=1 \
+FRUSTRATION_DEBOUNCE_SECONDS=0.1 \
+./hooks/frustration-reflect.sh <<'JSON'
+{"prompt":"WHAT THE FUCK WHY NOT","session_id":"readme-test","cwd":"/tmp","transcript_path":"/tmp/readme-test.jsonl"}
+JSON
+sleep 0.5
+cat "$tmp_feedback/reflector-batches.jsonl"
+rm -rf "$tmp_feedback"
+```
+
+The batch should show one dry-run event.
+
+## Daily Workflow
+
+Edit the live prompt:
+
+```bash
+$EDITOR AGENTS.md
+git diff -- AGENTS.md
+git commit -am "Describe the behavior change"
+git push
+```
+
+Check the feedback scoreboard:
+
+```bash
+./hooks/frustration-stats.sh
+```
+
+After moving or renaming the checkout, rerun:
+
+```bash
+./scripts/install-hooks.sh
+```
+
+## How The Feedback Loop Works
+
+1. Claude Code or Codex submits a user prompt.
+2. `hooks/frustration-reflect.sh` logs the prompt metadata to `feedback/events.jsonl`.
+3. If the prompt matches broad frustration language, the hook appends it to `feedback/frustration-queue.jsonl`.
+4. `hooks/frustration-worker.py` debounces bursts, holds `feedback/reflector.lock`, applies global and per-session cooldowns, and runs at most one reflector process at a time.
+5. The reflector inspects the transcript and stats. It either leaves the prompt unchanged or commits one small `AGENTS.md` improvement.
+
+The foreground agent does not receive injected reflection instructions from the hook.
+
+## Configuration
+
+Environment variables:
+
+- `AGENTS_MD_REPO`: repo path override. Defaults to `~/Projects/self-healing-agent-md`.
+- `AGENTS_MD_FEEDBACK_DIR`: feedback data directory. Defaults to `$AGENTS_MD_REPO/feedback`.
+- `FRUSTRATION_DEBOUNCE_SECONDS`: burst debounce before a worker drains the queue. Defaults to `75`.
+- `FRUSTRATION_COOLDOWN_SECONDS`: global cooldown between reflector runs. Defaults to `300`.
+- `FRUSTRATION_SESSION_COOLDOWN_SECONDS`: per-session cooldown. Defaults to `900`.
+- `FRUSTRATION_REFLECTOR_DRY_RUN=1`: write batches without invoking `claude -p`.
+- `FRUSTRATION_DISABLE_SCHEDULE=1`: disable scheduled retry processes.
+
+## Files
+
+- `AGENTS.md`: global prompt loaded by Claude and Codex.
+- `scripts/install-hooks.sh`: installer and uninstaller for prompt links and hooks.
+- `hooks/frustration-reflect.sh`: `UserPromptSubmit` hook entrypoint.
+- `hooks/frustration-worker.py`: locked background batch worker.
+- `hooks/frustration-stats.sh`: prompt-version frustration scoreboard.
+- `hooks/launch-reflector.sh`: compatibility wrapper for manually queueing a reflection event.
+- `skills/writing-agent-prompt/SKILL.md`: guide for editing `AGENTS.md` without bloating it.
+- `feedback/`: gitignored local logs, queues, locks, state, and reflector prompts.
+
+## Troubleshooting
+
+If hooks still point at the old path, rerun:
+
+```bash
+./scripts/install-hooks.sh
+```
+
+If no prompts are being logged, verify both settings files contain the hook command:
+
+```bash
+rg "frustration-reflect.sh" ~/.claude/settings.json ~/.codex/hooks.json
+```
+
+If a worker looks stuck, inspect:
+
+```bash
+tail -80 feedback/reflector.log
+cat feedback/reflector-state.json
+ps -ax -o pid,stat,etime,command | rg "frustration-worker.py|claude -p|sleep [0-9]+;"
+```
+
+If a config file is malformed JSON, restore the backup created by the installer. Backup files are written next to the original with a `.bak.<timestamp>` suffix.
+
+## Privacy
+
+Prompt metadata, frustration snippets, worker logs, queues, and reflector prompts are written under `feedback/`. That directory is gitignored and intended to stay machine-local.
+
+## Uninstall
+
+Remove this repo's prompt links and frustration hooks:
+
+```bash
+./scripts/install-hooks.sh --uninstall
+```
+
+The uninstaller only removes symlinks that point at this checkout's `AGENTS.md` and hook entries whose command ends with `/hooks/frustration-reflect.sh`.
+
+## Help
+
+Use the troubleshooting commands above first. If the repo behavior is wrong, open an issue on [GitHub](https://github.com/advaitpaliwal/self-healing-agent-md/issues) with the relevant command output and redacted `feedback/reflector.log` lines.
+
+## License
+
+No license file has been committed yet.
+
+## Maintainer
+
+Maintained by Advait Paliwal for this machine's Claude Code and Codex setup.
+
+## References
+
+- GitHub Docs, [About READMEs](https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/about-readmes)
