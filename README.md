@@ -1,8 +1,8 @@
-# advait-agent-profile
+# agent-profile
 
 Private agent profile for this machine.
 
-This repo contains the real always-loaded `AGENTS.md`, the private skill library, and ignored local feedback logs. It is intentionally private. The public hook framework lives in `advaitpaliwal/self-healing-agent-md`.
+This repo contains the real always-loaded `AGENTS.md`, the private skill library, and ignored local feedback logs. It is intentionally private. The public hook framework lives in `advaitpaliwal/agent-loop`.
 
 ## Files
 
@@ -16,14 +16,14 @@ This repo contains the real always-loaded `AGENTS.md`, the private skill library
 The public framework is installed from:
 
 ```text
-/Users/advaitpaliwal/Projects/self-healing-agent-md
+/Users/advaitpaliwal/Projects/agent-loop
 ```
 
 The live prompt links point here:
 
 ```text
-~/.claude/CLAUDE.md -> /Users/advaitpaliwal/Projects/advait-agent-profile/AGENTS.md
-~/.codex/AGENTS.md -> /Users/advaitpaliwal/Projects/advait-agent-profile/AGENTS.md
+~/.claude/CLAUDE.md -> /Users/advaitpaliwal/Projects/agent-profile/AGENTS.md
+~/.codex/AGENTS.md -> /Users/advaitpaliwal/Projects/agent-profile/AGENTS.md
 ```
 
 The Claude/Codex hook command uses the public framework while writing feedback to this private profile.
@@ -33,15 +33,15 @@ The Claude/Codex hook command uses the public framework while writing feedback t
 Run the public validator against this private skill directory:
 
 ```bash
-AGENTS_MD_SKILLS_DIR=/Users/advaitpaliwal/Projects/advait-agent-profile/skills \
-  /Users/advaitpaliwal/Projects/self-healing-agent-md/scripts/validate-skills.py
+AGENTS_MD_SKILLS_DIR=/Users/advaitpaliwal/Projects/agent-profile/skills \
+  /Users/advaitpaliwal/Projects/agent-loop/scripts/validate-skills.py
 ```
 
 ## Reinstall Hooks
 
 ```bash
-/Users/advaitpaliwal/Projects/self-healing-agent-md/scripts/install-hooks.sh \
-  --profile-repo /Users/advaitpaliwal/Projects/advait-agent-profile \
-  --prompt /Users/advaitpaliwal/Projects/advait-agent-profile/AGENTS.md \
-  --skills /Users/advaitpaliwal/Projects/advait-agent-profile/skills
+/Users/advaitpaliwal/Projects/agent-loop/scripts/install-hooks.sh \
+  --profile-repo /Users/advaitpaliwal/Projects/agent-profile \
+  --prompt /Users/advaitpaliwal/Projects/agent-profile/AGENTS.md \
+  --skills /Users/advaitpaliwal/Projects/agent-profile/skills
 ```
