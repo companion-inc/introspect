@@ -11,8 +11,9 @@
 # 1. Log EVERY prompt to feedback/events.jsonl tagged with the AGENTS.md commit
 #    that was live, so each prompt version gets a frustration rate
 #    (the RL signal; run hooks/frustration-stats.sh for the scoreboard).
-# 2. On a tripwire match, enqueue the event and kick the single-worker batch
-#    reflector. The worker handles debouncing, cooldowns, and locking.
+# 2. On a tripwire match, enqueue the event. By default, a nightly LaunchAgent
+#    runs the single-worker batch reflector. Set AGENT_LOOP_REFLECT_MODE=immediate
+#    only for tests or manual debugging.
 import datetime
 import json
 import os
@@ -32,6 +33,7 @@ FEEDBACK_DIR = os.path.expanduser(
 EVENTS = os.path.join(FEEDBACK_DIR, "events.jsonl")
 QUEUE = os.path.join(FEEDBACK_DIR, "frustration-queue.jsonl")
 WORKER = os.path.join(REPO, "hooks", "frustration-worker.py")
+REFLECT_MODE = os.environ.get("AGENT_LOOP_REFLECT_MODE", "nightly")
 
 try:
     data = json.load(sys.stdin)
@@ -127,6 +129,9 @@ try:
     queued["prompt"] = prompt[:4000]
     json_append(QUEUE, queued)
 except Exception:
+    sys.exit(0)
+
+if REFLECT_MODE != "immediate":
     sys.exit(0)
 
 try:

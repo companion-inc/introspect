@@ -22,7 +22,7 @@ This links:
 ~/.codex/AGENTS.md -> ./AGENTS.md
 ```
 
-It also installs Claude/Codex `UserPromptSubmit` hooks that run `hooks/frustration-reflect.sh`.
+It also installs Claude/Codex `UserPromptSubmit` hooks that run `hooks/frustration-reflect.sh`, plus a macOS LaunchAgent that runs the reflector once per night. The reflector runner defaults to `auto`: use `claude` if only Claude exists, `codex` if only Codex exists, and randomly choose one per nightly batch if both exist. No model is pinned; each CLI uses its own configured default model.
 
 ## Verify
 
@@ -40,10 +40,13 @@ AGENTS_MD_SKILLS_DIR="$PWD/skills" ./scripts/validate-skills.py
 1. Claude Code or Codex submits a user prompt.
 2. `hooks/frustration-reflect.sh` logs prompt metadata to `feedback/events.jsonl`.
 3. If the prompt contains an explicit frustration word, the hook appends it to `feedback/frustration-queue.jsonl`.
-4. `hooks/frustration-worker.py` debounces bursts, holds a lock, applies cooldowns, and runs at most one reflector process.
-5. The reflector inspects the transcript and stats, then chooses one target: `no_change`, `core_prompt`, `skill_new`, `skill_update`, or `skill_prune`.
+4. The foreground hook does not spawn a reflector by default. It only queues.
+5. The nightly LaunchAgent runs `hooks/frustration-worker.py --nightly`, holds a lock, and reviews the queued events as one batch.
+6. The reflector inspects the transcript and stats, then chooses one target: `no_change`, `core_prompt`, `skill_new`, `skill_update`, or `skill_prune`.
 
 When a real reflector process starts, the worker also sends a macOS notification titled `agent-loop`. Set `AGENT_LOOP_NOTIFY=0` or `AGENTS_MD_NOTIFY=0` in the hook environment to disable the popup.
+
+For manual testing only, set `AGENT_LOOP_REFLECT_MODE=immediate` when invoking `hooks/frustration-reflect.sh`; otherwise the hook stays queue-only and the nightly job does the curation.
 
 ## Files
 

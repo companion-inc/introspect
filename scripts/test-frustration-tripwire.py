@@ -26,7 +26,12 @@ def read_jsonl(path: Path) -> list[dict]:
     return rows
 
 
-def run_case(prompt: str, should_trigger: bool, expected_match: str | None = None) -> None:
+def run_case(
+    prompt: str,
+    should_trigger: bool,
+    expected_match: str | None = None,
+    reflect_mode: str = "immediate",
+) -> None:
     with tempfile.TemporaryDirectory(prefix="agent-loop-tripwire-") as tmp_raw:
         tmp = Path(tmp_raw)
         env = os.environ.copy()
@@ -41,6 +46,10 @@ def run_case(prompt: str, should_trigger: bool, expected_match: str | None = Non
                 "FRUSTRATION_DISABLE_SCHEDULE": "1",
             }
         )
+        if reflect_mode:
+            env["AGENT_LOOP_REFLECT_MODE"] = reflect_mode
+        else:
+            env.pop("AGENT_LOOP_REFLECT_MODE", None)
         payload = {
             "prompt": prompt,
             "session_id": "tripwire-test",
@@ -84,6 +93,49 @@ def run_case(prompt: str, should_trigger: bool, expected_match: str | None = Non
             raise AssertionError(f"{prompt!r}: should not have created a reflector batch")
 
 
+def run_queue_only_case() -> None:
+    with tempfile.TemporaryDirectory(prefix="agent-loop-tripwire-") as tmp_raw:
+        tmp = Path(tmp_raw)
+        env = os.environ.copy()
+        env.update(
+            {
+                "AGENTS_MD_REPO": str(REPO),
+                "AGENTS_MD_PROMPT": str(REPO / "AGENTS.md"),
+                "AGENTS_MD_SKILLS_DIR": str(REPO / "skills"),
+                "AGENTS_MD_FEEDBACK_DIR": str(tmp),
+                "FRUSTRATION_REFLECTOR_DRY_RUN": "1",
+                "FRUSTRATION_DEBOUNCE_SECONDS": "0",
+                "FRUSTRATION_DISABLE_SCHEDULE": "1",
+            }
+        )
+        env.pop("AGENT_LOOP_REFLECT_MODE", None)
+        subprocess.run(
+            [sys.executable, str(HOOK)],
+            input=json.dumps(
+                {
+                    "prompt": "what the fuck is going on",
+                    "session_id": "tripwire-queue-only-test",
+                    "cwd": str(REPO),
+                    "transcript_path": "",
+                }
+            ),
+            text=True,
+            env=env,
+            cwd=REPO,
+            check=True,
+            timeout=10,
+        )
+        events = read_jsonl(tmp / "events.jsonl")
+        queue = read_jsonl(tmp / "frustration-queue.jsonl")
+        batches = read_jsonl(tmp / "reflector-batches.jsonl")
+        if len(events) != 1 or not events[0].get("frustrated"):
+            raise AssertionError("queue-only case did not log one frustrated event")
+        if len(queue) != 1:
+            raise AssertionError("queue-only case did not enqueue exactly one event")
+        if batches:
+            raise AssertionError("queue-only default should not spawn a reflector batch")
+
+
 def main() -> int:
     cases = [
         ("same with shit locally in companion and stuff", False, None),
@@ -97,7 +149,8 @@ def main() -> int:
     ]
     for prompt, should_trigger, expected_match in cases:
         run_case(prompt, should_trigger, expected_match)
-    print(f"test-frustration-tripwire: ok ({len(cases)} cases)")
+    run_queue_only_case()
+    print(f"test-frustration-tripwire: ok ({len(cases) + 1} cases)")
     return 0
 
 

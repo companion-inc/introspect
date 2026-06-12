@@ -3,6 +3,8 @@ set -euo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 FEEDBACK_DIR="${AGENTS_MD_FEEDBACK_DIR:-$REPO/feedback}"
+LAUNCH_LABEL="com.advait.agent-loop.reflector"
+LAUNCH_PLIST="$HOME/Library/LaunchAgents/$LAUNCH_LABEL.plist"
 
 check_link() {
   local label="$1"
@@ -37,6 +39,37 @@ check_link "claude prompt" "$HOME/.claude/CLAUDE.md" "$REPO/AGENTS.md"
 check_link "codex prompt" "$HOME/.codex/AGENTS.md" "$REPO/AGENTS.md"
 check_hook "claude" "$HOME/.claude/settings.json"
 check_hook "codex" "$HOME/.codex/hooks.json"
+if grep -q "AGENT_LOOP_REFLECT_MODE=nightly" "$HOME/.claude/settings.json" "$HOME/.codex/hooks.json" 2>/dev/null; then
+  printf "ok   foreground hooks queue for nightly reflection\n"
+else
+  printf "warn foreground hook mode not explicitly nightly\n"
+fi
+if [[ -f "$LAUNCH_PLIST" ]] && grep -q "$REPO/hooks/frustration-worker.py" "$LAUNCH_PLIST"; then
+  printf "ok   nightly LaunchAgent installed -> %s\n" "$LAUNCH_PLIST"
+else
+  printf "bad  nightly LaunchAgent missing -> %s\n" "$LAUNCH_PLIST"
+fi
+if [[ -f "$LAUNCH_PLIST" ]]; then
+  runner="$(python3 - "$LAUNCH_PLIST" <<'PY'
+import plistlib
+import sys
+from pathlib import Path
+
+data = plistlib.loads(Path(sys.argv[1]).read_bytes())
+env = data.get("EnvironmentVariables", {})
+print(env.get("AGENT_LOOP_REFLECTOR_RUNNER", "auto"))
+PY
+)"
+  claude_path="$(command -v claude || true)"
+  codex_path="$(command -v codex || true)"
+  printf "ok   reflector runner=%s" "$runner"
+  if [[ -n "$claude_path" && -n "$codex_path" && "$runner" == "auto" ]]; then
+    printf " (claude+codex found; nightly batch randomly chooses one)"
+  elif [[ -n "$claude_path" || -n "$codex_path" ]]; then
+    printf " (found:%s%s)" "${claude_path:+ claude}" "${codex_path:+ codex}"
+  fi
+  printf "\n"
+fi
 if [[ "${AGENT_LOOP_NOTIFY:-1}" == "0" || "${AGENTS_MD_NOTIFY:-1}" == "0" ]]; then
   printf "off  macOS spawn notifications disabled by env\n"
 else

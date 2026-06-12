@@ -3,6 +3,7 @@ set -euo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 HOOK="$REPO/hooks/frustration-reflect.sh"
+WORKER="$REPO/hooks/frustration-worker.py"
 STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
 export STAMP
 
@@ -10,13 +11,21 @@ MODE="install"
 PROMPT=""
 SKILLS_DIR=""
 FEEDBACK_DIR=""
+INSTALL_NIGHTLY=1
+NIGHTLY_HOUR=3
+NIGHTLY_MINUTE=0
+REFLECTOR_RUNNER="auto"
+LAUNCH_LABEL="com.advait.agent-loop.reflector"
+LAUNCH_PLIST="$HOME/Library/LaunchAgents/$LAUNCH_LABEL.plist"
 
 usage() {
   cat <<EOF
-Usage: $0 [--uninstall] [--prompt PATH] [--skills PATH] [--feedback-dir PATH]
+Usage: $0 [--uninstall] [--prompt PATH] [--skills PATH] [--feedback-dir PATH] [--no-nightly] [--nightly-hour H] [--nightly-minute M] [--runner auto|claude|codex]
 
-install      Link this repo's prompt and install Claude/Codex UserPromptSubmit hooks.
---uninstall  Remove this repo's prompt links and frustration hooks.
+install          Link this repo's prompt, install Claude/Codex hooks, and install the nightly reflector.
+--uninstall      Remove this repo's prompt links, hooks, and nightly reflector.
+--no-nightly     Install prompt links/hooks without installing the LaunchAgent.
+--runner         Reflector runner. auto picks claude/codex from PATH, randomly if both exist.
 EOF
 }
 
@@ -40,6 +49,22 @@ while [[ $# -gt 0 ]]; do
       ;;
     --feedback-dir)
       FEEDBACK_DIR="${2:-}"
+      shift 2
+      ;;
+    --no-nightly)
+      INSTALL_NIGHTLY=0
+      shift
+      ;;
+    --nightly-hour)
+      NIGHTLY_HOUR="${2:-}"
+      shift 2
+      ;;
+    --nightly-minute)
+      NIGHTLY_MINUTE="${2:-}"
+      shift 2
+      ;;
+    --runner)
+      REFLECTOR_RUNNER="${2:-}"
       shift 2
       ;;
     -h|--help)
@@ -92,8 +117,12 @@ if [[ ! -f "$HOOK" ]]; then
   echo "missing hook: $HOOK" >&2
   exit 1
 fi
+if [[ "$REFLECTOR_RUNNER" != "auto" && "$REFLECTOR_RUNNER" != "claude" && "$REFLECTOR_RUNNER" != "codex" ]]; then
+  echo "invalid --runner: $REFLECTOR_RUNNER" >&2
+  exit 2
+fi
 
-chmod +x "$HOOK" "$REPO/hooks/frustration-worker.py" "$REPO/hooks/frustration-stats.sh" "$REPO/hooks/launch-reflector.sh"
+chmod +x "$HOOK" "$WORKER" "$REPO/hooks/frustration-stats.sh" "$REPO/hooks/launch-reflector.sh" "$REPO/scripts/agent-loop-status.sh" "$REPO/scripts/test-frustration-tripwire.py"
 
 install_link() {
   local target="$1"
@@ -130,7 +159,7 @@ else
   uninstall_link "$PROMPT" "$HOME/.codex/AGENTS.md"
 fi
 
-HOOK_COMMAND="env AGENTS_MD_REPO=$(quote "$REPO") AGENTS_MD_PROMPT=$(quote "$PROMPT") AGENTS_MD_SKILLS_DIR=$(quote "$SKILLS_DIR") AGENTS_MD_FEEDBACK_DIR=$(quote "$FEEDBACK_DIR") $(quote "$HOOK")"
+HOOK_COMMAND="env AGENT_LOOP_REFLECT_MODE=nightly AGENTS_MD_REPO=$(quote "$REPO") AGENTS_MD_PROMPT=$(quote "$PROMPT") AGENTS_MD_SKILLS_DIR=$(quote "$SKILLS_DIR") AGENTS_MD_FEEDBACK_DIR=$(quote "$FEEDBACK_DIR") $(quote "$HOOK")"
 
 python3 - "$MODE" "$HOOK_COMMAND" "$HOME/.claude/settings.json" "$HOME/.codex/hooks.json" <<'PY'
 import json
@@ -248,8 +277,60 @@ for settings_path in settings_paths:
         uninstall(settings_path)
 PY
 
+install_launch_agent() {
+  mkdir -p "$HOME/Library/LaunchAgents" "$FEEDBACK_DIR"
+  python3 - "$LAUNCH_LABEL" "$REPO" "$WORKER" "$PROMPT" "$SKILLS_DIR" "$FEEDBACK_DIR" "$NIGHTLY_HOUR" "$NIGHTLY_MINUTE" "$REFLECTOR_RUNNER" "$LAUNCH_PLIST" <<'PY'
+import plistlib
+import sys
+from pathlib import Path
+
+label, repo, worker, prompt, skills_dir, feedback_dir, hour, minute, runner, plist_path = sys.argv[1:]
+data = {
+    "Label": label,
+    "ProgramArguments": ["/usr/bin/env", "python3", worker, "--nightly"],
+    "WorkingDirectory": repo,
+    "EnvironmentVariables": {
+        "AGENT_LOOP_NOTIFY": "1",
+        "AGENTS_MD_REPO": repo,
+        "AGENTS_MD_PROMPT": prompt,
+        "AGENTS_MD_SKILLS_DIR": skills_dir,
+        "AGENTS_MD_FEEDBACK_DIR": feedback_dir,
+        "AGENT_LOOP_REFLECTOR_RUNNER": runner,
+        "PATH": "/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin",
+    },
+    "StartCalendarInterval": {
+        "Hour": int(hour),
+        "Minute": int(minute),
+    },
+    "StandardOutPath": str(Path(feedback_dir) / "launchd.out.log"),
+    "StandardErrorPath": str(Path(feedback_dir) / "launchd.err.log"),
+}
+Path(plist_path).write_bytes(plistlib.dumps(data, sort_keys=False))
+PY
+  launchctl bootout "gui/$(id -u)" "$LAUNCH_PLIST" >/dev/null 2>&1 || true
+  launchctl bootstrap "gui/$(id -u)" "$LAUNCH_PLIST"
+  launchctl enable "gui/$(id -u)/$LAUNCH_LABEL" >/dev/null 2>&1 || true
+  echo "installed nightly reflector: $LAUNCH_PLIST at $(printf '%02d:%02d' "$NIGHTLY_HOUR" "$NIGHTLY_MINUTE") local, runner=$REFLECTOR_RUNNER"
+}
+
+uninstall_launch_agent() {
+  launchctl bootout "gui/$(id -u)" "$LAUNCH_PLIST" >/dev/null 2>&1 || true
+  if [[ -f "$LAUNCH_PLIST" ]]; then
+    rm "$LAUNCH_PLIST"
+    echo "removed nightly reflector: $LAUNCH_PLIST"
+  else
+    echo "skip: nightly reflector not installed"
+  fi
+}
+
 if [[ "$MODE" == "install" ]]; then
+  if [[ "$INSTALL_NIGHTLY" == "1" ]]; then
+    install_launch_agent
+  else
+    echo "skip: nightly reflector not installed (--no-nightly)"
+  fi
   echo "installed agent-loop hooks from $REPO"
 else
+  uninstall_launch_agent
   echo "uninstalled agent-loop hooks from $REPO"
 fi

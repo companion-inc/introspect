@@ -14,7 +14,9 @@ import datetime as dt
 import errno
 import json
 import os
+import random
 import shlex
+import shutil
 import signal
 import subprocess
 import sys
@@ -40,6 +42,7 @@ SESSION_COOLDOWN_SECONDS = float(os.environ.get("FRUSTRATION_SESSION_COOLDOWN_SE
 STALE_LOCK_SECONDS = float(os.environ.get("FRUSTRATION_STALE_LOCK_SECONDS", "1800"))
 DRY_RUN = os.environ.get("FRUSTRATION_REFLECTOR_DRY_RUN") == "1"
 DISABLE_SCHEDULE = os.environ.get("FRUSTRATION_DISABLE_SCHEDULE") == "1"
+REFLECTOR_RUNNER = os.environ.get("AGENT_LOOP_REFLECTOR_RUNNER", "auto").strip().lower() or "auto"
 
 
 def utc_now() -> dt.datetime:
@@ -96,6 +99,50 @@ def notify(title: str, message: str) -> None:
         )
     except Exception as exc:
         log(f"notification failed: {exc!r}")
+
+
+def available_reflector_runners() -> dict[str, str]:
+    runners = {}
+    for name in ("claude", "codex"):
+        path = shutil.which(name)
+        if path:
+            runners[name] = path
+    return runners
+
+
+def select_reflector_runner() -> tuple[str, str]:
+    runners = available_reflector_runners()
+    if REFLECTOR_RUNNER == "auto":
+        if not runners:
+            raise RuntimeError("no reflector runner found; install claude or codex")
+        names = sorted(runners)
+        name = random.choice(names)
+        return name, runners[name]
+    if REFLECTOR_RUNNER not in {"claude", "codex"}:
+        raise RuntimeError(f"invalid AGENT_LOOP_REFLECTOR_RUNNER={REFLECTOR_RUNNER!r}")
+    path = runners.get(REFLECTOR_RUNNER)
+    if not path:
+        raise RuntimeError(f"requested reflector runner {REFLECTOR_RUNNER!r} is not on PATH")
+    return REFLECTOR_RUNNER, path
+
+
+def build_reflector_command(runner: str, runner_path: str, prompt: str, allowed_tools: str) -> list[str]:
+    if runner == "claude":
+        return [runner_path, "-p", prompt, "--allowedTools", allowed_tools]
+    if runner == "codex":
+        return [
+            runner_path,
+            "exec",
+            "--sandbox",
+            "danger-full-access",
+            "--ask-for-approval",
+            "never",
+            "--search",
+            "-C",
+            str(REPO),
+            prompt,
+        ]
+    raise RuntimeError(f"unsupported reflector runner {runner!r}")
 
 
 def pid_alive(pid: int) -> bool:
@@ -350,11 +397,14 @@ def invoke_reflector(events: list[dict]) -> int:
     )
     env = os.environ.copy()
     env["AGENTS_MD_REFLECTOR"] = "1"
-    cmd = ["claude", "-p", prompt, "--allowedTools", allowed_tools]
-    log(f"invoking reflector for {len(events)} event(s)")
-    notify("agent-loop", f"Reflector spawned for {len(events)} frustration event(s)")
+    runner, runner_path = select_reflector_runner()
+    cmd = build_reflector_command(runner, runner_path, prompt, allowed_tools)
+    log(f"invoking {runner} reflector for {len(events)} event(s)")
+    notify("agent-loop", f"{runner} reflector spawned for {len(events)} frustration event(s)")
     with LOG.open("a") as log_file:
-        log_file.write(f"{iso_now()} command: claude -p <batch-prompt> --allowedTools {allowed_tools}\n")
+        display_cmd = " ".join(shlex.quote(part) for part in cmd)
+        display_cmd = display_cmd.replace(shlex.quote(prompt), "<batch-prompt>")
+        log_file.write(f"{iso_now()} command: {display_cmd}\n")
         result = subprocess.run(
             cmd,
             cwd=REPO,
@@ -382,12 +432,13 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--kick", action="store_true")
     parser.add_argument("--scheduled", action="store_true")
-    parser.parse_args()
+    parser.add_argument("--nightly", action="store_true")
+    args = parser.parse_args()
 
     if not acquire_lock():
         return 0
 
-    if DEBOUNCE_SECONDS > 0:
+    if not args.nightly and DEBOUNCE_SECONDS > 0:
         log(f"debouncing for {DEBOUNCE_SECONDS:.1f}s")
         time.sleep(DEBOUNCE_SECONDS)
 
@@ -397,23 +448,29 @@ def main() -> int:
         return 0
 
     state = read_json(STATE, {})
-    remaining = global_cooldown_remaining(state)
-    if remaining > 0:
-        log(f"global cooldown active for {remaining:.0f}s; requeueing {len(events)} event(s)")
-        requeue(events)
-        schedule_retry(remaining, state)
-        return 0
+    blocked: list[dict] = []
+    session_wait = 0.0
+    if args.nightly:
+        log(f"nightly batch processing {len(events)} queued event(s)")
+        eligible = events
+    else:
+        remaining = global_cooldown_remaining(state)
+        if remaining > 0:
+            log(f"global cooldown active for {remaining:.0f}s; requeueing {len(events)} event(s)")
+            requeue(events)
+            schedule_retry(remaining, state)
+            return 0
 
-    eligible, blocked, session_wait = split_by_session_cooldown(state, events)
-    if blocked:
-        log(
-            f"session cooldown blocked {len(blocked)} event(s) for {session_wait:.0f}s; "
-            f"{len(eligible)} event(s) eligible"
-        )
-        requeue(blocked)
-    if not eligible:
-        schedule_retry(session_wait, state)
-        return 0
+        eligible, blocked, session_wait = split_by_session_cooldown(state, events)
+        if blocked:
+            log(
+                f"session cooldown blocked {len(blocked)} event(s) for {session_wait:.0f}s; "
+                f"{len(eligible)} event(s) eligible"
+            )
+            requeue(blocked)
+        if not eligible:
+            schedule_retry(session_wait, state)
+            return 0
 
     try:
         code = invoke_reflector(eligible)
@@ -429,12 +486,13 @@ def main() -> int:
     if code != 0:
         log(f"reflector returned nonzero code={code}; requeueing batch")
         requeue(eligible)
-        state = read_json(STATE, {})
-        schedule_retry(GLOBAL_COOLDOWN_SECONDS, state)
+        if not args.nightly:
+            state = read_json(STATE, {})
+            schedule_retry(GLOBAL_COOLDOWN_SECONDS, state)
         return code
 
     update_state_after_run(state, eligible)
-    if QUEUE.exists():
+    if not args.nightly and QUEUE.exists():
         state = read_json(STATE, {})
         delay = max(GLOBAL_COOLDOWN_SECONDS, session_wait if blocked else 0)
         schedule_retry(delay, state)
