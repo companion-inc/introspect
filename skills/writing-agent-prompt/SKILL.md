@@ -1,33 +1,35 @@
 ---
 name: writing-agent-prompt
-description: Write or revise model-facing prompt text so the desired behavior is stated as the output to produce, not as warnings or bad examples to avoid. Use when editing AGENTS.md, CLAUDE.md, system prompts, prompt rules, or when a prompt change causes preambles, caveats, lectures, disclaimers, refusals, or advice instead of action.
+description: Write or revise model-facing prompt text so the desired behavior is stated as the output to produce, then verify it with real response probes. Use when editing AGENTS.md, CLAUDE.md, system prompts, prompt rules, or when prompt wording makes the agent explain, ask permission, or stall instead of acting.
 ---
 
 # Writing Agent Prompt
 
 ## Purpose
 
-Use this skill for prompt wording after `agent-md-creator` has decided that the behavior belongs in an always-loaded prompt. This skill is about phrasing, not placement.
+Use this skill for prompt wording after `agent-md-creator` has decided that the behavior belongs in an always-loaded prompt. This skill is about phrasing and behavioral verification, not placement.
 
 ## Procedure
 
 1. Read the failure transcript and name the unwanted model move in one sentence.
-2. Rewrite the instruction as the desired artifact or behavior, using positive verbs: `produce`, `implement`, `continue`, `substitute`, `verify`, `report`.
-3. Keep loaded-warning vocabulary out of always-loaded prompts. Avoid naming the bad answer shape unless the literal string is the feature being tested.
-4. Put research requirements before action only when the task needs facts; otherwise tell the model to discover missing details with tools while acting.
-5. If a sub-action fails, phrase the recovery as substitution and continuation, not as a user-facing caveat.
-6. After editing, run a mechanical scan on the changed prompt for wording that primes preambles or non-action.
+2. Write the desired first move and final artifact in plain behavioral terms.
+3. Rewrite the instruction with action verbs such as `produce`, `implement`, `continue`, `substitute`, `verify`, and `report`.
+4. Put research requirements inside the action path: the model should discover missing details with tools while moving toward the artifact.
+5. If a sub-action cannot run, phrase the recovery as substitution and continuation.
+6. Verify by probing the actual agent with a realistic prompt from the failure and reading the response for behavior. The response should start the work, name the first concrete action, and avoid asking for permission when authorization is already present.
+7. If the probe fails, revise the prompt and probe again. Do not replace the behavioral test with a text-matching proxy.
 
 ## Gotchas
 
-- A prompt line that says "do not lecture" still loads the word and can make the lecture pattern salient. Prefer "answer with the changed artifact and verification."
-- A rule listing categories like law, brands, or platform terms can summon a compliance essay. Prefer "user-owned local/private/prototype work" and "produce the requested artifact."
+- A prompt can match expected words and still fail behaviorally. Judge the response, not isolated text.
+- A text-matching proxy can block legitimate prompt text while missing the same failure expressed another way.
+- Prefer "answer with the changed artifact and verification" over naming every bad response style.
 - A hidden or empty skill folder is not a skill. It needs `SKILL.md` frontmatter and an index entry so the reflector can route to it.
 - Do not blindly obey this skill when the edited prompt is for a regulated product workflow; read the product docs and verify the result against the real prompt file.
 
 ## Verification
 
-- Run `./scripts/check-prompt-priming.py AGENTS.md`.
+- Run at least one behavior probe against the actual agent runtime that loads the edited prompt.
 - Run `./scripts/validate-skills.py` after creating or changing this skill.
 - For core prompt edits, run `./scripts/introspect-status.sh` and confirm Claude and Codex prompt links target the edited file.
 

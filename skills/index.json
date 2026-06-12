@@ -26,16 +26,16 @@
       "path": "skills/writing-agent-prompt/SKILL.md",
       "status": "active",
       "tier": "core-maintenance",
-      "description": "Write or revise model-facing prompt wording so it states the desired action/output instead of priming preambles, caveats, lectures, disclaimers, refusals, or advice instead of action.",
+      "description": "Write or revise model-facing prompt wording so it states the desired action/output and is verified by real response probes.",
       "activation_signals": [
         "prompt wording",
         "system prompt copy",
         "AGENTS.md wording",
         "CLAUDE.md wording",
-        "preamble or caveat",
-        "lecture instead of action",
-        "refusal caused by prompt",
-        "prompt primes bad output"
+        "agent explains instead of acting",
+        "agent asks permission before acting",
+        "prompt wording caused bad behavior",
+        "verify prompt behavior"
       ]
     },
     {
