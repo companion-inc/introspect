@@ -24,10 +24,10 @@ import time
 from pathlib import Path
 
 
-REPO = Path(os.path.expanduser(os.environ.get("AGENTS_MD_REPO", "~/Projects/agent-loop")))
-SKILLS_DIR = Path(os.path.expanduser(os.environ.get("AGENTS_MD_SKILLS_DIR", str(REPO / "skills"))))
+REPO = Path(os.path.expanduser(os.environ.get("INTROSPECT_REPO", "~/Projects/agent-loop")))
+SKILLS_DIR = Path(os.path.expanduser(os.environ.get("INTROSPECT_SKILLS_DIR", str(REPO / "skills"))))
 FEEDBACK_DIR = Path(
-    os.path.expanduser(os.environ.get("AGENTS_MD_FEEDBACK_DIR", str(REPO / "feedback")))
+    os.path.expanduser(os.environ.get("INTROSPECT_FEEDBACK_DIR", str(REPO / "feedback")))
 )
 QUEUE = FEEDBACK_DIR / "frustration-queue.jsonl"
 LOCK = FEEDBACK_DIR / "reflector.lock"
@@ -42,7 +42,7 @@ SESSION_COOLDOWN_SECONDS = float(os.environ.get("FRUSTRATION_SESSION_COOLDOWN_SE
 STALE_LOCK_SECONDS = float(os.environ.get("FRUSTRATION_STALE_LOCK_SECONDS", "1800"))
 DRY_RUN = os.environ.get("FRUSTRATION_REFLECTOR_DRY_RUN") == "1"
 DISABLE_SCHEDULE = os.environ.get("FRUSTRATION_DISABLE_SCHEDULE") == "1"
-REFLECTOR_RUNNER = os.environ.get("AGENT_LOOP_REFLECTOR_RUNNER", "auto").strip().lower() or "auto"
+REFLECTOR_RUNNER = os.environ.get("INTROSPECT_REFLECTOR_RUNNER", "auto").strip().lower() or "auto"
 
 
 def utc_now() -> dt.datetime:
@@ -79,7 +79,7 @@ def applescript_string(value: str) -> str:
 
 
 def notify(title: str, message: str) -> None:
-    if os.environ.get("AGENT_LOOP_NOTIFY") == "0" or os.environ.get("AGENTS_MD_NOTIFY") == "0":
+    if os.environ.get("INTROSPECT_NOTIFY") == "0":
         return
     try:
         subprocess.run(
@@ -119,7 +119,7 @@ def select_reflector_runner() -> tuple[str, str]:
         name = random.choice(names)
         return name, runners[name]
     if REFLECTOR_RUNNER not in {"claude", "codex"}:
-        raise RuntimeError(f"invalid AGENT_LOOP_REFLECTOR_RUNNER={REFLECTOR_RUNNER!r}")
+        raise RuntimeError(f"invalid INTROSPECT_REFLECTOR_RUNNER={REFLECTOR_RUNNER!r}")
     path = runners.get(REFLECTOR_RUNNER)
     if not path:
         raise RuntimeError(f"requested reflector runner {REFLECTOR_RUNNER!r} is not on PATH")
@@ -298,7 +298,7 @@ def schedule_retry(delay: float, state: dict) -> None:
         f">> {shlex.quote(str(LOG))} 2>&1"
     )
     env = os.environ.copy()
-    env["AGENTS_MD_REFLECTOR"] = "1"
+    env["INTROSPECT_REFLECTOR"] = "1"
     subprocess.Popen(
         ["/bin/sh", "-c", command],
         cwd=REPO,
@@ -329,7 +329,7 @@ def build_prompt(events: list[dict]) -> str:
     transcript_paths = sorted({event.get("transcript_path") for event in events if event.get("transcript_path")})
     transcript_block = "\n".join(f"- {path}" for path in transcript_paths) or "- none supplied; use session_id/cwd from events"
 
-    return f"""You are the agent-loop frustration reflector.
+    return f"""You are the Introspect frustration reflector.
 
 A batch of user-frustration tripwires fired. The regex is broad recall only. Judge whether each event is genuine frustration at agent behavior or just casual register / external venting. Do not change anything for false positives.
 
@@ -351,7 +351,7 @@ Workflow:
 3. Classify the change target as exactly one of: no_change, core_prompt, skill_new, skill_update, skill_prune.
 4. Use core_prompt only for an always-loaded invariant that should apply across nearly every task. Before editing AGENTS.md, read skills/agent-md-creator/SKILL.md.
 5. Use skill_new or skill_update for scoped workflows, domains, repeated failure shapes, or instructions that should load only in relevant situations. Use skill_prune for stale, duplicated, overbroad, unsupported, or harmful skills. Before any skill operation, read skills/skill-creator/SKILL.md, its source map, the skills index, and the closest existing skill. Prefer updating or pruning a close skill over creating a duplicate.
-6. For skill changes, write or edit a self-contained skills/<slug>/SKILL.md in this repo, update skills/index.json, and run AGENTS_MD_SKILLS_DIR={SKILLS_DIR} {REPO}/scripts/validate-skills.py. For skill_prune, prefer marking status deprecated or narrowing activation before deleting files.
+6. For skill changes, write or edit a self-contained skills/<slug>/SKILL.md in this repo, update skills/index.json, and run INTROSPECT_SKILLS_DIR={SKILLS_DIR} {REPO}/scripts/validate-skills.py. For skill_prune, prefer marking status deprecated or narrowing activation before deleting files.
 7. If the frustration rate rose after a recent AGENTS.md change, prefer reverting or narrowing that change over adding another rule.
 8. Commit with a behavioral message and push.
 9. If no change is justified, make no file changes and say why in the log output.
@@ -396,11 +396,11 @@ def invoke_reflector(events: list[dict]) -> int:
         ]
     )
     env = os.environ.copy()
-    env["AGENTS_MD_REFLECTOR"] = "1"
+    env["INTROSPECT_REFLECTOR"] = "1"
     runner, runner_path = select_reflector_runner()
     cmd = build_reflector_command(runner, runner_path, prompt, allowed_tools)
     log(f"invoking {runner} reflector for {len(events)} event(s)")
-    notify("agent-loop", f"{runner} reflector spawned for {len(events)} frustration event(s)")
+    notify("Introspect", f"{runner} reflector spawned for {len(events)} frustration event(s)")
     with LOG.open("a") as log_file:
         display_cmd = " ".join(shlex.quote(part) for part in cmd)
         display_cmd = display_cmd.replace(shlex.quote(prompt), "<batch-prompt>")

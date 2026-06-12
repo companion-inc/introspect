@@ -85,6 +85,23 @@
       ]
     },
     {
+      "id": "product-surface-polish",
+      "path": "skills/product-surface-polish/SKILL.md",
+      "status": "active",
+      "tier": "domain-workflow",
+      "description": "Polish pricing pages, plan cards, App Store/TestFlight metadata, icons, categories, onboarding, and marketing UI by grounding copy and visuals in real reference products plus the product's enforced source of truth.",
+      "activation_signals": [
+        "pricing page copy or layout",
+        "plan card features",
+        "upgrade or paywall screen",
+        "App Store or TestFlight metadata",
+        "app icon category name or subtitle",
+        "read competitor product pages before polishing",
+        "remove internal jargon from product copy",
+        "verify public product surface end to end"
+      ]
+    },
+    {
       "id": "local-secret-retrieval",
       "path": "skills/local-secret-retrieval/SKILL.md",
       "status": "active",

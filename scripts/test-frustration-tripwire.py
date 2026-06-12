@@ -37,19 +37,19 @@ def run_case(
         env = os.environ.copy()
         env.update(
             {
-                "AGENTS_MD_REPO": str(REPO),
-                "AGENTS_MD_PROMPT": str(REPO / "AGENTS.md"),
-                "AGENTS_MD_SKILLS_DIR": str(REPO / "skills"),
-                "AGENTS_MD_FEEDBACK_DIR": str(tmp),
+                "INTROSPECT_REPO": str(REPO),
+                "INTROSPECT_PROMPT": str(REPO / "AGENTS.md"),
+                "INTROSPECT_SKILLS_DIR": str(REPO / "skills"),
+                "INTROSPECT_FEEDBACK_DIR": str(tmp),
                 "FRUSTRATION_REFLECTOR_DRY_RUN": "1",
                 "FRUSTRATION_DEBOUNCE_SECONDS": "0",
                 "FRUSTRATION_DISABLE_SCHEDULE": "1",
             }
         )
         if reflect_mode:
-            env["AGENT_LOOP_REFLECT_MODE"] = reflect_mode
+            env["INTROSPECT_REFLECT_MODE"] = reflect_mode
         else:
-            env.pop("AGENT_LOOP_REFLECT_MODE", None)
+            env.pop("INTROSPECT_REFLECT_MODE", None)
         payload = {
             "prompt": prompt,
             "session_id": "tripwire-test",
@@ -93,22 +93,22 @@ def run_case(
             raise AssertionError(f"{prompt!r}: should not have created a reflector batch")
 
 
-def run_queue_only_case() -> None:
+def run_mode_case(reflect_mode: str, expected_queue: int, expected_batches: int) -> None:
     with tempfile.TemporaryDirectory(prefix="agent-loop-tripwire-") as tmp_raw:
         tmp = Path(tmp_raw)
         env = os.environ.copy()
         env.update(
             {
-                "AGENTS_MD_REPO": str(REPO),
-                "AGENTS_MD_PROMPT": str(REPO / "AGENTS.md"),
-                "AGENTS_MD_SKILLS_DIR": str(REPO / "skills"),
-                "AGENTS_MD_FEEDBACK_DIR": str(tmp),
+                "INTROSPECT_REPO": str(REPO),
+                "INTROSPECT_PROMPT": str(REPO / "AGENTS.md"),
+                "INTROSPECT_SKILLS_DIR": str(REPO / "skills"),
+                "INTROSPECT_FEEDBACK_DIR": str(tmp),
                 "FRUSTRATION_REFLECTOR_DRY_RUN": "1",
                 "FRUSTRATION_DEBOUNCE_SECONDS": "0",
                 "FRUSTRATION_DISABLE_SCHEDULE": "1",
             }
         )
-        env.pop("AGENT_LOOP_REFLECT_MODE", None)
+        env["INTROSPECT_REFLECT_MODE"] = reflect_mode
         subprocess.run(
             [sys.executable, str(HOOK)],
             input=json.dumps(
@@ -130,10 +130,51 @@ def run_queue_only_case() -> None:
         batches = read_jsonl(tmp / "reflector-batches.jsonl")
         if len(events) != 1 or not events[0].get("frustrated"):
             raise AssertionError("queue-only case did not log one frustrated event")
-        if len(queue) != 1:
-            raise AssertionError("queue-only case did not enqueue exactly one event")
-        if batches:
-            raise AssertionError("queue-only default should not spawn a reflector batch")
+        if len(queue) != expected_queue:
+            raise AssertionError(f"{reflect_mode}: expected {expected_queue} queued event(s), got {len(queue)}")
+        if len(batches) != expected_batches:
+            raise AssertionError(f"{reflect_mode}: expected {expected_batches} batch(es), got {len(batches)}")
+
+
+def run_profile_case() -> None:
+    with tempfile.TemporaryDirectory(prefix="agent-loop-profile-") as tmp_raw:
+        tmp = Path(tmp_raw)
+        profile = tmp / "profile"
+        profile.mkdir()
+        (profile / "frustration-words.json").write_text(
+            json.dumps({"include": ["bruh"], "exclude": ["hell"]})
+        )
+        env = os.environ.copy()
+        env.update(
+            {
+                "INTROSPECT_REPO": str(REPO),
+                "INTROSPECT_PROMPT": str(REPO / "AGENTS.md"),
+                "INTROSPECT_SKILLS_DIR": str(REPO / "skills"),
+                "INTROSPECT_FEEDBACK_DIR": str(tmp / "feedback"),
+                "INTROSPECT_PROFILE_DIR": str(profile),
+                "INTROSPECT_REFLECT_MODE": "off",
+                "FRUSTRATION_REFLECTOR_DRY_RUN": "1",
+                "FRUSTRATION_DEBOUNCE_SECONDS": "0",
+                "FRUSTRATION_DISABLE_SCHEDULE": "1",
+            }
+        )
+        for prompt in ("bruh fix this", "why the hell"):
+            subprocess.run(
+                [sys.executable, str(HOOK)],
+                input=json.dumps({"prompt": prompt, "session_id": "profile-test", "cwd": str(REPO)}),
+                text=True,
+                env=env,
+                cwd=REPO,
+                check=True,
+                timeout=10,
+            )
+        events = read_jsonl(tmp / "feedback" / "events.jsonl")
+        if len(events) != 2:
+            raise AssertionError(f"profile case expected 2 events, got {len(events)}")
+        if not events[0].get("frustrated") or "bruh" not in events[0].get("matched", []):
+            raise AssertionError("profile include did not trigger bruh")
+        if events[1].get("frustrated"):
+            raise AssertionError("profile exclude did not suppress hell")
 
 
 def main() -> int:
@@ -149,8 +190,10 @@ def main() -> int:
     ]
     for prompt, should_trigger, expected_match in cases:
         run_case(prompt, should_trigger, expected_match)
-    run_queue_only_case()
-    print(f"test-frustration-tripwire: ok ({len(cases) + 1} cases)")
+    run_mode_case("nightly", expected_queue=1, expected_batches=0)
+    run_mode_case("off", expected_queue=0, expected_batches=0)
+    run_profile_case()
+    print(f"test-frustration-tripwire: ok ({len(cases) + 3} cases)")
     return 0
 
 

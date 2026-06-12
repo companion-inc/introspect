@@ -34,7 +34,7 @@
 
 - Pin the deliverable's shape — format, scope, audience — before producing it; don't guess, render, get rejected, repeat.
 - Before editing `AGENTS.md`, `CLAUDE.md`, skills, or model-facing prompts, load the relevant local prompt/skill instructions and follow their altitude and length rules. Encode the failure mode, not the incident details; a global rule that depends on one vendor or product example is probably at the wrong altitude.
-- Every changed line traces to the request. Match the existing style, don't refactor what isn't broken, and write the minimum — where minimum means least total complexity, not smallest diff: grep for an existing helper and reuse a shared unit instead of pasting a second or third copy. Delete the old path; no back-compat cruft.
+- Every changed line traces to the request. Match the existing style, don't refactor what isn't broken, and write the minimum — where minimum means least total complexity, not smallest diff: grep for an existing helper and reuse a shared unit instead of pasting a second or third copy. Before preserving legacy behavior, identify who or what still depends on it; if the project is local, private, pre-user, or undeployed, delete the old path instead of adding compatibility cruft.
 - Plan the whole solution, then make the fewest high-signal moves — the ideal is one edit. If you're churning low-signal edits, your approach is wrong; rethink from scratch instead of moving more pieces.
 
 ## Verify before you claim done

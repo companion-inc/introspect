@@ -2,8 +2,8 @@
 set -euo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
-FEEDBACK_DIR="${AGENTS_MD_FEEDBACK_DIR:-$REPO/feedback}"
-LAUNCH_LABEL="com.advait.agent-loop.reflector"
+FEEDBACK_DIR="${INTROSPECT_FEEDBACK_DIR:-$REPO/feedback}"
+LAUNCH_LABEL="ai.companion.introspect.reflector"
 LAUNCH_PLIST="$HOME/Library/LaunchAgents/$LAUNCH_LABEL.plist"
 
 check_link() {
@@ -30,7 +30,7 @@ check_hook() {
 }
 
 cd "$REPO"
-printf "agent-loop status\n"
+printf "Introspect status\n"
 printf "repo: %s\n" "$REPO"
 printf "commit: "
 git rev-parse --short HEAD
@@ -39,15 +39,51 @@ check_link "claude prompt" "$HOME/.claude/CLAUDE.md" "$REPO/AGENTS.md"
 check_link "codex prompt" "$HOME/.codex/AGENTS.md" "$REPO/AGENTS.md"
 check_hook "claude" "$HOME/.claude/settings.json"
 check_hook "codex" "$HOME/.codex/hooks.json"
-if grep -q "AGENT_LOOP_REFLECT_MODE=nightly" "$HOME/.claude/settings.json" "$HOME/.codex/hooks.json" 2>/dev/null; then
+mode="$(python3 - "$HOME/.claude/settings.json" "$HOME/.codex/hooks.json" <<'PY'
+import json
+import re
+import sys
+from pathlib import Path
+
+for raw in sys.argv[1:]:
+    path = Path(raw)
+    if not path.exists():
+        continue
+    try:
+        data = json.loads(path.read_text())
+    except Exception:
+        continue
+    groups = data.get("hooks", {}).get("UserPromptSubmit", [])
+    for group in groups if isinstance(groups, list) else []:
+        for hook in group.get("hooks", []) if isinstance(group, dict) else []:
+            command = hook.get("command") if isinstance(hook, dict) else ""
+            if "frustration-reflect.sh" not in command:
+                continue
+            match = re.search(r"INTROSPECT_REFLECT_MODE=([^ ]+)", command)
+            print(match.group(1) if match else "immediate")
+            raise SystemExit(0)
+print("off")
+PY
+)"
+if [[ "$mode" == "immediate" ]]; then
+  printf "ok   foreground hooks kick locked worker after frustration\n"
+elif [[ "$mode" == "nightly" ]]; then
   printf "ok   foreground hooks queue for nightly reflection\n"
+elif [[ "$mode" == "off" ]]; then
+  printf "off  foreground hooks disabled\n"
 else
-  printf "warn foreground hook mode not explicitly nightly\n"
+  printf "warn unknown reflector mode: %s\n" "$mode"
 fi
-if [[ -f "$LAUNCH_PLIST" ]] && grep -q "$REPO/hooks/frustration-worker.py" "$LAUNCH_PLIST"; then
-  printf "ok   nightly LaunchAgent installed -> %s\n" "$LAUNCH_PLIST"
+if [[ "$mode" == "nightly" ]]; then
+  if [[ -f "$LAUNCH_PLIST" ]] && grep -q "$REPO/hooks/frustration-worker.py" "$LAUNCH_PLIST"; then
+    printf "ok   nightly LaunchAgent installed -> %s\n" "$LAUNCH_PLIST"
+  else
+    printf "bad  nightly LaunchAgent missing -> %s\n" "$LAUNCH_PLIST"
+  fi
+elif [[ -f "$LAUNCH_PLIST" ]]; then
+  printf "warn nightly LaunchAgent installed while mode=%s -> %s\n" "$mode" "$LAUNCH_PLIST"
 else
-  printf "bad  nightly LaunchAgent missing -> %s\n" "$LAUNCH_PLIST"
+  printf "ok   nightly LaunchAgent not installed for mode=%s\n" "$mode"
 fi
 if [[ -f "$LAUNCH_PLIST" ]]; then
   runner="$(python3 - "$LAUNCH_PLIST" <<'PY'
@@ -57,7 +93,7 @@ from pathlib import Path
 
 data = plistlib.loads(Path(sys.argv[1]).read_bytes())
 env = data.get("EnvironmentVariables", {})
-print(env.get("AGENT_LOOP_REFLECTOR_RUNNER", "auto"))
+print(env.get("INTROSPECT_REFLECTOR_RUNNER", "auto"))
 PY
 )"
   claude_path="$(command -v claude || true)"
@@ -70,7 +106,7 @@ PY
   fi
   printf "\n"
 fi
-if [[ "${AGENT_LOOP_NOTIFY:-1}" == "0" || "${AGENTS_MD_NOTIFY:-1}" == "0" ]]; then
+if [[ "${INTROSPECT_NOTIFY:-1}" == "0" ]]; then
   printf "off  macOS spawn notifications disabled by env\n"
 else
   printf "ok   macOS spawn notifications enabled\n"
@@ -93,7 +129,7 @@ feedback = Path(sys.argv[1])
 repo = feedback.parent
 active_words = None
 hook_text = (repo / "hooks" / "frustration-reflect.sh").read_text()
-match = re.search(r"BAD_WORDS = (\{.*?\})", hook_text, flags=re.S)
+match = re.search(r"DEFAULT_BAD_WORDS = (\{.*?\})", hook_text, flags=re.S)
 if match:
     active_words = set(ast.literal_eval(match.group(1)))
 

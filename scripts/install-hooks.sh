@@ -11,20 +11,20 @@ MODE="install"
 PROMPT=""
 SKILLS_DIR=""
 FEEDBACK_DIR=""
-INSTALL_NIGHTLY=1
+REFLECT_MODE="immediate"
 NIGHTLY_HOUR=3
 NIGHTLY_MINUTE=0
 REFLECTOR_RUNNER="auto"
-LAUNCH_LABEL="com.advait.agent-loop.reflector"
+LAUNCH_LABEL="ai.companion.introspect.reflector"
 LAUNCH_PLIST="$HOME/Library/LaunchAgents/$LAUNCH_LABEL.plist"
 
 usage() {
   cat <<EOF
-Usage: $0 [--uninstall] [--prompt PATH] [--skills PATH] [--feedback-dir PATH] [--no-nightly] [--nightly-hour H] [--nightly-minute M] [--runner auto|claude|codex]
+Usage: $0 [--uninstall] [--prompt PATH] [--skills PATH] [--feedback-dir PATH] [--reflect-mode immediate|nightly|off] [--nightly-hour H] [--nightly-minute M] [--runner auto|claude|codex]
 
-install          Link this repo's prompt, install Claude/Codex hooks, and install the nightly reflector.
---uninstall      Remove this repo's prompt links, hooks, and nightly reflector.
---no-nightly     Install prompt links/hooks without installing the LaunchAgent.
+install          Link this repo's prompt and configure Claude/Codex hooks.
+--uninstall      Remove this repo's prompt links, hooks, and reflector LaunchAgents.
+--reflect-mode   immediate kicks the locked worker after frustration; nightly queues for the LaunchAgent; off removes hooks but keeps prompt links.
 --runner         Reflector runner. auto picks claude/codex from PATH, randomly if both exist.
 EOF
 }
@@ -51,8 +51,19 @@ while [[ $# -gt 0 ]]; do
       FEEDBACK_DIR="${2:-}"
       shift 2
       ;;
+    --reflect-mode|--mode)
+      REFLECT_MODE="${2:-}"
+      shift
+      shift
+      ;;
+    --nightly)
+      REFLECT_MODE="nightly"
+      shift
+      ;;
     --no-nightly)
-      INSTALL_NIGHTLY=0
+      if [[ "$REFLECT_MODE" == "nightly" ]]; then
+        REFLECT_MODE="immediate"
+      fi
       shift
       ;;
     --nightly-hour)
@@ -121,8 +132,12 @@ if [[ "$REFLECTOR_RUNNER" != "auto" && "$REFLECTOR_RUNNER" != "claude" && "$REFL
   echo "invalid --runner: $REFLECTOR_RUNNER" >&2
   exit 2
 fi
+if [[ "$REFLECT_MODE" != "immediate" && "$REFLECT_MODE" != "nightly" && "$REFLECT_MODE" != "off" ]]; then
+  echo "invalid --reflect-mode: $REFLECT_MODE" >&2
+  exit 2
+fi
 
-chmod +x "$HOOK" "$WORKER" "$REPO/hooks/frustration-stats.sh" "$REPO/hooks/launch-reflector.sh" "$REPO/scripts/agent-loop-status.sh" "$REPO/scripts/test-frustration-tripwire.py"
+chmod +x "$HOOK" "$WORKER" "$REPO/hooks/frustration-stats.sh" "$REPO/scripts/introspect-status.sh" "$REPO/scripts/test-frustration-tripwire.py"
 
 install_link() {
   local target="$1"
@@ -159,9 +174,13 @@ else
   uninstall_link "$PROMPT" "$HOME/.codex/AGENTS.md"
 fi
 
-HOOK_COMMAND="env AGENT_LOOP_REFLECT_MODE=nightly AGENTS_MD_REPO=$(quote "$REPO") AGENTS_MD_PROMPT=$(quote "$PROMPT") AGENTS_MD_SKILLS_DIR=$(quote "$SKILLS_DIR") AGENTS_MD_FEEDBACK_DIR=$(quote "$FEEDBACK_DIR") $(quote "$HOOK")"
+HOOK_COMMAND="env INTROSPECT_REFLECT_MODE=$(quote "$REFLECT_MODE") INTROSPECT_REPO=$(quote "$REPO") INTROSPECT_PROMPT=$(quote "$PROMPT") INTROSPECT_SKILLS_DIR=$(quote "$SKILLS_DIR") INTROSPECT_FEEDBACK_DIR=$(quote "$FEEDBACK_DIR") $(quote "$HOOK")"
+HOOK_MODE="$MODE"
+if [[ "$MODE" == "install" && "$REFLECT_MODE" == "off" ]]; then
+  HOOK_MODE="uninstall"
+fi
 
-python3 - "$MODE" "$HOOK_COMMAND" "$HOME/.claude/settings.json" "$HOME/.codex/hooks.json" <<'PY'
+python3 - "$HOOK_MODE" "$HOOK_COMMAND" "$HOME/.claude/settings.json" "$HOME/.codex/hooks.json" <<'PY'
 import json
 import os
 import sys
@@ -290,12 +309,14 @@ data = {
     "ProgramArguments": ["/usr/bin/env", "python3", worker, "--nightly"],
     "WorkingDirectory": repo,
     "EnvironmentVariables": {
-        "AGENT_LOOP_NOTIFY": "1",
-        "AGENTS_MD_REPO": repo,
-        "AGENTS_MD_PROMPT": prompt,
-        "AGENTS_MD_SKILLS_DIR": skills_dir,
-        "AGENTS_MD_FEEDBACK_DIR": feedback_dir,
-        "AGENT_LOOP_REFLECTOR_RUNNER": runner,
+        "INTROSPECT_NOTIFY": "1",
+        "INTROSPECT_REFLECT_MODE": "nightly",
+        "INTROSPECT_REFLECT_MODE": "nightly",
+        "INTROSPECT_REPO": repo,
+        "INTROSPECT_PROMPT": prompt,
+        "INTROSPECT_SKILLS_DIR": skills_dir,
+        "INTROSPECT_FEEDBACK_DIR": feedback_dir,
+        "INTROSPECT_REFLECTOR_RUNNER": runner,
         "PATH": "/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin",
     },
     "StartCalendarInterval": {
@@ -324,13 +345,18 @@ uninstall_launch_agent() {
 }
 
 if [[ "$MODE" == "install" ]]; then
-  if [[ "$INSTALL_NIGHTLY" == "1" ]]; then
+  if [[ "$REFLECT_MODE" == "nightly" ]]; then
     install_launch_agent
   else
-    echo "skip: nightly reflector not installed (--no-nightly)"
+    uninstall_launch_agent
+    echo "reflector mode: $REFLECT_MODE"
   fi
-  echo "installed agent-loop hooks from $REPO"
+  if [[ "$REFLECT_MODE" == "off" ]]; then
+    echo "disabled Introspect hooks from $REPO"
+  else
+    echo "installed Introspect hooks from $REPO"
+  fi
 else
   uninstall_launch_agent
-  echo "uninstalled agent-loop hooks from $REPO"
+  echo "uninstalled Introspect hooks from $REPO"
 fi

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Validate the local agent-loop skill library."""
+"""Validate the local Introspect skill library."""
 
 from __future__ import annotations
 
@@ -11,7 +11,7 @@ from pathlib import Path
 
 
 REPO = Path(__file__).resolve().parents[1]
-SKILLS_DIR = Path(os.path.expanduser(os.environ.get("AGENTS_MD_SKILLS_DIR", str(REPO / "skills"))))
+SKILLS_DIR = Path(os.path.expanduser(os.environ.get("INTROSPECT_SKILLS_DIR", str(REPO / "skills"))))
 INDEX = SKILLS_DIR / "index.json"
 FORBIDDEN = (
     "when user asks",

@@ -11,9 +11,9 @@
 # 1. Log EVERY prompt to feedback/events.jsonl tagged with the AGENTS.md commit
 #    that was live, so each prompt version gets a frustration rate
 #    (the RL signal; run hooks/frustration-stats.sh for the scoreboard).
-# 2. On a tripwire match, enqueue the event. By default, a nightly LaunchAgent
-#    runs the single-worker batch reflector. Set AGENT_LOOP_REFLECT_MODE=immediate
-#    only for tests or manual debugging.
+# 2. On a tripwire match, enqueue the event and, in immediate mode, kick the
+#    single-worker batch reflector. The worker handles debouncing, cooldowns,
+#    and locking. Nightly mode queues only; off mode logs only.
 import datetime
 import json
 import os
@@ -21,19 +21,25 @@ import re
 import subprocess
 import sys
 
-if os.environ.get("AGENTS_MD_REFLECTOR") == "1":
+if os.environ.get("INTROSPECT_REFLECTOR") == "1":
     # The background reflector prompt contains frustration snippets. Do not let
     # the reflector recursively trigger itself.
     sys.exit(0)
 
-REPO = os.path.expanduser(os.environ.get("AGENTS_MD_REPO", "~/Projects/agent-loop"))
+REPO = os.path.expanduser(os.environ.get("INTROSPECT_REPO", "~/Projects/agent-loop"))
 FEEDBACK_DIR = os.path.expanduser(
-    os.environ.get("AGENTS_MD_FEEDBACK_DIR", os.path.join(REPO, "feedback"))
+    os.environ.get("INTROSPECT_FEEDBACK_DIR", os.path.join(REPO, "feedback"))
 )
 EVENTS = os.path.join(FEEDBACK_DIR, "events.jsonl")
 QUEUE = os.path.join(FEEDBACK_DIR, "frustration-queue.jsonl")
 WORKER = os.path.join(REPO, "hooks", "frustration-worker.py")
-REFLECT_MODE = os.environ.get("AGENT_LOOP_REFLECT_MODE", "nightly")
+PROFILE_DIR = os.path.expanduser(
+    os.environ.get("INTROSPECT_PROFILE_DIR") or "~/.introspect/profile"
+)
+PROFILE_FILE = os.path.join(PROFILE_DIR, "frustration-words.json")
+REFLECT_MODE = (
+    os.environ.get("INTROSPECT_REFLECT_MODE") or "immediate"
+).strip().lower()
 
 try:
     data = json.load(sys.stdin)
@@ -43,7 +49,7 @@ except Exception:
 prompt = data.get("prompt") or ""
 # Exact words only. No prefix matching and no phrase triggers. Common filler
 # terms stay out of this list; regression tests cover known false positives.
-BAD_WORDS = {
+DEFAULT_BAD_WORDS = {
     "arse",
     "ass",
     "asshole",
@@ -80,6 +86,42 @@ BAD_WORDS = {
     "stupid",
     "wtf",
 }
+
+
+def normalize_words(values):
+    if not isinstance(values, list):
+        return set()
+    words = set()
+    for value in values:
+        if isinstance(value, str):
+            normalized = value.strip().lower()
+            if re.fullmatch(r"[a-z]+", normalized):
+                words.add(normalized)
+    return words
+
+
+def active_bad_words():
+    words = set(DEFAULT_BAD_WORDS)
+    try:
+        with open(PROFILE_FILE) as f:
+            data = json.load(f)
+    except Exception:
+        return words
+
+    if isinstance(data, list):
+        words.update(normalize_words(data))
+        return words
+    if not isinstance(data, dict):
+        return words
+
+    for key in ("include", "approved", "custom", "custom_words"):
+        words.update(normalize_words(data.get(key)))
+    for key in ("exclude", "ignored", "rejected", "ignore"):
+        words.difference_update(normalize_words(data.get(key)))
+    return words
+
+
+BAD_WORDS = active_bad_words()
 matches = [word for word in re.findall(r"[a-z]+", prompt.lower()) if word in BAD_WORDS]
 
 try:
@@ -122,6 +164,9 @@ except Exception:
     pass  # logging must never block the prompt
 
 if not matches:
+    sys.exit(0)
+
+if REFLECT_MODE == "off":
     sys.exit(0)
 
 try:

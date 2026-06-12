@@ -8,8 +8,8 @@ import os
 import subprocess
 import sys
 
-REPO = os.path.expanduser(os.environ.get("AGENTS_MD_REPO", "~/Projects/agent-loop"))
-EVENTS = os.path.expanduser(os.environ.get("AGENTS_MD_FEEDBACK_DIR", os.path.join(REPO, "feedback")))
+REPO = os.path.expanduser(os.environ.get("INTROSPECT_REPO", "~/Projects/agent-loop"))
+EVENTS = os.path.expanduser(os.environ.get("INTROSPECT_FEEDBACK_DIR", os.path.join(REPO, "feedback")))
 EVENTS = os.path.join(EVENTS, "events.jsonl")
 
 if not os.path.exists(EVENTS):
