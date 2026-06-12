@@ -26,7 +26,7 @@ if os.environ.get("INTROSPECT_REFLECTOR") == "1":
     # the reflector recursively trigger itself.
     sys.exit(0)
 
-REPO = os.path.expanduser(os.environ.get("INTROSPECT_REPO", "~/Projects/agent-loop"))
+REPO = os.path.expanduser(os.environ.get("INTROSPECT_REPO", "~/Projects/introspect"))
 FEEDBACK_DIR = os.path.expanduser(
     os.environ.get("INTROSPECT_FEEDBACK_DIR", os.path.join(REPO, "feedback"))
 )

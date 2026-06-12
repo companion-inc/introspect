@@ -412,7 +412,7 @@ final class IntrospectModel: ObservableObject {
     init() {
         homeURL = URL(fileURLWithPath: NSHomeDirectory())
         let env = ProcessInfo.processInfo.environment
-        let repoPath = env["INTROSPECT_REPO"] ?? "\(NSHomeDirectory())/Projects/agent-loop"
+        let repoPath = env["INTROSPECT_REPO"] ?? "\(NSHomeDirectory())/Projects/introspect"
         let profilePath = env["INTROSPECT_PROFILE_DIR"] ?? "\(NSHomeDirectory())/.introspect/profile"
         repoURL = URL(fileURLWithPath: repoPath).standardizedFileURL
         profileURL = URL(fileURLWithPath: profilePath).standardizedFileURL

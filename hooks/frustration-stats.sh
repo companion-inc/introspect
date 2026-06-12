@@ -8,7 +8,7 @@ import os
 import subprocess
 import sys
 
-REPO = os.path.expanduser(os.environ.get("INTROSPECT_REPO", "~/Projects/agent-loop"))
+REPO = os.path.expanduser(os.environ.get("INTROSPECT_REPO", "~/Projects/introspect"))
 EVENTS = os.path.expanduser(os.environ.get("INTROSPECT_FEEDBACK_DIR", os.path.join(REPO, "feedback")))
 EVENTS = os.path.join(EVENTS, "events.jsonl")
 

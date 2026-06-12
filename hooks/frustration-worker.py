@@ -24,7 +24,7 @@ import time
 from pathlib import Path
 
 
-REPO = Path(os.path.expanduser(os.environ.get("INTROSPECT_REPO", "~/Projects/agent-loop")))
+REPO = Path(os.path.expanduser(os.environ.get("INTROSPECT_REPO", "~/Projects/introspect")))
 SKILLS_DIR = Path(os.path.expanduser(os.environ.get("INTROSPECT_SKILLS_DIR", str(REPO / "skills"))))
 FEEDBACK_DIR = Path(
     os.path.expanduser(os.environ.get("INTROSPECT_FEEDBACK_DIR", str(REPO / "feedback")))
