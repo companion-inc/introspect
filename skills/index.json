@@ -43,13 +43,17 @@
       "path": "skills/high-stakes-forecasting/SKILL.md",
       "status": "active",
       "tier": "domain-workflow",
-      "description": "Forecasting and decision support for trades, deadlines, and irreversible choices where shallow uncertainty language would be harmful.",
+      "description": "Forecasting and decision support for trades, founder/hiring/equity grants, deadlines, and other irreversible choices where shallow uncertainty language or offering to research instead of doing it would be harmful.",
       "activation_signals": [
         "trade decision",
         "investment forecast",
         "prediction under uncertainty",
         "missing research",
-        "high consequence recommendation"
+        "high consequence recommendation",
+        "cofounder or early-hire equity split",
+        "offer letter or grant terms for a key person",
+        "deciding a percent or amount for an irreversible personnel deal",
+        "user has authorized private data the decision depends on"
       ]
     },
     {
