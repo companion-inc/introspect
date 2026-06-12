@@ -1,6 +1,11 @@
 import AppKit
 import SwiftUI
 
+enum IntrospectTheme {
+    static let accent = Color(red: 0.20, green: 0.52, blue: 0.63)
+    static let selection = Color(red: 0.18, green: 0.42, blue: 0.52)
+}
+
 @main
 @MainActor
 final class IntrospectApplication: NSObject, NSApplicationDelegate {
@@ -28,10 +33,10 @@ final class IntrospectApplication: NSObject, NSApplicationDelegate {
     private func showWindow() {
         if window == nil {
             let content = ContentView(model: model)
-                .frame(minWidth: 840, minHeight: 640)
+                .frame(minWidth: 1080, minHeight: 700)
             let hostingView = NSHostingView(rootView: content)
             let newWindow = NSWindow(
-                contentRect: NSRect(x: 0, y: 0, width: 980, height: 720),
+                contentRect: NSRect(x: 0, y: 0, width: 1220, height: 780),
                 styleMask: [.titled, .closable, .miniaturizable, .resizable],
                 backing: .buffered,
                 defer: false
@@ -88,30 +93,45 @@ struct ContentView: View {
             }
             .navigationTitle("Introspect")
         } detail: {
-            ScrollView {
-                VStack(alignment: .leading, spacing: 28) {
-                    HeaderView(model: model)
-                    switch model.selectedSection ?? .status {
-                    case .status:
-                        StatusSection(model: model)
-                    case .hooks:
-                        HooksSection(model: model)
-                    case .projects:
+            Group {
+                if (model.selectedSection ?? .status) == .projects {
+                    VStack(alignment: .leading, spacing: 20) {
+                        HeaderView(model: model)
                         ProjectsSection(model: model)
-                    case .words:
-                        WordsSection(model: model)
-                    case .profile:
-                        ProfileSection(model: model)
+                        if !model.lastCommandOutput.isEmpty {
+                            CommandOutputView(output: model.lastCommandOutput)
+                        }
                     }
-                    if !model.lastCommandOutput.isEmpty {
-                        CommandOutputView(output: model.lastCommandOutput)
+                    .padding(24)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                } else {
+                    ScrollView {
+                        VStack(alignment: .leading, spacing: 28) {
+                            HeaderView(model: model)
+                            switch model.selectedSection ?? .status {
+                            case .status:
+                                StatusSection(model: model)
+                            case .hooks:
+                                HooksSection(model: model)
+                            case .projects:
+                                ProjectsSection(model: model)
+                            case .words:
+                                WordsSection(model: model)
+                            case .profile:
+                                ProfileSection(model: model)
+                            }
+                            if !model.lastCommandOutput.isEmpty {
+                                CommandOutputView(output: model.lastCommandOutput)
+                            }
+                        }
+                        .padding(28)
+                        .frame(maxWidth: .infinity, alignment: .leading)
                     }
                 }
-                .padding(28)
-                .frame(maxWidth: .infinity, alignment: .leading)
             }
             .background(Color(nsColor: .windowBackgroundColor))
         }
+        .tint(IntrospectTheme.accent)
     }
 }
 
@@ -122,11 +142,11 @@ struct HeaderView: View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 12) {
                 Image(systemName: "brain.head.profile")
-                    .font(.system(size: 30, weight: .semibold))
-                    .foregroundStyle(.green)
+                    .font(.system(size: 30))
+                    .foregroundStyle(IntrospectTheme.accent)
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Introspect")
-                        .font(.largeTitle.weight(.semibold))
+                        .font(.largeTitle.bold())
                     Text("Open-source app. Private local prompt, skills, word profile, and feedback repo.")
                         .foregroundStyle(.secondary)
                 }
@@ -275,109 +295,428 @@ struct ProjectsSection: View {
     @ObservedObject var model: IntrospectModel
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 18) {
-            Grid(alignment: .leading, horizontalSpacing: 18, verticalSpacing: 14) {
-                StatusRow("Agent files", value: "\(model.promptSurfaces.count)", systemImage: "doc.text")
-                StatusRow("Skill files", value: "\(model.skillSurfaces.count)", systemImage: "hammer")
-                StatusRow("Current project", value: model.repoPath, systemImage: "folder")
-            }
+        VStack(alignment: .leading, spacing: 14) {
+            ProjectBrowserToolbar(model: model)
 
-            HStack(spacing: 12) {
-                Button {
+            HStack(spacing: 0) {
+                ProjectHierarchyPane(
+                    projects: model.filteredProjectTrees,
+                    selectedID: model.selectedSurfaceID,
+                    onSelect: model.selectSurface
+                )
+                .frame(minWidth: 330, idealWidth: 390, maxWidth: 460)
+
+                Divider()
+
+                ProjectSurfaceDetail(
+                    record: model.selectedSurface,
+                    content: model.selectedSurfaceContent,
+                    onReveal: model.revealSelectedSurface
+                )
+                .frame(minWidth: 420, maxWidth: .infinity, alignment: .topLeading)
+            }
+            .frame(minHeight: 600)
+            .background(Color(nsColor: .controlBackgroundColor))
+            .clipShape(RoundedRectangle(cornerRadius: 8))
+            .overlay(
+                RoundedRectangle(cornerRadius: 8)
+                    .stroke(Color(nsColor: .separatorColor))
+            )
+        }
+    }
+}
+
+struct ProjectBrowserToolbar: View {
+    @ObservedObject var model: IntrospectModel
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(alignment: .firstTextBaseline) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Project Tree")
+                        .font(.title2.bold())
+                    HStack(spacing: 8) {
+                        Text("\(model.projectTrees.count) roots")
+                        Text("\(model.promptSurfaces.count) agent files")
+                        Text("\(model.skillSurfaces.count) skills")
+                        if model.duplicateSkillGroups > 0 {
+                            Text("\(model.duplicateSkillGroups) duplicate names")
+                                .foregroundStyle(.orange)
+                        }
+                        if model.isScanningSurfaces {
+                            Label("Scanning", systemImage: "arrow.triangle.2.circlepath")
+                                .foregroundStyle(IntrospectTheme.accent)
+                        }
+                    }
+                    .foregroundStyle(.secondary)
+                }
+
+                Spacer()
+
+                Button("Refresh", systemImage: "arrow.clockwise") {
                     Task { await model.refresh() }
-                } label: {
-                    Label("Refresh", systemImage: "arrow.clockwise")
                 }
                 .buttonStyle(.bordered)
 
-                Button {
+                Button("Initialize Current Project", systemImage: "plus.app") {
                     Task { await model.initializeCurrentProjectAgentFiles() }
-                } label: {
-                    Label("Initialize Current Project", systemImage: "plus.app")
                 }
                 .buttonStyle(.borderedProminent)
 
-                Button {
+                Button("Open Repo", systemImage: "folder") {
                     Task { await model.openRepoFolder() }
-                } label: {
-                    Label("Open Repo", systemImage: "folder")
                 }
                 .buttonStyle(.bordered)
             }
 
-            ProjectSurfaceList(title: "Agent Files", items: model.promptSurfaces)
-            ProjectSurfaceList(title: "Project Skills", items: model.skillSurfaces)
+            TextField("Search roots, files, scopes, and paths", text: $model.surfaceSearchText)
+                .textFieldStyle(.roundedBorder)
         }
     }
 }
 
-struct ProjectSurfaceList: View {
-    let title: String
-    let items: [ProjectSurfaceRecord]
+struct ProjectHierarchyPane: View {
+    let projects: [ProjectTreeRecord]
+    let selectedID: String?
+    let onSelect: (ProjectSurfaceRecord) -> Void
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(spacing: 0) {
             HStack {
-                Text(title)
+                Label("Hierarchy", systemImage: "list.bullet.indent")
                     .font(.headline)
-                Text("\(items.count)")
-                    .font(.caption.weight(.semibold))
-                    .padding(.horizontal, 7)
-                    .padding(.vertical, 3)
-                    .background(Color.green.opacity(0.16))
-                    .clipShape(Capsule())
+                Spacer()
             }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 12)
 
-            if items.isEmpty {
-                Text("None found in the scanned roots.")
-                    .foregroundStyle(.secondary)
+            Divider()
+
+            if projects.isEmpty {
+                ContentUnavailableView(
+                    "No Agent Files",
+                    systemImage: "doc.text.magnifyingglass",
+                    description: Text("No prompts or skills matched the current search.")
+                )
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
-                VStack(alignment: .leading, spacing: 0) {
-                    ForEach(items) { item in
-                        ProjectSurfaceRow(item: item)
-                        if item.id != items.last?.id {
-                            Divider()
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 14) {
+                        ForEach(projects) { project in
+                            ProjectTreeNode(
+                                project: project,
+                                selectedID: selectedID,
+                                onSelect: onSelect
+                            )
                         }
                     }
+                    .padding(12)
                 }
-                .overlay(
-                    RoundedRectangle(cornerRadius: 8)
-                        .stroke(Color(nsColor: .separatorColor))
-                )
+            }
+        }
+        .background(Color(nsColor: .windowBackgroundColor))
+    }
+}
+
+struct ProjectTreeNode: View {
+    let project: ProjectTreeRecord
+    let selectedID: String?
+    let onSelect: (ProjectSurfaceRecord) -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            VStack(alignment: .leading, spacing: 3) {
+                Label(project.name, systemImage: project.systemImage)
+                    .font(.headline)
+                    .lineLimit(1)
+                Text(project.path)
+                    .font(.system(.caption, design: .monospaced))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                    .textSelection(.enabled)
+            }
+
+            SurfaceGroupNode(
+                title: "Agent Files",
+                systemImage: "doc.text",
+                items: project.prompts,
+                selectedID: selectedID,
+                onSelect: onSelect
+            )
+
+            SurfaceGroupNode(
+                title: "Skills",
+                systemImage: "hammer",
+                items: project.skills,
+                selectedID: selectedID,
+                onSelect: onSelect
+            )
+        }
+        .padding(.bottom, 8)
+        .overlay(alignment: .bottom) {
+            Divider()
+        }
+    }
+}
+
+struct SurfaceGroupNode: View {
+    let title: String
+    let systemImage: String
+    let items: [ProjectSurfaceRecord]
+    let selectedID: String?
+    let onSelect: (ProjectSurfaceRecord) -> Void
+
+    var body: some View {
+        if !items.isEmpty {
+            VStack(alignment: .leading, spacing: 5) {
+                Label("\(title) (\(items.count))", systemImage: systemImage)
+                    .font(.subheadline.bold())
+                    .foregroundStyle(.secondary)
+                    .padding(.leading, 8)
+
+                VStack(alignment: .leading, spacing: 2) {
+                    ForEach(items) { item in
+                        SurfaceTreeRow(
+                            item: item,
+                            isSelected: item.id == selectedID,
+                            onSelect: onSelect
+                        )
+                    }
+                }
             }
         }
     }
 }
 
-struct ProjectSurfaceRow: View {
+struct SurfaceTreeRow: View {
     let item: ProjectSurfaceRecord
+    let isSelected: Bool
+    let onSelect: (ProjectSurfaceRecord) -> Void
+
+    var body: some View {
+        Button {
+            onSelect(item)
+        } label: {
+            HStack(alignment: .top, spacing: 8) {
+                Image(systemName: item.systemImage)
+                    .foregroundStyle(isSelected ? .white : .secondary)
+                    .frame(width: 18)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(item.name)
+                        .lineLimit(1)
+                    Text(item.relativePath)
+                        .font(.system(.caption, design: .monospaced))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                }
+                Spacer(minLength: 8)
+                Text("\(item.lineCount)")
+                    .font(.caption.monospacedDigit())
+                    .foregroundStyle(isSelected ? Color.white.opacity(0.85) : Color(nsColor: .tertiaryLabelColor))
+                    .accessibilityLabel("\(item.lineCount) lines")
+            }
+            .padding(.horizontal, 8)
+            .padding(.vertical, 6)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(isSelected ? IntrospectTheme.selection : Color.clear)
+            .clipShape(RoundedRectangle(cornerRadius: 7))
+            .contentShape(RoundedRectangle(cornerRadius: 7))
+        }
+        .buttonStyle(.plain)
+    }
+}
+
+struct ProjectSurfaceDetail: View {
+    let record: ProjectSurfaceRecord?
+    let content: String
+    let onReveal: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            if let record {
+                SurfaceDetailHeader(record: record, onReveal: onReveal)
+                Divider()
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 16) {
+                        SurfaceMeaning(record: record)
+                        if record.kind == .skill {
+                            SkillFrontmatterSummary(content: content)
+                        }
+                        SurfaceMetadata(record: record)
+                        SurfaceContentBlock(content: content)
+                    }
+                    .padding(18)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                }
+            } else {
+                ContentUnavailableView(
+                    "Select a File",
+                    systemImage: "sidebar.left",
+                    description: Text("Choose a prompt or skill from the tree to inspect its scope and contents.")
+                )
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+        }
+    }
+}
+
+struct SurfaceDetailHeader: View {
+    let record: ProjectSurfaceRecord
+    let onReveal: () -> Void
 
     var body: some View {
         HStack(alignment: .top, spacing: 12) {
-            Image(systemName: item.systemImage)
-                .foregroundStyle(.secondary)
-                .frame(width: 18)
-            VStack(alignment: .leading, spacing: 4) {
-                HStack {
-                    Text(item.name)
-                        .font(.headline)
-                    Text(item.scope)
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(.secondary)
+            Image(systemName: record.systemImage)
+                .font(.title2)
+                .foregroundStyle(IntrospectTheme.accent)
+                .frame(width: 28)
+
+            VStack(alignment: .leading, spacing: 5) {
+                Text(record.name)
+                    .font(.title3.bold())
+                    .lineLimit(1)
+                HStack(spacing: 8) {
+                    ScopePill(text: record.scope)
+                    ScopePill(text: record.kind.rawValue)
+                    ScopePill(text: "\(record.lineCount) lines")
                 }
-                Text(item.path)
+                Text(record.path)
                     .font(.system(.caption, design: .monospaced))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
                     .textSelection(.enabled)
-                if let target = item.target {
-                    Text("-> \(target)")
-                        .font(.system(.caption, design: .monospaced))
-                        .foregroundStyle(.secondary)
-                        .textSelection(.enabled)
+            }
+
+            Spacer()
+
+            Button("Reveal", systemImage: "arrow.up.forward.app", action: onReveal)
+                .buttonStyle(.bordered)
+        }
+        .padding(18)
+        .background(Color(nsColor: .windowBackgroundColor))
+    }
+}
+
+struct ScopePill: View {
+    let text: String
+
+    var body: some View {
+        Text(text)
+            .font(.caption)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 4)
+            .background(Color(nsColor: .quaternaryLabelColor).opacity(0.18))
+            .clipShape(Capsule())
+    }
+}
+
+struct SurfaceMeaning: View {
+    let record: ProjectSurfaceRecord
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("Scope")
+                .font(.headline)
+            Text(scopeExplanation)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    private var scopeExplanation: String {
+        if record.scope.contains("global") || record.scope.contains("user") {
+            return "Loaded outside a single repo. Changes here affect many future sessions, so this is for durable cross-project behavior or personal skills."
+        }
+        if record.scope.contains("override") {
+            return "This replaces the normal AGENTS.md at its level instead of appending to it. Use it only for a subtree that must not inherit that layer's regular guidance."
+        }
+        if record.kind == .skill {
+            return "Loaded on demand when the task matches this skill. This is the right place for repeatable workflows, tool procedures, references, scripts, and project-specific know-how."
+        }
+        if record.scope.contains("local") {
+            return "Private local Claude guidance. It should stay out of git and hold notes that should not be shared with the project."
+        }
+        return "Project-level agent guidance. This is the right place for repo-specific architecture, build/test commands, and behavior that should load whenever an agent works in this project."
+    }
+}
+
+struct SurfaceMetadata: View {
+    let record: ProjectSurfaceRecord
+
+    var body: some View {
+        Grid(alignment: .leading, horizontalSpacing: 14, verticalSpacing: 8) {
+            StatusRow("Root", value: record.projectName, systemImage: "folder")
+            StatusRow("Relative path", value: record.relativePath, systemImage: "point.topleft.down.curvedto.point.bottomright.up")
+            StatusRow("Absolute path", value: record.absolutePath, systemImage: "doc")
+            if let target = record.target {
+                StatusRow("Symlink target", value: target, systemImage: "arrow.triangle.2.circlepath")
+            }
+        }
+    }
+}
+
+struct SkillFrontmatterSummary: View {
+    let content: String
+
+    var body: some View {
+        let metadata = parseFrontmatter(content)
+        if !metadata.isEmpty {
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Skill Metadata")
+                    .font(.headline)
+                Grid(alignment: .leading, horizontalSpacing: 14, verticalSpacing: 8) {
+                    ForEach(metadata.sorted(by: { $0.key < $1.key }), id: \.key) { key, value in
+                        StatusRow(key, value: value, systemImage: "tag")
+                    }
                 }
             }
-            Spacer(minLength: 0)
         }
-        .padding(10)
+    }
+
+    private func parseFrontmatter(_ text: String) -> [String: String] {
+        let lines = text.split(omittingEmptySubsequences: false, whereSeparator: \.isNewline).map(String.init)
+        guard lines.first == "---" else { return [:] }
+        var values: [String: String] = [:]
+        for line in lines.dropFirst() {
+            if line == "---" { break }
+            let parts = line.split(separator: ":", maxSplits: 1).map(String.init)
+            guard parts.count == 2 else { continue }
+            let key = parts[0].trimmingCharacters(in: CharacterSet.whitespacesAndNewlines)
+            let value = parts[1]
+                .trimmingCharacters(in: CharacterSet.whitespacesAndNewlines)
+                .trimmingCharacters(in: CharacterSet(charactersIn: "\""))
+            if ["name", "description"].contains(key) {
+                values[key] = value
+            }
+        }
+        return values
+    }
+}
+
+struct SurfaceContentBlock: View {
+    let content: String
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Contents")
+                .font(.headline)
+            ScrollView(.horizontal) {
+                Text(content.isEmpty ? "No readable UTF-8 content." : content)
+                    .font(.system(.callout, design: .monospaced))
+                    .textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(12)
+            }
+            .background(Color(nsColor: .textBackgroundColor))
+            .clipShape(RoundedRectangle(cornerRadius: 8))
+            .overlay(
+                RoundedRectangle(cornerRadius: 8)
+                    .stroke(Color(nsColor: .separatorColor))
+            )
+        }
     }
 }
 
@@ -554,18 +893,42 @@ enum ReflectionMode: String, CaseIterable, Identifiable {
     }
 }
 
-struct ProjectSurfaceRecord: Identifiable {
+enum ProjectSurfaceKind: String {
+    case agentFile = "Agent file"
+    case skill = "Skill"
+}
+
+struct ProjectSurfaceRecord: Identifiable, Hashable {
     let id: String
     let name: String
     let scope: String
     let path: String
+    let absolutePath: String
+    let projectName: String
+    let projectPath: String
+    let relativePath: String
     let target: String?
     let systemImage: String
+    let kind: ProjectSurfaceKind
+    let lineCount: Int
+}
+
+struct ProjectTreeRecord: Identifiable {
+    let id: String
+    let name: String
+    let path: String
+    let systemImage: String
+    let prompts: [ProjectSurfaceRecord]
+    let skills: [ProjectSurfaceRecord]
+
+    var allSurfaces: [ProjectSurfaceRecord] {
+        prompts + skills
+    }
 }
 
 @MainActor
 final class IntrospectModel: ObservableObject {
-    @Published var selectedSection: IntrospectSection? = .status
+    @Published var selectedSection: IntrospectSection? = .projects
     @Published var mode: ReflectionMode = .immediate
     @Published var nightlyHour = 3
     @Published var nightlyMinute = 0
@@ -583,6 +946,12 @@ final class IntrospectModel: ObservableObject {
     @Published var lastCommandOutput = ""
     @Published var promptSurfaces: [ProjectSurfaceRecord] = []
     @Published var skillSurfaces: [ProjectSurfaceRecord] = []
+    @Published var projectTrees: [ProjectTreeRecord] = []
+    @Published var selectedSurfaceID: String?
+    @Published var selectedSurfaceContent = ""
+    @Published var surfaceSearchText = ""
+    @Published var isScanningSurfaces = false
+    @Published var duplicateSkillGroups = 0
 
     private let fileManager = FileManager.default
     private let repoURL: URL
@@ -653,6 +1022,34 @@ final class IntrospectModel: ObservableObject {
         parseWords(triggerWordsText)
     }
 
+    var selectedSurface: ProjectSurfaceRecord? {
+        projectTrees
+            .flatMap(\.allSurfaces)
+            .first { $0.id == selectedSurfaceID }
+    }
+
+    var filteredProjectTrees: [ProjectTreeRecord] {
+        let query = surfaceSearchText.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !query.isEmpty else { return projectTrees }
+        return projectTrees.compactMap { project in
+            let projectMatches = [project.name, project.path].contains { $0.lowercased().contains(query) }
+            if projectMatches {
+                return project
+            }
+            let prompts = project.prompts.filter { surfaceMatches($0, query: query) }
+            let skills = project.skills.filter { surfaceMatches($0, query: query) }
+            guard !prompts.isEmpty || !skills.isEmpty else { return nil }
+            return ProjectTreeRecord(
+                id: project.id,
+                name: project.name,
+                path: project.path,
+                systemImage: project.systemImage,
+                prompts: prompts,
+                skills: skills
+            )
+        }
+    }
+
     var profileGitStatus: String {
         profileGitOK ? "\(profileURL.path)/.git" : "not initialized"
     }
@@ -680,9 +1077,24 @@ final class IntrospectModel: ObservableObject {
         profileGitOK = fileManager.fileExists(atPath: profileURL.appendingPathComponent(".git").path)
         wordProfileOK = fileManager.fileExists(atPath: wordProfileURL.path)
         profileLastCommit = await gitOutput(["-C", profileURL.path, "log", "-1", "--oneline"]).trimmedOr("none")
+
+        isScanningSurfaces = true
+        applySurfaceScan(scanProjectSurfaces(roots: priorityScanRoots()))
+        try? await Task.sleep(nanoseconds: 1_000_000)
         let surfaces = scanProjectSurfaces()
+        applySurfaceScan(surfaces)
+        isScanningSurfaces = false
+    }
+
+    private func applySurfaceScan(_ surfaces: (prompts: [ProjectSurfaceRecord], skills: [ProjectSurfaceRecord])) {
         promptSurfaces = surfaces.prompts
         skillSurfaces = surfaces.skills
+        duplicateSkillGroups = countDuplicateSkillGroups(skills: surfaces.skills)
+        projectTrees = buildProjectTrees(prompts: surfaces.prompts, skills: surfaces.skills)
+        if selectedSurfaceID == nil || selectedSurface == nil {
+            selectedSurfaceID = defaultSelectedSurfaceID()
+        }
+        loadSelectedSurfaceContent()
     }
 
     func applySystemPromptAndHooks() async {
@@ -781,6 +1193,16 @@ final class IntrospectModel: ObservableObject {
         NSWorkspace.shared.open(repoURL)
     }
 
+    func selectSurface(_ record: ProjectSurfaceRecord) {
+        selectedSurfaceID = record.id
+        loadSelectedSurfaceContent()
+    }
+
+    func revealSelectedSurface() {
+        guard let selectedSurface else { return }
+        NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: selectedSurface.absolutePath)])
+    }
+
     func initializeCurrentProjectAgentFiles() async {
         do {
             let agentsURL = repoURL.appendingPathComponent("AGENTS.md")
@@ -828,12 +1250,12 @@ final class IntrospectModel: ObservableObject {
         lastCommandOutput = await gitOutput(["-C", profileURL.path, "commit", "-m", message])
     }
 
-    private func scanProjectSurfaces() -> (prompts: [ProjectSurfaceRecord], skills: [ProjectSurfaceRecord]) {
+    private func scanProjectSurfaces(roots: [URL]? = nil) -> (prompts: [ProjectSurfaceRecord], skills: [ProjectSurfaceRecord]) {
         var prompts: [ProjectSurfaceRecord] = []
         var skills: [ProjectSurfaceRecord] = []
         var visitedDirectories: Set<String> = []
         var seenFiles: Set<String> = []
-        for root in scanRoots() where fileManager.fileExists(atPath: root.path) {
+        for root in (roots ?? scanRoots()) where fileManager.fileExists(atPath: root.path) {
             collectProjectSurfaces(
                 at: root.standardizedFileURL,
                 depth: 0,
@@ -849,6 +1271,59 @@ final class IntrospectModel: ObservableObject {
         return (prompts, skills)
     }
 
+    private func buildProjectTrees(prompts: [ProjectSurfaceRecord], skills: [ProjectSurfaceRecord]) -> [ProjectTreeRecord] {
+        let allProjectPaths = Set((prompts + skills).map(\.projectPath))
+        return allProjectPaths.sorted(by: compareProjectPaths).map { projectPath in
+            let projectPrompts = prompts.filter { $0.projectPath == projectPath }
+            let projectSkills = skills.filter { $0.projectPath == projectPath }
+            let sample = projectPrompts.first ?? projectSkills.first
+            return ProjectTreeRecord(
+                id: projectPath,
+                name: sample?.projectName ?? URL(fileURLWithPath: projectPath).lastPathComponent,
+                path: displayPath(URL(fileURLWithPath: projectPath)),
+                systemImage: projectIcon(for: projectPath),
+                prompts: projectPrompts.sorted { $0.relativePath.localizedStandardCompare($1.relativePath) == .orderedAscending },
+                skills: projectSkills.sorted { $0.relativePath.localizedStandardCompare($1.relativePath) == .orderedAscending }
+            )
+        }
+    }
+
+    private func countDuplicateSkillGroups(skills: [ProjectSurfaceRecord]) -> Int {
+        let grouped = Dictionary(grouping: skills) { $0.name.lowercased() }
+        return grouped.values.filter { group in
+            Set(group.map(\.projectPath)).count > 1 || Set(group.map(\.absolutePath)).count > 1
+        }.count
+    }
+
+    private func defaultSelectedSurfaceID() -> String? {
+        let repoPath = repoURL.standardizedFileURL.path
+        if let repoTree = projectTrees.first(where: { $0.id == repoPath }) {
+            return repoTree.prompts.first?.id ?? repoTree.skills.first?.id
+        }
+        return projectTrees.first?.allSurfaces.first?.id
+    }
+
+    private func compareProjectPaths(_ lhs: String, _ rhs: String) -> Bool {
+        let lhsRank = projectSortRank(lhs)
+        let rhsRank = projectSortRank(rhs)
+        if lhsRank != rhsRank {
+            return lhsRank < rhsRank
+        }
+        return lhs.localizedStandardCompare(rhs) == .orderedAscending
+    }
+
+    private func projectSortRank(_ path: String) -> Int {
+        let homePath = homeURL.standardizedFileURL.path
+        if path == repoURL.standardizedFileURL.path { return 0 }
+        if path == homePath + "/.codex" { return 1 }
+        if path == homePath + "/.claude" { return 2 }
+        if path == homePath + "/.agents" { return 3 }
+        if path.hasPrefix(homePath + "/Projects/") { return 4 }
+        if path.hasPrefix(homePath + "/Companion/Code/") { return 5 }
+        if path.hasPrefix(homePath + "/Documents/Codex/") { return 6 }
+        return 10
+    }
+
     private func scanRoots() -> [URL] {
         [
             repoURL,
@@ -856,7 +1331,17 @@ final class IntrospectModel: ObservableObject {
             homeURL.appendingPathComponent("Companion/Code"),
             homeURL.appendingPathComponent("Documents/Codex"),
             homeURL.appendingPathComponent(".codex"),
-            homeURL.appendingPathComponent(".claude")
+            homeURL.appendingPathComponent(".claude"),
+            homeURL.appendingPathComponent(".agents")
+        ]
+    }
+
+    private func priorityScanRoots() -> [URL] {
+        [
+            repoURL,
+            homeURL.appendingPathComponent(".codex"),
+            homeURL.appendingPathComponent(".claude"),
+            homeURL.appendingPathComponent(".agents")
         ]
     }
 
@@ -924,14 +1409,44 @@ final class IntrospectModel: ObservableObject {
 
     private func surfaceRecord(for url: URL, isSkill: Bool) -> ProjectSurfaceRecord {
         let path = url.standardizedFileURL.path
+        let projectRoot = projectRoot(for: url)
+        let projectPath = projectRoot.standardizedFileURL.path
+        let relativePath = relativePath(from: projectRoot, to: url)
         return ProjectSurfaceRecord(
             id: path,
             name: surfaceName(for: url, isSkill: isSkill),
             scope: surfaceScope(for: url, isSkill: isSkill),
             path: displayPath(url),
+            absolutePath: path,
+            projectName: projectName(for: projectRoot),
+            projectPath: projectPath,
+            relativePath: relativePath,
             target: symlinkTarget(for: url),
-            systemImage: isSkill ? "hammer" : "doc.text"
+            systemImage: isSkill ? "hammer" : "doc.text",
+            kind: isSkill ? .skill : .agentFile,
+            lineCount: lineCount(url)
         )
+    }
+
+    private func surfaceMatches(_ surface: ProjectSurfaceRecord, query: String) -> Bool {
+        [
+            surface.name,
+            surface.scope,
+            surface.path,
+            surface.absolutePath,
+            surface.projectName,
+            surface.relativePath,
+            surface.kind.rawValue
+        ].contains { $0.lowercased().contains(query) }
+    }
+
+    private func loadSelectedSurfaceContent() {
+        guard let selectedSurface else {
+            selectedSurfaceContent = ""
+            return
+        }
+        let url = URL(fileURLWithPath: selectedSurface.absolutePath)
+        selectedSurfaceContent = (try? String(contentsOf: url, encoding: .utf8)) ?? ""
     }
 
     private func surfaceName(for url: URL, isSkill: Bool) -> String {
@@ -982,6 +1497,98 @@ final class IntrospectModel: ObservableObject {
         default:
             return "Agent file"
         }
+    }
+
+    private func projectRoot(for url: URL) -> URL {
+        let path = url.standardizedFileURL.path
+        let homePath = homeURL.standardizedFileURL.path
+        for globalDirectory in [".codex", ".claude", ".agents"] {
+            let globalURL = homeURL.appendingPathComponent(globalDirectory).standardizedFileURL
+            let globalPath = globalURL.path
+            if path == globalPath || path.hasPrefix(globalPath + "/") {
+                return globalURL
+            }
+        }
+
+        let floorPaths = Set(scanRoots().map { $0.standardizedFileURL.path })
+        var current = url.deletingLastPathComponent().standardizedFileURL
+        while current.path != homePath && current.path != "/" {
+            if isProjectRoot(current) || floorPaths.contains(current.path) {
+                return current
+            }
+            let parent = current.deletingLastPathComponent().standardizedFileURL
+            if parent.path == current.path {
+                break
+            }
+            current = parent
+        }
+        return url.deletingLastPathComponent().standardizedFileURL
+    }
+
+    private func isProjectRoot(_ url: URL) -> Bool {
+        let markerFiles = [
+            ".git",
+            "Package.swift",
+            "package.json",
+            "pyproject.toml",
+            "Cargo.toml",
+            "AGENTS.md",
+            "CLAUDE.md"
+        ]
+        if markerFiles.contains(where: { fileManager.fileExists(atPath: url.appendingPathComponent($0).path) }) {
+            return true
+        }
+        guard let entries = try? fileManager.contentsOfDirectory(atPath: url.path) else {
+            return false
+        }
+        return entries.contains { $0.hasSuffix(".xcodeproj") || $0.hasSuffix(".xcworkspace") }
+    }
+
+    private func projectName(for root: URL) -> String {
+        let path = root.standardizedFileURL.path
+        let homePath = homeURL.standardizedFileURL.path
+        switch path {
+        case homePath + "/.codex":
+            return "Codex Global"
+        case homePath + "/.claude":
+            return "Claude Global"
+        case homePath + "/.agents":
+            return "Agent Skills"
+        default:
+            if path == repoURL.standardizedFileURL.path {
+                return "Introspect"
+            }
+            return root.lastPathComponent.isEmpty ? path : root.lastPathComponent
+        }
+    }
+
+    private func projectIcon(for projectPath: String) -> String {
+        let homePath = homeURL.standardizedFileURL.path
+        if projectPath == homePath + "/.codex" {
+            return "terminal"
+        }
+        if projectPath == homePath + "/.claude" {
+            return "bubble.left.and.text.bubble.right"
+        }
+        if projectPath == homePath + "/.agents" {
+            return "hammer"
+        }
+        if projectPath == repoURL.standardizedFileURL.path {
+            return "app.connected.to.app.below.fill"
+        }
+        return "folder"
+    }
+
+    private func relativePath(from root: URL, to url: URL) -> String {
+        let rootPath = root.standardizedFileURL.path
+        let path = url.standardizedFileURL.path
+        if path == rootPath {
+            return url.lastPathComponent
+        }
+        if path.hasPrefix(rootPath + "/") {
+            return String(path.dropFirst(rootPath.count + 1))
+        }
+        return displayPath(url)
     }
 
     private func displayPath(_ url: URL) -> String {

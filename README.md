@@ -116,6 +116,7 @@ Hermes was reviewed as the main reference for this split. The conclusion is in `
 - `hooks/frustration-stats.sh`: feedback scoreboard by prompt commit.
 - `docs/frustration-tripwires.md`: human-readable list of active and ignored tripwire words.
 - `docs/hermes-self-evolution-review.md`: source-backed review of Hermes memory, skill, curator, and training loops.
+- `docs/skill-manager-reference-review.md`: source-backed review of public skill-manager apps and self-improvement tools.
 - `scripts/install-hooks.sh`: installs/uninstalls prompt links and hooks.
 - `scripts/build-introspect-app.sh`: builds `.build/Introspect.app`.
 - `scripts/validate-skills.py`: validates the skill index and skill files.
