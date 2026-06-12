@@ -11,7 +11,7 @@ struct IntrospectApplication: App {
         }
         .menuBarExtraStyle(.menu)
 
-        Window("Introspect", id: "main") {
+        WindowGroup("Introspect") {
             ContentView(model: model)
                 .frame(minWidth: 840, minHeight: 640)
                 .task { await model.refresh() }
