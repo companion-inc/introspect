@@ -17,6 +17,7 @@ Near miss — do not load this for:
 
 ## Procedure
 
+0. **Scope the change to exactly what was asked.** If the user names one dimension ("make it bigger", "more padding", "move it left"), change only that and keep the element's existing archetype, structure, and design tokens — its tabs, highlight/accent color, border, radius. "Make it bigger" is not license to restyle: do not swap a bordered tabs toggle for a circular rounded-pill, drop the highlight color, or re-vibe the control. When the target is an already-built element, its own current implementation is the first reference you read — match those tokens before any external library. Only do a full restyle when the user actually asks the component to look different.
 1. **Identify the archetype before styling.** Match the use case to its canonical real-world pattern, not the user's loose word:
    - free-text, multiple arbitrary values → tags input (Gmail "To" field is canonical).
    - pick one from a known list → combobox / select.
@@ -34,6 +35,7 @@ Near miss — do not load this for:
 - "Ugly" almost always points at a specific deviation from real components — find that exact mismatch (detached box, lingering placeholder, wrong proportions, wrap) instead of re-vibing the whole component.
 - The repo's own component library is the first reference, not the last. Read the installed component before fetching external sites.
 - Lint/typecheck passing is not visual verification. The user is looking at pixels; so must you before claiming it is fixed.
+- A scoped request ("make it bigger") that comes back as a restyle reads as "you ignored me." Preserve the existing look and change only the named dimension; if you think a fuller restyle is warranted, say so and ask rather than shipping it.
 
 ## Verification
 
@@ -43,6 +45,7 @@ Near miss — do not load this for:
 
 ## Sources
 
-- Failure transcript: `/Users/advaitpaliwal/.claude/projects/-Users-advaitpaliwal-Companion-Code-companion/27cc8906-5c23-4031-a842-0148eba719f1.jsonl` — agent restyled a tags-input from memory (user: "DID YOU NOT READ EXAMPLES ONLINE"), then verified with lint/typecheck instead of viewing it ("I hadn't yet looked at it in the browser" → user: "fucking fix").
+- Failure transcript: `/Users/advaitpaliwal/.claude/projects/-Users-advaitpaliwal-Companion-Code-companion/27cc8906-5c23-4031-a842-0148eba719f1.jsonl` — agent restyled a tags-input from memory (user: "DID YOU NOT READ EXAMPLES ONLINE"), then verified with lint/typecheck instead of viewing it ("I hadn't yet looked at it in the browser" → user: "fucking fix"). Same session later: "why are they fucking circular did you not read tabs and shit and how its done wheres the border and stuff" — agent reinvented an existing tabbed control as a borderless circular shape instead of matching the app's own tabs.
+- Scope-overreach failure: `/Users/advaitpaliwal/.claude/projects/-Users-advaitpaliwal-Companion-Code-companion/1292b255-a0ce-469e-8700-8cfbfdeeb45d.jsonl` — user asked to make a billing-cycle toggle bigger; agent restyled it into an `h-12 rounded-full` pill, dropping the existing tabs pattern and highlight color (user: "why did you change styling i literally said make it bigger ... why did yo not use the highlight color and the fucking tabs").
 - AGENTS.md invariant this scopes: "When imitating any style or voice — visual, prose, tone, code idiom — fetch and actually take in the real material across several examples and match what you observe, never reconstruct it from memory."
 - Reference component libraries observed in the transcript: shadcn/ui (installed `src/components/ui/input-tags.tsx`), diceui tags-input, emblor, originui.

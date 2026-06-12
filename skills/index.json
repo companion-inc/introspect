@@ -114,7 +114,9 @@
         "tags input chips tabs combobox or select styling",
         "placeholder or chip rendering looks wrong",
         "pick the right component archetype for a use case",
-        "verify how a component actually renders"
+        "verify how a component actually renders",
+        "make an existing component bigger or change one dimension",
+        "scoped tweak that should not restyle the whole component"
       ]
     },
     {
