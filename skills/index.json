@@ -102,6 +102,22 @@
       ]
     },
     {
+      "id": "ui-component-polish",
+      "path": "skills/ui-component-polish/SKILL.md",
+      "status": "active",
+      "tier": "domain-workflow",
+      "description": "Restyle or build an in-app UI component by identifying the archetype, reading real reference implementations, matching their concrete details and edge states, then verifying by viewing the rendered component rather than lint/typecheck.",
+      "activation_signals": [
+        "restyle or polish an in-app UI component",
+        "component looks ugly off or broken",
+        "make a component look like a real app or library",
+        "tags input chips tabs combobox or select styling",
+        "placeholder or chip rendering looks wrong",
+        "pick the right component archetype for a use case",
+        "verify how a component actually renders"
+      ]
+    },
+    {
       "id": "local-secret-retrieval",
       "path": "skills/local-secret-retrieval/SKILL.md",
       "status": "active",
