@@ -39,9 +39,8 @@ except Exception:
     sys.exit(0)
 
 prompt = data.get("prompt") or ""
-# Exact words only. No prefix matching and no phrase triggers. The bare word
-# "shit" is intentionally excluded because this user often uses it as filler
-# meaning "stuff"; stronger compounds like "bullshit" and "shitty" still count.
+# Exact words only. No prefix matching and no phrase triggers. Common filler
+# terms stay out of this list; regression tests cover known false positives.
 BAD_WORDS = {
     "arse",
     "ass",

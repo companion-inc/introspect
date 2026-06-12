@@ -43,6 +43,8 @@ AGENTS_MD_SKILLS_DIR="$PWD/skills" ./scripts/validate-skills.py
 4. `hooks/frustration-worker.py` debounces bursts, holds a lock, applies cooldowns, and runs at most one reflector process.
 5. The reflector inspects the transcript and stats, then chooses one target: `no_change`, `core_prompt`, `skill_new`, `skill_update`, or `skill_prune`.
 
+When a real reflector process starts, the worker also sends a macOS notification titled `agent-loop`. Set `AGENT_LOOP_NOTIFY=0` or `AGENTS_MD_NOTIFY=0` in the hook environment to disable the popup.
+
 ## Files
 
 - `AGENTS.md`: live prompt loaded by Claude and Codex.
@@ -53,10 +55,9 @@ AGENTS_MD_SKILLS_DIR="$PWD/skills" ./scripts/validate-skills.py
 - `hooks/frustration-reflect.sh`: prompt hook entrypoint.
 - `hooks/frustration-worker.py`: locked background batch worker.
 - `hooks/frustration-stats.sh`: feedback scoreboard by prompt commit.
+- `docs/frustration-tripwires.md`: human-readable list of active and ignored tripwire words.
 - `scripts/install-hooks.sh`: installs/uninstalls prompt links and hooks.
 - `scripts/validate-skills.py`: validates the skill index and skill files.
 - `scripts/test-frustration-tripwire.py`: regression test for the foreground frustration detector.
 - `scripts/agent-loop-status.sh`: health check for links, hooks, skills, queue, and recent reflector runs.
 - `feedback/`: ignored local queue, stats, and reflector logs.
-
-The exact word `shit` is ignored by the foreground tripwire because it is often casual filler in this user's messages. Stronger exact words and compounds such as `fuck`, `bullshit`, and `shitty` still trigger the background reflector.

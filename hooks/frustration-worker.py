@@ -71,6 +71,33 @@ def log(message: str) -> None:
         f.write(f"{iso_now()} {message}\n")
 
 
+def applescript_string(value: str) -> str:
+    return '"' + value.replace("\\", "\\\\").replace('"', '\\"') + '"'
+
+
+def notify(title: str, message: str) -> None:
+    if os.environ.get("AGENT_LOOP_NOTIFY") == "0" or os.environ.get("AGENTS_MD_NOTIFY") == "0":
+        return
+    try:
+        subprocess.run(
+            [
+                "/usr/bin/osascript",
+                "-e",
+                (
+                    "display notification "
+                    f"{applescript_string(message)} "
+                    f"with title {applescript_string(title)}"
+                ),
+            ],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=5,
+            check=False,
+        )
+    except Exception as exc:
+        log(f"notification failed: {exc!r}")
+
+
 def pid_alive(pid: int) -> bool:
     try:
         os.kill(pid, 0)
@@ -325,6 +352,7 @@ def invoke_reflector(events: list[dict]) -> int:
     env["AGENTS_MD_REFLECTOR"] = "1"
     cmd = ["claude", "-p", prompt, "--allowedTools", allowed_tools]
     log(f"invoking reflector for {len(events)} event(s)")
+    notify("agent-loop", f"Reflector spawned for {len(events)} frustration event(s)")
     with LOG.open("a") as log_file:
         log_file.write(f"{iso_now()} command: claude -p <batch-prompt> --allowedTools {allowed_tools}\n")
         result = subprocess.run(

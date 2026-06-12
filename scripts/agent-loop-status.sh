@@ -37,10 +37,10 @@ check_link "claude prompt" "$HOME/.claude/CLAUDE.md" "$REPO/AGENTS.md"
 check_link "codex prompt" "$HOME/.codex/AGENTS.md" "$REPO/AGENTS.md"
 check_hook "claude" "$HOME/.claude/settings.json"
 check_hook "codex" "$HOME/.codex/hooks.json"
-if grep -q '^[[:space:]]*"shit",$' "$REPO/hooks/frustration-reflect.sh"; then
-  printf "bad  bare shit trigger enabled\n"
+if [[ "${AGENT_LOOP_NOTIFY:-1}" == "0" || "${AGENTS_MD_NOTIFY:-1}" == "0" ]]; then
+  printf "off  macOS spawn notifications disabled by env\n"
 else
-  printf "ok   bare shit trigger ignored\n"
+  printf "ok   macOS spawn notifications enabled\n"
 fi
 
 printf "\nskills:\n"
@@ -49,12 +49,21 @@ printf "\nskills:\n"
 printf "\nfeedback:\n"
 if [[ -f "$FEEDBACK_DIR/events.jsonl" ]]; then
   python3 - "$FEEDBACK_DIR" <<'PY'
+import ast
 import json
+import re
 import sys
 from collections import Counter
 from pathlib import Path
 
 feedback = Path(sys.argv[1])
+repo = feedback.parent
+active_words = None
+hook_text = (repo / "hooks" / "frustration-reflect.sh").read_text()
+match = re.search(r"BAD_WORDS = (\{.*?\})", hook_text, flags=re.S)
+if match:
+    active_words = set(ast.literal_eval(match.group(1)))
+
 events = []
 for line in (feedback / "events.jsonl").read_text().splitlines():
     try:
@@ -67,8 +76,14 @@ print(f"events: {len(events)} total, {len(frustrated)} frustrated")
 if events:
     print(f"latest event: {events[-1].get('ts')} frustrated={events[-1].get('frustrated')}")
 if frustrated:
-    words = Counter(word for event in frustrated for word in event.get("matched", []))
-    print("top historical matches: " + ", ".join(f"{word}={count}" for word, count in words.most_common(8)))
+    words = Counter(
+        word
+        for event in frustrated
+        for word in event.get("matched", [])
+        if active_words is None or word in active_words
+    )
+    if words:
+        print("top active matches: " + ", ".join(f"{word}={count}" for word, count in words.most_common(8)))
 
 batches_path = feedback / "reflector-batches.jsonl"
 if batches_path.exists():
