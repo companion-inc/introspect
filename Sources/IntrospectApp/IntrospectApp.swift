@@ -224,28 +224,35 @@ struct WordsSection: View {
     @ObservedObject var model: IntrospectModel
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            Text("The hook starts with the built-in hardcoded list, then applies your local include/exclude profile from Git. Excluded words win.")
+        VStack(alignment: .leading, spacing: 18) {
+            Text("Only these words trigger the hook. Everything else is ignored by default.")
                 .foregroundStyle(.secondary)
 
-            HStack(alignment: .top, spacing: 18) {
-                WordEditor(
-                    title: "Include",
-                    subtitle: "Extra words you personally use when frustrated.",
-                    text: $model.includeWordsText
-                )
-                WordEditor(
-                    title: "Exclude",
-                    subtitle: "Words that should never trigger for you.",
-                    text: $model.excludeWordsText
-                )
+            VStack(alignment: .leading, spacing: 10) {
+                HStack {
+                    Text("Trigger Words")
+                        .font(.headline)
+                    Text("\(model.activeTripwireWords.count)")
+                        .font(.caption.weight(.semibold))
+                        .padding(.horizontal, 7)
+                        .padding(.vertical, 3)
+                        .background(Color.green.opacity(0.16))
+                        .clipShape(Capsule())
+                }
+                WordChipList(words: model.activeTripwireWords)
             }
+
+            WordEditor(
+                title: "Edit Trigger Words",
+                subtitle: "One exact word per line. No prefixes, no phrases.",
+                text: $model.triggerWordsText
+            )
 
             HStack(spacing: 12) {
                 Button {
                     Task { await model.saveWordProfile() }
                 } label: {
-                    Label("Save Word Profile", systemImage: "square.and.arrow.down")
+                    Label("Save Trigger Words", systemImage: "square.and.arrow.down")
                 }
                 .buttonStyle(.borderedProminent)
 
@@ -255,6 +262,29 @@ struct WordsSection: View {
                     Label("Reset Draft", systemImage: "arrow.uturn.backward")
                 }
                 .buttonStyle(.bordered)
+            }
+        }
+    }
+}
+
+struct WordChipList: View {
+    let words: [String]
+
+    private let columns = [
+        GridItem(.adaptive(minimum: 88), spacing: 8, alignment: .leading)
+    ]
+
+    var body: some View {
+        LazyVGrid(columns: columns, alignment: .leading, spacing: 8) {
+            ForEach(words, id: \.self) { word in
+                Text(word)
+                    .font(.system(.callout, design: .monospaced))
+                    .lineLimit(1)
+                    .padding(.horizontal, 9)
+                    .padding(.vertical, 5)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(Color(nsColor: .controlBackgroundColor))
+                    .clipShape(RoundedRectangle(cornerRadius: 7))
             }
         }
     }
@@ -422,8 +452,7 @@ final class IntrospectModel: ObservableObject {
     @Published var launchAgentInstalled = false
     @Published var queuedEvents = 0
     @Published var lastRunText = "unknown"
-    @Published var includeWordsText = ""
-    @Published var excludeWordsText = ""
+    @Published var triggerWordsText = ""
     @Published var profileGitOK = false
     @Published var wordProfileOK = false
     @Published var profileLastCommit = "none"
@@ -433,8 +462,14 @@ final class IntrospectModel: ObservableObject {
     private let repoURL: URL
     private let profileURL: URL
     private let homeURL: URL
-    private var savedIncludeWords: [String] = []
-    private var savedExcludeWords: [String] = []
+    private let defaultTriggerWords = [
+        "arse", "ass", "asshole", "bastard", "bitch", "bullshit", "crap", "cunt",
+        "damn", "dipshit", "dumb", "dumbass", "dumbfuck", "fag", "faggot", "ffs",
+        "fuck", "fucked", "fucker", "fuckin", "fucking", "goddamn", "hell", "idiot",
+        "mf", "moron", "motherfucker", "motherfucking", "nigga", "nigger", "retard",
+        "retarded", "shitty", "stupid", "wtf"
+    ]
+    private var savedTriggerWords: [String] = []
 
     init() {
         homeURL = URL(fileURLWithPath: NSHomeDirectory())
@@ -482,6 +517,10 @@ final class IntrospectModel: ObservableObject {
             return "Needs attention: apply the system prompt or fix missing hooks."
         }
         return "Live: \(mode.statusLabel), \(queuedEvents) queued event(s)."
+    }
+
+    var activeTripwireWords: [String] {
+        parseWords(triggerWordsText)
     }
 
     var profileGitStatus: String {
@@ -546,10 +585,9 @@ final class IntrospectModel: ObservableObject {
             try fileManager.createDirectory(at: profileURL.appendingPathComponent("prompts"), withIntermediateDirectories: true)
             if !fileManager.fileExists(atPath: wordProfileURL.path) {
                 let data: [String: Any] = [
-                    "include": [],
-                    "exclude": ["shit"],
+                    "words": defaultTriggerWords,
                     "learned_candidates": [],
-                    "notes": "Local Introspect profile. Excluded words win over defaults."
+                    "notes": "Local Introspect profile. Only these exact words trigger the hook."
                 ]
                 try writeJSON(data, to: wordProfileURL)
             }
@@ -560,7 +598,7 @@ final class IntrospectModel: ObservableObject {
 
                 This repository is private local state for Introspect:
 
-                - `frustration-words.json`: approved and rejected tripwire words.
+                - `frustration-words.json`: exact tripwire words.
                 - `prompts/`: private prompt variants.
                 - `skills/`: private user skills.
 
@@ -580,14 +618,12 @@ final class IntrospectModel: ObservableObject {
     }
 
     func saveWordProfile() async {
-        let include = parseWords(includeWordsText)
-        let exclude = parseWords(excludeWordsText)
+        let words = parseWords(triggerWordsText)
         do {
             try fileManager.createDirectory(at: profileURL, withIntermediateDirectories: true)
-            try writeJSON(["include": include, "exclude": exclude], to: wordProfileURL)
-            savedIncludeWords = include
-            savedExcludeWords = exclude
-            lastCommandOutput = "Saved \(include.count) included and \(exclude.count) excluded word(s)."
+            try writeJSON(["words": words], to: wordProfileURL)
+            savedTriggerWords = words
+            lastCommandOutput = "Saved \(words.count) trigger word(s)."
         } catch {
             lastCommandOutput = "Failed to save word profile: \(error)"
         }
@@ -596,8 +632,7 @@ final class IntrospectModel: ObservableObject {
     }
 
     func resetWordDraft() {
-        includeWordsText = savedIncludeWords.joined(separator: "\n")
-        excludeWordsText = savedExcludeWords.joined(separator: "\n")
+        triggerWordsText = savedTriggerWords.joined(separator: "\n")
     }
 
     func commitProfileChanges() async {
@@ -623,13 +658,11 @@ final class IntrospectModel: ObservableObject {
         wordProfileOK = fileManager.fileExists(atPath: wordProfileURL.path)
         guard let data = try? Data(contentsOf: wordProfileURL),
               let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-            savedIncludeWords = []
-            savedExcludeWords = ["shit"]
+            savedTriggerWords = defaultTriggerWords
             resetWordDraft()
             return
         }
-        savedIncludeWords = (object["include"] as? [String] ?? []).sorted()
-        savedExcludeWords = (object["exclude"] as? [String] ?? []).sorted()
+        savedTriggerWords = (object["words"] as? [String] ?? defaultTriggerWords).sorted()
         resetWordDraft()
     }
 

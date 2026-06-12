@@ -109,16 +109,12 @@ def active_bad_words():
         return words
 
     if isinstance(data, list):
-        words.update(normalize_words(data))
-        return words
+        return normalize_words(data) or words
     if not isinstance(data, dict):
         return words
 
-    for key in ("include", "approved", "custom", "custom_words"):
-        words.update(normalize_words(data.get(key)))
-    for key in ("exclude", "ignored", "rejected", "ignore"):
-        words.difference_update(normalize_words(data.get(key)))
-    return words
+    profile_words = normalize_words(data.get("words"))
+    return profile_words or words
 
 
 BAD_WORDS = active_bad_words()

@@ -141,9 +141,7 @@ def run_profile_case() -> None:
         tmp = Path(tmp_raw)
         profile = tmp / "profile"
         profile.mkdir()
-        (profile / "frustration-words.json").write_text(
-            json.dumps({"include": ["bruh"], "exclude": ["hell"]})
-        )
+        (profile / "frustration-words.json").write_text(json.dumps({"words": ["bruh"]}))
         env = os.environ.copy()
         env.update(
             {
@@ -172,9 +170,9 @@ def run_profile_case() -> None:
         if len(events) != 2:
             raise AssertionError(f"profile case expected 2 events, got {len(events)}")
         if not events[0].get("frustrated") or "bruh" not in events[0].get("matched", []):
-            raise AssertionError("profile include did not trigger bruh")
+            raise AssertionError("profile words did not trigger bruh")
         if events[1].get("frustrated"):
-            raise AssertionError("profile exclude did not suppress hell")
+            raise AssertionError("profile words should replace defaults")
 
 
 def main() -> int:

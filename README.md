@@ -27,7 +27,7 @@ The app can:
 - install hooks in `immediate`, `nightly`, or `off` mode
 - remove hooks without deleting the prompt links
 - initialize `~/.introspect/profile` as a local Git repo
-- edit included and excluded frustration words
+- edit the exact frustration trigger word list
 - show queue, prompt-link, hook, LaunchAgent, and last-run status
 
 ## Install
@@ -68,7 +68,7 @@ INTROSPECT_SKILLS_DIR="$PWD/skills" ./scripts/validate-skills.py
 
 1. Claude Code or Codex submits a user prompt.
 2. `hooks/frustration-reflect.sh` logs prompt metadata to `feedback/events.jsonl`.
-3. The hook combines the default hardcoded tripwire list with `~/.introspect/profile/frustration-words.json`; excluded words win.
+3. The hook uses the exact word list from `~/.introspect/profile/frustration-words.json` when present, otherwise the built-in default list.
 4. If the prompt contains an explicit active frustration word, the hook appends it to `feedback/frustration-queue.jsonl`.
 5. In immediate mode, the hook kicks `hooks/frustration-worker.py --kick`. In nightly mode, the LaunchAgent runs `hooks/frustration-worker.py --nightly`.
 6. The worker holds a lock, batches nearby events, applies cooldowns, and runs at most one reflector process.
