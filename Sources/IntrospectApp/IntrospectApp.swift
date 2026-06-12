@@ -63,7 +63,7 @@ struct MenuContent: View {
         }
         Divider()
         Label(model.mode.statusLabel, systemImage: model.mode.symbolName)
-        Label(model.hooksSummary, systemImage: model.allHooksInstalled ? "checkmark.circle" : "exclamationmark.triangle")
+        Label(model.hooksSummary, systemImage: model.systemInstalled ? "checkmark.circle" : "exclamationmark.triangle")
         Divider()
         Button("Refresh") {
             Task { await model.refresh() }
@@ -169,6 +169,7 @@ struct StatusSection: View {
             StatusRow("Claude prompt", value: model.claudePromptStatus, systemImage: model.claudePromptOK ? "checkmark.circle" : "xmark.circle")
             StatusRow("Codex prompt", value: model.codexPromptStatus, systemImage: model.codexPromptOK ? "checkmark.circle" : "xmark.circle")
             StatusRow("Hooks", value: model.hooksSummary, systemImage: model.allHooksInstalled ? "checkmark.circle" : "exclamationmark.triangle")
+            StatusRow("Codex scanner", value: model.codexScannerInstalled ? "installed" : "missing", systemImage: model.codexScannerInstalled ? "checkmark.circle" : "exclamationmark.triangle")
             StatusRow("Queued events", value: "\(model.queuedEvents)", systemImage: "tray.full")
             StatusRow("Last reflector run", value: model.lastRunText, systemImage: "clock.arrow.circlepath")
         }
@@ -206,6 +207,18 @@ struct HooksSection: View {
             Text(model.mode.helpText)
                 .foregroundStyle(.secondary)
 
+            Picker("Reflector agent", selection: $model.reflectorRunner) {
+                ForEach(ReflectorRunner.allCases) { runner in
+                    Label(runner.title, systemImage: runner.symbolName)
+                        .tag(runner)
+                }
+            }
+            .pickerStyle(.segmented)
+            .frame(maxWidth: 520)
+
+            Text(model.reflectorRunner.helpText)
+                .foregroundStyle(.secondary)
+
             if model.mode == .nightly {
                 HStack {
                     Stepper(value: $model.nightlyHour, in: 0...23) {
@@ -237,7 +250,7 @@ struct HooksSection: View {
             VStack(alignment: .leading, spacing: 8) {
                 Text("What apply does")
                     .font(.headline)
-                Text("Links Claude and Codex to this prompt, installs or removes prompt-submit hooks, and installs a nightly LaunchAgent only when Nightly is selected.")
+                Text("Links Claude and Codex to this prompt, installs or removes prompt-submit hooks, installs the Codex transcript scanner, and installs a nightly LaunchAgent only when Nightly is selected.")
                     .foregroundStyle(.secondary)
             }
         }
@@ -893,6 +906,52 @@ enum ReflectionMode: String, CaseIterable, Identifiable {
     }
 }
 
+enum ReflectorRunner: String, CaseIterable, Identifiable {
+    case defaultRunner = "default"
+    case claude
+    case codex
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .defaultRunner: "Default"
+        case .claude: "Claude"
+        case .codex: "Codex"
+        }
+    }
+
+    var helpText: String {
+        switch self {
+        case .defaultRunner:
+            "Uses the installed agent with the most recent local usage profile. No random selection."
+        case .claude:
+            "Forces reflector runs through Claude using Claude's configured default model."
+        case .codex:
+            "Forces reflector runs through Codex using Codex's configured default model."
+        }
+    }
+
+    var symbolName: String {
+        switch self {
+        case .defaultRunner: "person.crop.circle.badge.checkmark"
+        case .claude: "c.circle"
+        case .codex: "terminal"
+        }
+    }
+
+    static func parse(_ value: String?) -> ReflectorRunner {
+        switch value?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
+        case "claude":
+            .claude
+        case "codex":
+            .codex
+        default:
+            .defaultRunner
+        }
+    }
+}
+
 enum ProjectSurfaceKind: String {
     case agentFile = "Agent file"
     case skill = "Skill"
@@ -930,12 +989,14 @@ struct ProjectTreeRecord: Identifiable {
 final class IntrospectModel: ObservableObject {
     @Published var selectedSection: IntrospectSection? = .projects
     @Published var mode: ReflectionMode = .immediate
+    @Published var reflectorRunner: ReflectorRunner = .defaultRunner
     @Published var nightlyHour = 3
     @Published var nightlyMinute = 0
     @Published var claudePromptOK = false
     @Published var codexPromptOK = false
     @Published var claudeHookInstalled = false
     @Published var codexHookInstalled = false
+    @Published var codexScannerInstalled = false
     @Published var launchAgentInstalled = false
     @Published var queuedEvents = 0
     @Published var lastRunText = "unknown"
@@ -994,8 +1055,11 @@ final class IntrospectModel: ObservableObject {
         if mode == .off {
             return "disabled"
         }
+        if allHooksInstalled && codexScannerInstalled {
+            return "Claude/Codex hooks plus scanner installed"
+        }
         if allHooksInstalled {
-            return "Claude and Codex hooks installed"
+            return "hooks installed, scanner missing"
         }
         if claudeHookInstalled || codexHookInstalled {
             return "partially installed"
@@ -1007,8 +1071,12 @@ final class IntrospectModel: ObservableObject {
         claudeHookInstalled && codexHookInstalled
     }
 
+    var systemInstalled: Bool {
+        mode == .off || (allHooksInstalled && codexScannerInstalled)
+    }
+
     var hasWarning: Bool {
-        !claudePromptOK || !codexPromptOK || (mode != .off && !allHooksInstalled)
+        !claudePromptOK || !codexPromptOK || (mode != .off && (!allHooksInstalled || !codexScannerInstalled))
     }
 
     var statusLine: String {
@@ -1071,6 +1139,8 @@ final class IntrospectModel: ObservableObject {
         codexHookInstalled = codex.installed
         mode = claude.mode ?? codex.mode ?? .off
         launchAgentInstalled = fileManager.fileExists(atPath: homeURL.appendingPathComponent("Library/LaunchAgents/ai.companion.introspect.reflector.plist").path)
+        codexScannerInstalled = fileManager.fileExists(atPath: homeURL.appendingPathComponent("Library/LaunchAgents/ai.companion.introspect.codex-scanner.plist").path)
+        reflectorRunner = readReflectorRunner()
         queuedEvents = lineCount(repoURL.appendingPathComponent("feedback/frustration-queue.jsonl"))
         lastRunText = readLastRun()
         loadWordProfile()
@@ -1103,7 +1173,8 @@ final class IntrospectModel: ObservableObject {
             repoURL.appendingPathComponent("scripts/install-hooks.sh").path,
             "--reflect-mode", mode.rawValue,
             "--nightly-hour", "\(nightlyHour)",
-            "--nightly-minute", "\(nightlyMinute)"
+            "--nightly-minute", "\(nightlyMinute)",
+            "--runner", reflectorRunner.rawValue
         ]
         if mode == .off {
             args = [
@@ -1666,6 +1737,24 @@ final class IntrospectModel: ObservableObject {
             }
         }
         return (false, nil)
+    }
+
+    private func readReflectorRunner() -> ReflectorRunner {
+        let plists = [
+            homeURL.appendingPathComponent("Library/LaunchAgents/ai.companion.introspect.codex-scanner.plist"),
+            homeURL.appendingPathComponent("Library/LaunchAgents/ai.companion.introspect.reflector.plist")
+        ]
+        for plist in plists {
+            guard let data = try? Data(contentsOf: plist),
+                  let object = try? PropertyListSerialization.propertyList(from: data, options: [], format: nil),
+                  let root = object as? [String: Any],
+                  let env = root["EnvironmentVariables"] as? [String: Any],
+                  let raw = env["INTROSPECT_REFLECTOR_RUNNER"] as? String else {
+                continue
+            }
+            return ReflectorRunner.parse(raw)
+        }
+        return .defaultRunner
     }
 
     private func lineCount(_ path: URL) -> Int {

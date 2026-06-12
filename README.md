@@ -25,6 +25,7 @@ The app can:
 
 - apply the system prompt links for Claude and Codex
 - install hooks in `immediate`, `nightly`, or `off` mode
+- install the Codex transcript scanner backstop for Desktop sessions whose hooks have not fired
 - remove hooks without deleting the prompt links
 - initialize `~/.introspect/profile` as a local Git repo
 - show discovered global/project agent files and project skills
@@ -45,7 +46,7 @@ This links:
 ~/.codex/AGENTS.md -> ./AGENTS.md
 ```
 
-It also installs Claude/Codex `UserPromptSubmit` hooks that run `hooks/frustration-reflect.sh`.
+It also installs Claude/Codex `UserPromptSubmit` hooks that run `hooks/frustration-reflect.sh`, plus a Codex transcript scanner LaunchAgent at `~/Library/LaunchAgents/ai.companion.introspect.codex-scanner.plist`. The scanner checks recent Codex JSONL session files every 60 seconds because Desktop hooks can be skipped until changed hooks are trusted or a running app session reloads config.
 
 Reflection modes:
 
@@ -53,7 +54,7 @@ Reflection modes:
 - `nightly`: enqueue only; install a LaunchAgent at the configured hour/minute.
 - `off`: remove hooks while keeping prompt links available.
 
-The reflector runner defaults to `auto`: use `claude` if only Claude exists, `codex` if only Codex exists, and randomly choose one per batch if both exist. No model is pinned; each CLI uses its own configured default model.
+The reflector runner defaults to `default`: use the installed agent with the most recent local usage profile, based on recent Claude and Codex transcript user-message counts. If both are tied, the most recent user message wins; if still tied, Codex wins when installed. No model is pinned; each CLI uses its own configured default model. Use `--runner claude` or `--runner codex` to force one.
 
 ## Verify
 
@@ -73,8 +74,9 @@ INTROSPECT_SKILLS_DIR="$PWD/skills" ./scripts/validate-skills.py
 3. The hook uses the exact word list from `~/.introspect/profile/frustration-words.json` when present, otherwise the built-in default list.
 4. If the prompt contains an explicit active frustration word, the hook appends it to `feedback/frustration-queue.jsonl`.
 5. In immediate mode, the hook kicks `hooks/frustration-worker.py --kick`. In nightly mode, the LaunchAgent runs `hooks/frustration-worker.py --nightly`.
-6. The worker holds a lock, batches nearby events, applies cooldowns, and runs at most one reflector process.
-7. The reflector inspects the transcript and stats, then chooses one target: `no_change`, `core_prompt`, `project_prompt`, `profile_memory`, `skill_new`, `skill_update`, `project_skill_new`, `project_skill_update`, or `skill_prune`.
+6. Separately, `hooks/codex-transcript-scan.py` scans recent Codex Desktop transcript JSONL files, skips Codex control/context records, dedupes by transcript line, and queues any missed frustration prompts into the same queue.
+7. The worker holds a lock, batches nearby events, applies cooldowns, and runs at most one reflector process.
+8. The reflector inspects the transcript and stats, then chooses one target: `no_change`, `core_prompt`, `project_prompt`, `profile_memory`, `skill_new`, `skill_update`, `project_skill_new`, `project_skill_update`, or `skill_prune`.
 
 When a real reflector process starts, the worker also sends a macOS notification titled `Introspect`. Set `INTROSPECT_NOTIFY=0` in the hook environment to disable the popup.
 
@@ -112,6 +114,7 @@ Hermes was reviewed as the main reference for this split. The conclusion is in `
 - `skills/agent-md-creator/SKILL.md`: edits the always-loaded AGENTS.md / CLAUDE.md prompt.
 - `skills/skill-creator/SKILL.md`: creates, updates, prunes, and validates scoped skills.
 - `hooks/frustration-reflect.sh`: prompt hook entrypoint.
+- `hooks/codex-transcript-scan.py`: Codex Desktop transcript scanner backstop.
 - `hooks/frustration-worker.py`: locked background batch worker.
 - `hooks/frustration-stats.sh`: feedback scoreboard by prompt commit.
 - `docs/frustration-tripwires.md`: human-readable list of active and ignored tripwire words.

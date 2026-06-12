@@ -1,6 +1,8 @@
 # Frustration Tripwires
 
-The foreground hook uses exact lowercase word matches only. No prefixes, no wildcards, no phrase triggers.
+The foreground hook and Codex transcript scanner use exact lowercase word matches only. No prefixes, no wildcards, no phrase triggers.
+
+Codex Desktop has a scanner backstop because changed command hooks can be skipped until the hook definition is trusted or the app session reloads config. The scanner reads recent `~/.codex/sessions/**/rollout-*.jsonl` files, ignores Codex control/context records, dedupes transcript lines, and queues missed frustration prompts through the same single-worker cooldown path.
 
 ## Active Words
 

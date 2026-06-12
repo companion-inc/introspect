@@ -14,6 +14,7 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
 HOOK = REPO / "hooks" / "frustration-reflect.sh"
+SCANNER = REPO / "hooks" / "codex-transcript-scan.py"
 
 
 def read_jsonl(path: Path) -> list[dict]:
@@ -175,6 +176,86 @@ def run_profile_case() -> None:
             raise AssertionError("profile words should replace defaults")
 
 
+def run_codex_scanner_case() -> None:
+    with tempfile.TemporaryDirectory(prefix="agent-loop-codex-scan-") as tmp_raw:
+        tmp = Path(tmp_raw)
+        sessions = tmp / "sessions" / "2026" / "06" / "12"
+        sessions.mkdir(parents=True)
+        rollout = sessions / "rollout-2026-06-12T00-00-00-test.jsonl"
+        base_ts = time.time()
+
+        def ts(offset: int) -> str:
+            return time.strftime("%Y-%m-%dT%H:%M:%S.000Z", time.gmtime(base_ts + offset))
+
+        rows = [
+            {
+                "timestamp": ts(0),
+                "type": "session_meta",
+                "payload": {"id": "scan-test-session", "cwd": str(REPO)},
+            },
+            {
+                "timestamp": ts(1),
+                "type": "response_item",
+                "payload": {
+                    "type": "message",
+                    "role": "user",
+                    "content": [{"type": "input_text", "text": "# AGENTS.md instructions for /tmp\n\nhell"}],
+                },
+            },
+            {
+                "timestamp": ts(2),
+                "type": "response_item",
+                "payload": {
+                    "type": "message",
+                    "role": "user",
+                    "content": [{"type": "input_text", "text": "plain status check"}],
+                },
+            },
+            {
+                "timestamp": ts(3),
+                "type": "response_item",
+                "payload": {
+                    "type": "message",
+                    "role": "user",
+                    "content": [{"type": "input_text", "text": "what the hell is happening"}],
+                },
+            },
+        ]
+        rollout.write_text("\n".join(json.dumps(row) for row in rows) + "\n")
+        now = time.time()
+        os.utime(rollout, (now, now))
+
+        env = os.environ.copy()
+        env.update(
+            {
+                "INTROSPECT_REPO": str(REPO),
+                "INTROSPECT_FEEDBACK_DIR": str(tmp / "feedback"),
+                "INTROSPECT_CODEX_SESSIONS_DIR": str(tmp / "sessions"),
+                "INTROSPECT_REFLECT_MODE": "nightly",
+            }
+        )
+        for _ in range(2):
+            subprocess.run(
+                [sys.executable, str(SCANNER), "--since-minutes", "60"],
+                text=True,
+                env=env,
+                cwd=REPO,
+                check=True,
+                timeout=10,
+            )
+
+        events = read_jsonl(tmp / "feedback" / "events.jsonl")
+        queue = read_jsonl(tmp / "feedback" / "frustration-queue.jsonl")
+        if len(events) != 2:
+            raise AssertionError(f"scanner expected 2 real prompt events, got {len(events)}")
+        if events[0].get("frustrated"):
+            raise AssertionError("scanner should not mark plain prompt frustrated")
+        if not events[1].get("frustrated") or "hell" not in events[1].get("matched", []):
+            raise AssertionError(f"scanner did not detect exact frustration word: {events[1]}")
+        if len(queue) != 1:
+            raise AssertionError(f"scanner expected one queued event, got {len(queue)}")
+
+
 def main() -> int:
     cases = [
         ("same with shit locally in companion and stuff", False, None),
@@ -191,7 +272,8 @@ def main() -> int:
     run_mode_case("nightly", expected_queue=1, expected_batches=0)
     run_mode_case("off", expected_queue=0, expected_batches=0)
     run_profile_case()
-    print(f"test-frustration-tripwire: ok ({len(cases) + 3} cases)")
+    run_codex_scanner_case()
+    print(f"test-frustration-tripwire: ok ({len(cases) + 4} cases)")
     return 0
 
 

@@ -5,6 +5,8 @@ REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 FEEDBACK_DIR="${INTROSPECT_FEEDBACK_DIR:-$REPO/feedback}"
 LAUNCH_LABEL="ai.companion.introspect.reflector"
 LAUNCH_PLIST="$HOME/Library/LaunchAgents/$LAUNCH_LABEL.plist"
+SCAN_LABEL="ai.companion.introspect.codex-scanner"
+SCAN_PLIST="$HOME/Library/LaunchAgents/$SCAN_LABEL.plist"
 
 check_link() {
   local label="$1"
@@ -85,6 +87,36 @@ elif [[ -f "$LAUNCH_PLIST" ]]; then
 else
   printf "ok   nightly LaunchAgent not installed for mode=%s\n" "$mode"
 fi
+if [[ "$mode" == "off" ]]; then
+  if [[ -f "$SCAN_PLIST" ]]; then
+    printf "warn Codex transcript scanner installed while mode=off -> %s\n" "$SCAN_PLIST"
+  else
+    printf "off  Codex transcript scanner disabled\n"
+  fi
+elif [[ -f "$SCAN_PLIST" ]] && grep -q "$REPO/hooks/codex-transcript-scan.py" "$SCAN_PLIST"; then
+  if launchctl print "gui/$(id -u)/$SCAN_LABEL" >/dev/null 2>&1; then
+    printf "ok   Codex transcript scanner loaded -> %s\n" "$SCAN_PLIST"
+  else
+    printf "warn Codex transcript scanner installed but not loaded -> %s\n" "$SCAN_PLIST"
+  fi
+  scan_runner="$(python3 - "$SCAN_PLIST" <<'PY'
+import plistlib
+import sys
+from pathlib import Path
+
+data = plistlib.loads(Path(sys.argv[1]).read_bytes())
+env = data.get("EnvironmentVariables", {})
+print(env.get("INTROSPECT_REFLECTOR_RUNNER", "default"))
+PY
+)"
+  printf "ok   reflector runner=%s" "$scan_runner"
+  if [[ "$scan_runner" == "default" ]]; then
+    printf " (most-used installed agent; no random selection)"
+  fi
+  printf "\n"
+else
+  printf "bad  Codex transcript scanner missing -> %s\n" "$SCAN_PLIST"
+fi
 if [[ -f "$LAUNCH_PLIST" ]]; then
   runner="$(python3 - "$LAUNCH_PLIST" <<'PY'
 import plistlib
@@ -93,14 +125,14 @@ from pathlib import Path
 
 data = plistlib.loads(Path(sys.argv[1]).read_bytes())
 env = data.get("EnvironmentVariables", {})
-print(env.get("INTROSPECT_REFLECTOR_RUNNER", "auto"))
+print(env.get("INTROSPECT_REFLECTOR_RUNNER", "default"))
 PY
 )"
   claude_path="$(command -v claude || true)"
   codex_path="$(command -v codex || true)"
   printf "ok   reflector runner=%s" "$runner"
-  if [[ -n "$claude_path" && -n "$codex_path" && "$runner" == "auto" ]]; then
-    printf " (claude+codex found; nightly batch randomly chooses one)"
+  if [[ -n "$claude_path" && -n "$codex_path" && "$runner" == "default" ]]; then
+    printf " (claude+codex found; most-used installed agent wins)"
   elif [[ -n "$claude_path" || -n "$codex_path" ]]; then
     printf " (found:%s%s)" "${claude_path:+ claude}" "${codex_path:+ codex}"
   fi
@@ -179,6 +211,103 @@ else:
     queued = 0
 print(f"queued events: {queued}")
 print(f"lock present: {(feedback / 'reflector.lock').exists()}")
+
+scan_state_path = feedback / "codex-transcript-scan-state.json"
+scan_state = {}
+if scan_state_path.exists():
+    scan_state = json.loads(scan_state_path.read_text())
+    print(
+        "codex scanner: "
+        f"last_scan={scan_state.get('last_scan_at')} "
+        f"new={scan_state.get('last_new_events')} "
+        f"frustrated={scan_state.get('last_frustrated_events')}"
+    )
+else:
+    print("codex scanner: never ran")
+
+def parse_ts(value):
+    if not value:
+        return None
+    try:
+        return __import__("datetime").datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except Exception:
+        return None
+
+def prompt_text(content):
+    if isinstance(content, str):
+        return content
+    if not isinstance(content, list):
+        return ""
+    parts = []
+    for item in content:
+        if isinstance(item, str):
+            parts.append(item)
+        elif isinstance(item, dict) and isinstance(item.get("text"), str):
+            parts.append(item["text"])
+    return "\n".join(parts)
+
+def is_control(prompt):
+    stripped = prompt.lstrip()
+    return (
+        stripped.startswith("# AGENTS.md instructions for ")
+        or stripped.startswith("<codex_internal_context ")
+        or stripped.startswith("<turn_aborted>")
+    )
+
+latest_codex = None
+sessions_dir = Path.home() / ".codex" / "sessions"
+if sessions_dir.exists():
+    cutoff = __import__("time").time() - 24 * 60 * 60
+    for path in sessions_dir.rglob("rollout-*.jsonl"):
+        try:
+            if path.stat().st_mtime < cutoff:
+                continue
+        except OSError:
+            continue
+        try:
+            lines = path.read_text(errors="ignore").splitlines()
+        except OSError:
+            continue
+        for line_no, line in enumerate(lines, 1):
+            try:
+                row = json.loads(line)
+            except Exception:
+                continue
+            payload = row.get("payload")
+            if row.get("type") != "response_item" or not isinstance(payload, dict):
+                continue
+            if payload.get("type") != "message" or payload.get("role") != "user":
+                continue
+            text = prompt_text(payload.get("content"))
+            if not text or is_control(text):
+                continue
+            ts = parse_ts(row.get("timestamp"))
+            if ts and (latest_codex is None or ts > latest_codex[0]):
+                latest_codex = (ts, path, line_no)
+
+if latest_codex:
+    print(f"latest Codex user message: {latest_codex[0].isoformat(timespec='seconds')} ({latest_codex[1].name})")
+    processed_latest = next(
+        (
+            event
+            for event in reversed(events)
+            if event.get("source") == "codex_transcript_scan"
+            and event.get("transcript_path") == str(latest_codex[1])
+            and event.get("transcript_line") == latest_codex[2]
+        ),
+        None,
+    )
+    if processed_latest:
+        print(f"ok   latest Codex message processed by scanner frustrated={processed_latest.get('frustrated')}")
+        raise SystemExit(0)
+    latest_event_ts = parse_ts(events[-1].get("ts")) if events else None
+    latest_scan_ts = parse_ts(scan_state.get("last_scan_at"))
+    if latest_event_ts and latest_codex[0] > latest_event_ts:
+        delta = (latest_codex[0] - latest_event_ts).total_seconds()
+        if latest_scan_ts and latest_scan_ts >= latest_codex[0]:
+            print(f"warn Codex transcript is {delta:.0f}s newer than feedback after scanner ran")
+        else:
+            print(f"ok   latest Codex message is pending the next 60s scanner pass ({delta:.0f}s newer than feedback)")
 PY
 else
   printf "events: none yet\n"

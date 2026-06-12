@@ -14,7 +14,6 @@ import datetime as dt
 import errno
 import json
 import os
-import random
 import shlex
 import shutil
 import signal
@@ -40,9 +39,17 @@ DEBOUNCE_SECONDS = float(os.environ.get("FRUSTRATION_DEBOUNCE_SECONDS", "75"))
 GLOBAL_COOLDOWN_SECONDS = float(os.environ.get("FRUSTRATION_COOLDOWN_SECONDS", "300"))
 SESSION_COOLDOWN_SECONDS = float(os.environ.get("FRUSTRATION_SESSION_COOLDOWN_SECONDS", "900"))
 STALE_LOCK_SECONDS = float(os.environ.get("FRUSTRATION_STALE_LOCK_SECONDS", "1800"))
+REFLECTOR_TIMEOUT_SECONDS = float(os.environ.get("FRUSTRATION_REFLECTOR_TIMEOUT_SECONDS", "600"))
 DRY_RUN = os.environ.get("FRUSTRATION_REFLECTOR_DRY_RUN") == "1"
 DISABLE_SCHEDULE = os.environ.get("FRUSTRATION_DISABLE_SCHEDULE") == "1"
-REFLECTOR_RUNNER = os.environ.get("INTROSPECT_REFLECTOR_RUNNER", "auto").strip().lower() or "auto"
+REFLECTOR_RUNNER = os.environ.get("INTROSPECT_REFLECTOR_RUNNER", "default").strip().lower() or "default"
+USAGE_SCAN_DAYS = float(os.environ.get("INTROSPECT_REFLECTOR_USAGE_DAYS", "3"))
+USAGE_SCAN_FILES = int(os.environ.get("INTROSPECT_REFLECTOR_USAGE_FILES", "40"))
+RUNNER_ALIASES = {
+    "auto": "default",
+    "most-used": "default",
+    "most_used": "default",
+}
 
 
 def utc_now() -> dt.datetime:
@@ -57,9 +64,12 @@ def parse_ts(value: str | None) -> dt.datetime | None:
     if not value:
         return None
     try:
-        return dt.datetime.fromisoformat(value)
+        parsed = dt.datetime.fromisoformat(value.replace("Z", "+00:00"))
     except ValueError:
         return None
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=dt.timezone.utc)
+    return parsed.astimezone(dt.timezone.utc)
 
 
 def append_json(path: Path, obj: dict) -> None:
@@ -110,25 +120,158 @@ def available_reflector_runners() -> dict[str, str]:
     return runners
 
 
+def prompt_text_from_codex_content(content) -> str:
+    if isinstance(content, str):
+        return content
+    if not isinstance(content, list):
+        return ""
+    parts = []
+    for item in content:
+        if isinstance(item, str):
+            parts.append(item)
+        elif isinstance(item, dict) and isinstance(item.get("text"), str):
+            parts.append(item["text"])
+    return "\n".join(parts)
+
+
+def is_codex_control_message(prompt: str) -> bool:
+    stripped = prompt.lstrip()
+    return (
+        stripped.startswith("# AGENTS.md instructions for ")
+        or stripped.startswith("<codex_internal_context ")
+        or stripped.startswith("<turn_aborted>")
+    )
+
+
+def recent_jsonl_files(root: Path, pattern: str, cutoff: dt.datetime) -> list[Path]:
+    if not root.exists():
+        return []
+    cutoff_mtime = cutoff.timestamp()
+    files: list[Path] = []
+    for path in root.rglob(pattern):
+        try:
+            if path.stat().st_mtime >= cutoff_mtime:
+                files.append(path)
+        except OSError:
+            continue
+    return sorted(files, key=lambda item: item.stat().st_mtime, reverse=True)[:USAGE_SCAN_FILES]
+
+
+def count_recent_codex_usage(cutoff: dt.datetime) -> tuple[int, dt.datetime | None]:
+    sessions_dir = Path.home() / ".codex" / "sessions"
+    count = 0
+    latest: dt.datetime | None = None
+    for path in recent_jsonl_files(sessions_dir, "rollout-*.jsonl", cutoff):
+        try:
+            handle = path.open(errors="ignore")
+        except OSError:
+            continue
+        with handle:
+            for line in handle:
+                try:
+                    row = json.loads(line)
+                except Exception:
+                    continue
+                payload = row.get("payload")
+                if row.get("type") != "response_item" or not isinstance(payload, dict):
+                    continue
+                if payload.get("type") != "message" or payload.get("role") != "user":
+                    continue
+                prompt = prompt_text_from_codex_content(payload.get("content"))
+                if not prompt or is_codex_control_message(prompt):
+                    continue
+                ts = parse_ts(row.get("timestamp"))
+                if ts is None or ts < cutoff:
+                    continue
+                count += 1
+                if latest is None or ts > latest:
+                    latest = ts
+    return count, latest
+
+
+def count_recent_claude_usage(cutoff: dt.datetime) -> tuple[int, dt.datetime | None]:
+    projects_dir = Path.home() / ".claude" / "projects"
+    count = 0
+    latest: dt.datetime | None = None
+    for path in recent_jsonl_files(projects_dir, "*.jsonl", cutoff):
+        try:
+            handle = path.open(errors="ignore")
+        except OSError:
+            continue
+        with handle:
+            for line in handle:
+                try:
+                    row = json.loads(line)
+                except Exception:
+                    continue
+                if row.get("type") != "user":
+                    continue
+                message = row.get("message")
+                if not isinstance(message, dict) or message.get("role") != "user":
+                    continue
+                ts = parse_ts(row.get("timestamp"))
+                if ts is None or ts < cutoff:
+                    continue
+                count += 1
+                if latest is None or ts > latest:
+                    latest = ts
+    return count, latest
+
+
+def select_default_runner(runners: dict[str, str]) -> tuple[str, str]:
+    if not runners:
+        raise RuntimeError("no reflector runner found; install claude or codex")
+    if len(runners) == 1:
+        name = next(iter(runners))
+        return name, runners[name]
+
+    cutoff = utc_now() - dt.timedelta(days=USAGE_SCAN_DAYS)
+    usage = {
+        "claude": count_recent_claude_usage(cutoff),
+        "codex": count_recent_codex_usage(cutoff),
+    }
+    available_usage = {name: usage[name] for name in runners}
+    max_count = max(count for count, _latest in available_usage.values())
+    candidates = [name for name, (count, _latest) in available_usage.items() if count == max_count]
+    if len(candidates) > 1:
+        latest_by_name = {name: available_usage[name][1] or dt.datetime.min.replace(tzinfo=dt.timezone.utc) for name in candidates}
+        max_latest = max(latest_by_name.values())
+        candidates = [name for name in candidates if latest_by_name[name] == max_latest]
+    if len(candidates) > 1:
+        candidates = ["codex"] if "codex" in candidates else sorted(candidates)
+
+    name = candidates[0]
+    log(
+        "default reflector runner selected "
+        f"{name} (claude_usage={usage['claude'][0]}, codex_usage={usage['codex'][0]})"
+    )
+    return name, runners[name]
+
+
 def select_reflector_runner() -> tuple[str, str]:
     runners = available_reflector_runners()
-    if REFLECTOR_RUNNER == "auto":
-        if not runners:
-            raise RuntimeError("no reflector runner found; install claude or codex")
-        names = sorted(runners)
-        name = random.choice(names)
-        return name, runners[name]
-    if REFLECTOR_RUNNER not in {"claude", "codex"}:
+    runner = RUNNER_ALIASES.get(REFLECTOR_RUNNER, REFLECTOR_RUNNER)
+    if runner == "default":
+        return select_default_runner(runners)
+    if runner not in {"claude", "codex"}:
         raise RuntimeError(f"invalid INTROSPECT_REFLECTOR_RUNNER={REFLECTOR_RUNNER!r}")
-    path = runners.get(REFLECTOR_RUNNER)
+    path = runners.get(runner)
     if not path:
-        raise RuntimeError(f"requested reflector runner {REFLECTOR_RUNNER!r} is not on PATH")
-    return REFLECTOR_RUNNER, path
+        raise RuntimeError(f"requested reflector runner {runner!r} is not on PATH")
+    return runner, path
 
 
 def build_reflector_command(runner: str, runner_path: str, prompt: str, allowed_tools: str) -> list[str]:
     if runner == "claude":
-        return [runner_path, "-p", prompt, "--allowedTools", allowed_tools]
+        return [
+            runner_path,
+            "-p",
+            prompt,
+            "--permission-mode",
+            "bypassPermissions",
+            "--allowedTools",
+            allowed_tools,
+        ]
     if runner == "codex":
         return [
             runner_path,
@@ -416,7 +559,7 @@ def invoke_reflector(events: list[dict]) -> int:
             stdout=log_file,
             stderr=subprocess.STDOUT,
             text=True,
-            timeout=1800,
+            timeout=REFLECTOR_TIMEOUT_SECONDS,
         )
     log(f"reflector exited code={result.returncode}")
     return result.returncode

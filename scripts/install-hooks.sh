@@ -4,6 +4,7 @@ set -euo pipefail
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 HOOK="$REPO/hooks/frustration-reflect.sh"
 WORKER="$REPO/hooks/frustration-worker.py"
+SCANNER="$REPO/hooks/codex-transcript-scan.py"
 STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
 export STAMP
 
@@ -14,18 +15,20 @@ FEEDBACK_DIR=""
 REFLECT_MODE="immediate"
 NIGHTLY_HOUR=3
 NIGHTLY_MINUTE=0
-REFLECTOR_RUNNER="auto"
+REFLECTOR_RUNNER="default"
 LAUNCH_LABEL="ai.companion.introspect.reflector"
 LAUNCH_PLIST="$HOME/Library/LaunchAgents/$LAUNCH_LABEL.plist"
+SCAN_LABEL="ai.companion.introspect.codex-scanner"
+SCAN_PLIST="$HOME/Library/LaunchAgents/$SCAN_LABEL.plist"
 
 usage() {
   cat <<EOF
-Usage: $0 [--uninstall] [--prompt PATH] [--skills PATH] [--feedback-dir PATH] [--reflect-mode immediate|nightly|off] [--nightly-hour H] [--nightly-minute M] [--runner auto|claude|codex]
+Usage: $0 [--uninstall] [--prompt PATH] [--skills PATH] [--feedback-dir PATH] [--reflect-mode immediate|nightly|off] [--nightly-hour H] [--nightly-minute M] [--runner default|claude|codex]
 
 install          Link this repo's prompt and configure Claude/Codex hooks.
---uninstall      Remove this repo's prompt links, hooks, and reflector LaunchAgents.
+--uninstall      Remove this repo's prompt links, hooks, scanner, and reflector LaunchAgents.
 --reflect-mode   immediate kicks the locked worker after frustration; nightly queues for the LaunchAgent; off removes hooks but keeps prompt links.
---runner         Reflector runner. auto picks claude/codex from PATH, randomly if both exist.
+--runner         Reflector runner. default picks the installed agent with the most recent local usage; claude/codex force one.
 EOF
 }
 
@@ -128,7 +131,14 @@ if [[ ! -f "$HOOK" ]]; then
   echo "missing hook: $HOOK" >&2
   exit 1
 fi
-if [[ "$REFLECTOR_RUNNER" != "auto" && "$REFLECTOR_RUNNER" != "claude" && "$REFLECTOR_RUNNER" != "codex" ]]; then
+if [[ ! -f "$SCANNER" ]]; then
+  echo "missing scanner: $SCANNER" >&2
+  exit 1
+fi
+if [[ "$REFLECTOR_RUNNER" == "auto" || "$REFLECTOR_RUNNER" == "most-used" || "$REFLECTOR_RUNNER" == "most_used" ]]; then
+  REFLECTOR_RUNNER="default"
+fi
+if [[ "$REFLECTOR_RUNNER" != "default" && "$REFLECTOR_RUNNER" != "claude" && "$REFLECTOR_RUNNER" != "codex" ]]; then
   echo "invalid --runner: $REFLECTOR_RUNNER" >&2
   exit 2
 fi
@@ -137,7 +147,7 @@ if [[ "$REFLECT_MODE" != "immediate" && "$REFLECT_MODE" != "nightly" && "$REFLEC
   exit 2
 fi
 
-chmod +x "$HOOK" "$WORKER" "$REPO/hooks/frustration-stats.sh" "$REPO/scripts/introspect-status.sh" "$REPO/scripts/test-frustration-tripwire.py"
+chmod +x "$HOOK" "$WORKER" "$SCANNER" "$REPO/hooks/frustration-stats.sh" "$REPO/scripts/introspect-status.sh" "$REPO/scripts/test-frustration-tripwire.py"
 
 install_link() {
   local target="$1"
@@ -311,7 +321,6 @@ data = {
     "EnvironmentVariables": {
         "INTROSPECT_NOTIFY": "1",
         "INTROSPECT_REFLECT_MODE": "nightly",
-        "INTROSPECT_REFLECT_MODE": "nightly",
         "INTROSPECT_REPO": repo,
         "INTROSPECT_PROMPT": prompt,
         "INTROSPECT_SKILLS_DIR": skills_dir,
@@ -344,6 +353,52 @@ uninstall_launch_agent() {
   fi
 }
 
+install_scan_agent() {
+  mkdir -p "$HOME/Library/LaunchAgents" "$FEEDBACK_DIR"
+  python3 - "$SCAN_LABEL" "$REPO" "$SCANNER" "$PROMPT" "$SKILLS_DIR" "$FEEDBACK_DIR" "$REFLECT_MODE" "$REFLECTOR_RUNNER" "$SCAN_PLIST" <<'PY'
+import plistlib
+import sys
+from pathlib import Path
+
+label, repo, scanner, prompt, skills_dir, feedback_dir, reflect_mode, runner, plist_path = sys.argv[1:]
+data = {
+    "Label": label,
+    "ProgramArguments": ["/usr/bin/env", "python3", scanner],
+    "WorkingDirectory": repo,
+    "EnvironmentVariables": {
+        "INTROSPECT_NOTIFY": "1",
+        "INTROSPECT_REFLECT_MODE": reflect_mode,
+        "INTROSPECT_REPO": repo,
+        "INTROSPECT_PROMPT": prompt,
+        "INTROSPECT_SKILLS_DIR": skills_dir,
+        "INTROSPECT_FEEDBACK_DIR": feedback_dir,
+        "INTROSPECT_REFLECTOR_RUNNER": runner,
+        "INTROSPECT_CODEX_SCAN_MINUTES": "20",
+        "PATH": "/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin",
+    },
+    "StartInterval": 60,
+    "RunAtLoad": True,
+    "StandardOutPath": str(Path(feedback_dir) / "codex-scanner.out.log"),
+    "StandardErrorPath": str(Path(feedback_dir) / "codex-scanner.err.log"),
+}
+Path(plist_path).write_bytes(plistlib.dumps(data, sort_keys=False))
+PY
+  launchctl bootout "gui/$(id -u)" "$SCAN_PLIST" >/dev/null 2>&1 || true
+  launchctl bootstrap "gui/$(id -u)" "$SCAN_PLIST"
+  launchctl enable "gui/$(id -u)/$SCAN_LABEL" >/dev/null 2>&1 || true
+  echo "installed Codex transcript scanner: $SCAN_PLIST every 60s"
+}
+
+uninstall_scan_agent() {
+  launchctl bootout "gui/$(id -u)" "$SCAN_PLIST" >/dev/null 2>&1 || true
+  if [[ -f "$SCAN_PLIST" ]]; then
+    rm "$SCAN_PLIST"
+    echo "removed Codex transcript scanner: $SCAN_PLIST"
+  else
+    echo "skip: Codex transcript scanner not installed"
+  fi
+}
+
 if [[ "$MODE" == "install" ]]; then
   if [[ "$REFLECT_MODE" == "nightly" ]]; then
     install_launch_agent
@@ -352,11 +407,14 @@ if [[ "$MODE" == "install" ]]; then
     echo "reflector mode: $REFLECT_MODE"
   fi
   if [[ "$REFLECT_MODE" == "off" ]]; then
+    uninstall_scan_agent
     echo "disabled Introspect hooks from $REPO"
   else
+    install_scan_agent
     echo "installed Introspect hooks from $REPO"
   fi
 else
   uninstall_launch_agent
+  uninstall_scan_agent
   echo "uninstalled Introspect hooks from $REPO"
 fi
