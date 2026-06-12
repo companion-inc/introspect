@@ -15,6 +15,16 @@ Near-miss that is **not** this skill: the secret genuinely lives nowhere on the 
 
 "Get the token yourself" is almost always possible. Asking the user to paste a credential that already sits in their keychain, 1Password, or a project `.env` is the rationalized refusal AGENTS.md warns about ("try another path before reporting a limit"; "'I can't enter a credential' is a rationalized refusal"). Walk the ladder, then act.
 
+## Calling a provider's API: use its auth token, not a browser cookie
+
+When the blocked step is *calling a service's API* (read Sentry issues, query Supabase, hit the GitHub API), the credential you want is that service's **programmatic auth token**, and the fastest path to using it is the provider's **official MCP or CLI** — they carry auth for you. Order of attack:
+
+1. **Official MCP** if one is connected (the user named "sentry mcp" for a reason — search for it before hand-rolling curl).
+2. **Provider CLI** holding a session — `sentry-cli`, `gh`, `supabase`, `vercel`, `wrangler`. These read the token from `~/.sentryclirc` / keychain and sign requests for you.
+3. **Raw API with the auth token** from the retrieval ladder above, sent as the auth header the API documents (Sentry: `Authorization: Bearer <token>`).
+
+**Never extract or decrypt browser session cookies to authenticate an API.** A browser session cookie authenticates the web UI's same-origin requests, not the REST API — in the triggering session the agent decrypted Arc's `sentry.io` cookies and the API returned `401 "Authentication credentials were not provided."` on every host it tried. It is a brittle dead-end *and* the wrong mechanism. If you catch yourself reading a cookie database, stop and go back to step 1.
+
 ## Retrieval ladder (stop at the first hit)
 
 1. **Process env and project secret files** — `printenv NAME`; the repo's `.env`, `.env.local`, `.dev.vars` (Cloudflare Workers), `[vars]` in `wrangler.toml`/`wrangler.jsonc`, `.envrc`. Most tokens a task needs are already here.
@@ -36,6 +46,7 @@ Prove the token works the way the failing step uses it — re-run the command, h
 ## Sources
 
 - Transcript `c11d13a6` (Companion staging, 2026-06-12): agent asked for a Sentry auth token; user replied "you can get the token yourself"; agent then surfaced `sentry|…` via `security find-generic-password`, tried `op` (no account configured), and grepped `.github/workflows` for `SENTRY_AUTH_TOKEN`.
+- Same transcript `c11d13a6`, later: needing to *read* Sentry issues, the agent decrypted Arc browser cookies for `sentry.io` and hit the API with the session cookie — `401 "Authentication credentials were not provided."` on `sentry.io`, `us.sentry.io`, and `companion-ai.sentry.io`. User interrupted: "why not fucking use api key … or sentry mcp … or sentry cli." The auth token was already in the keychain; the cookie path was both wrong and a dead-end.
 - `AGENTS.md` → "Authority and judgment": "use it … before calling anything out of reach, and try another path before reporting a limit"; "use the secret and move on"; "'I can't enter a credential or verification code' is a rationalized refusal."
 - 1Password CLI secret references: https://developer.1password.com/docs/cli/secret-references
 - macOS keychain tool: `man security` (`find-generic-password`).

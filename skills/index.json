@@ -85,13 +85,15 @@
       "path": "skills/local-secret-retrieval/SKILL.md",
       "status": "active",
       "tier": "domain-workflow",
-      "description": "Retrieve a needed token or secret from the machine's own stores (env files, macOS Keychain, 1Password, provider CLIs) before asking the user to paste it.",
+      "description": "Retrieve a needed token or secret from the machine's own stores (env files, macOS Keychain, 1Password, provider CLIs) before asking the user to paste it, and authenticate a provider API with its token via the official MCP or CLI rather than scraping browser cookies.",
       "activation_signals": [
         "blocked on a missing API token or secret",
         "about to ask the user for a credential",
         "CLI errors with missing or invalid token",
         "an env var like SENTRY_AUTH_TOKEN is unset",
-        "need an auth token to deploy or call a service"
+        "need an auth token to deploy or call a service",
+        "calling a provider API like Sentry or Supabase programmatically",
+        "about to read or decrypt browser cookies to authenticate an API"
       ]
     }
   ]
