@@ -129,6 +129,7 @@
         "component looks ugly off or broken",
         "make a component look like a real app or library",
         "tags input chips tabs combobox or select styling",
+        "chat or message surface with oversized input dead space or non-growing bubbles",
         "placeholder or chip rendering looks wrong",
         "pick the right component archetype for a use case",
         "verify how a component actually renders",
