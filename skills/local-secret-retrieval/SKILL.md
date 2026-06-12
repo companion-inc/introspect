@@ -1,0 +1,43 @@
+---
+name: local-secret-retrieval
+description: Retrieve an API token, secret, or credential from the machine's own stores before asking the user to paste it. Use when a task is blocked on a missing or invalid token — a CLI errors on auth, an env var like SENTRY_AUTH_TOKEN is unset, a deploy or API call needs a key. Not for a secret that exists nowhere and must be freshly minted through a human-only step (hardware MFA, a one-time email/SMS code) — drive that flow per AGENTS.md instead.
+---
+
+# Local secret retrieval
+
+## When this fires
+
+You need a token / secret / credential to make progress and you are about to ask the user for it: a CLI fails with a missing-or-invalid token, an env var the code reads (`SENTRY_AUTH_TOKEN`, `SUPABASE_*`, a deploy key) is unset, or an auth step wants a key. Walk the retrieval ladder first.
+
+Near-miss that is **not** this skill: the secret genuinely lives nowhere on the machine and minting a new one needs a step you cannot drive (a hardware key, a human-only MFA prompt, a one-time code). Drive that login/OAuth flow yourself per AGENTS.md; don't dump the ladder.
+
+## The rule
+
+"Get the token yourself" is almost always possible. Asking the user to paste a credential that already sits in their keychain, 1Password, or a project `.env` is the rationalized refusal AGENTS.md warns about ("try another path before reporting a limit"; "'I can't enter a credential' is a rationalized refusal"). Walk the ladder, then act.
+
+## Retrieval ladder (stop at the first hit)
+
+1. **Process env and project secret files** — `printenv NAME`; the repo's `.env`, `.env.local`, `.dev.vars` (Cloudflare Workers), `[vars]` in `wrangler.toml`/`wrangler.jsonc`, `.envrc`. Most tokens a task needs are already here.
+2. **macOS Keychain** — `security find-generic-password -s "<service>" -w` prints the value; drop `-w` to see the account/service metadata and locate the right entry. (This machine's keychain holds Sentry and Supabase CLI credentials — `"acct"="sentry|…"`, `"svce"="Supabase CLI"`.)
+3. **1Password CLI** — `op read "op://<vault>/<item>/<field>"` or `op item get <item> --fields <field>`. First check the session with `op whoami`; if it returns `no account found`, the desktop-app integration isn't on for this session — fall through, don't block.
+4. **A provider CLI that already holds a session** — `gh auth token` prints the live GitHub token; `sentry-cli` reads `~/.sentryclirc`; `vercel`/`supabase`/`wrangler whoami` confirm a login you can act through (deploy, mint, call) without ever handling the raw token.
+5. **Confirm the canonical name from CI** — `grep -rn NAME .github/workflows`, `gh secret list`, `wrangler secret list`. This tells you the exact env-var name the code expects and that the token is real, so you fetch the matching value in steps 1–4.
+
+## Gotchas
+
+- **GitHub Actions and Cloudflare Worker secrets are write-only.** `gh secret list` / `wrangler secret list` show names, never values — they confirm the token exists and its name, but the *value* comes from 1Password / keychain / a secret file.
+- **`op whoami` failing ("no account found") means 1Password isn't wired into this session, not "the secret is unavailable."** Keep walking the ladder.
+- **Only escalate to the user** when the value is in none of these stores *and* a new one needs a step you genuinely cannot drive. Name that exact step ("this needs a fresh OAuth with your hardware key"); never ask for a paste of something already on disk.
+
+## Verification
+
+Prove the token works the way the failing step uses it — re-run the command, hit the API, redeploy. A token that exists but is expired or wrong-scope is the same blocker. Report the task fixed off the command now succeeding, not off "I found a token." (In the triggering session the agent claimed the fix done *and* asked for a Sentry token whose value was already in the keychain — both were wrong.)
+
+## Sources
+
+- Transcript `c11d13a6` (Companion staging, 2026-06-12): agent asked for a Sentry auth token; user replied "you can get the token yourself"; agent then surfaced `sentry|…` via `security find-generic-password`, tried `op` (no account configured), and grepped `.github/workflows` for `SENTRY_AUTH_TOKEN`.
+- `AGENTS.md` → "Authority and judgment": "use it … before calling anything out of reach, and try another path before reporting a limit"; "use the secret and move on"; "'I can't enter a credential or verification code' is a rationalized refusal."
+- 1Password CLI secret references: https://developer.1password.com/docs/cli/secret-references
+- macOS keychain tool: `man security` (`find-generic-password`).
+- GitHub CLI (secrets are write-only): https://cli.github.com/manual/gh_secret_list , https://cli.github.com/manual/gh_auth_token
+- Cloudflare Wrangler secrets: https://developers.cloudflare.com/workers/wrangler/commands/#secret

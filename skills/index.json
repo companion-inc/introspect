@@ -79,6 +79,20 @@
         "picking automation storage or rate limits per tier",
         "pricing tier multiple looks off"
       ]
+    },
+    {
+      "id": "local-secret-retrieval",
+      "path": "skills/local-secret-retrieval/SKILL.md",
+      "status": "active",
+      "tier": "domain-workflow",
+      "description": "Retrieve a needed token or secret from the machine's own stores (env files, macOS Keychain, 1Password, provider CLIs) before asking the user to paste it.",
+      "activation_signals": [
+        "blocked on a missing API token or secret",
+        "about to ask the user for a credential",
+        "CLI errors with missing or invalid token",
+        "an env var like SENTRY_AUTH_TOKEN is unset",
+        "need an auth token to deploy or call a service"
+      ]
     }
   ]
 }
