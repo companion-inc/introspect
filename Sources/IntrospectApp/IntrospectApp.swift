@@ -79,6 +79,8 @@ struct ContentView: View {
                     .tag(IntrospectSection.status)
                 Label("Hooks", systemImage: "switch.2")
                     .tag(IntrospectSection.hooks)
+                Label("Projects", systemImage: "folder")
+                    .tag(IntrospectSection.projects)
                 Label("Words", systemImage: "text.badge.checkmark")
                     .tag(IntrospectSection.words)
                 Label("Local Profile", systemImage: "externaldrive.badge.timemachine")
@@ -94,6 +96,8 @@ struct ContentView: View {
                         StatusSection(model: model)
                     case .hooks:
                         HooksSection(model: model)
+                    case .projects:
+                        ProjectsSection(model: model)
                     case .words:
                         WordsSection(model: model)
                     case .profile:
@@ -267,6 +271,116 @@ struct WordsSection: View {
     }
 }
 
+struct ProjectsSection: View {
+    @ObservedObject var model: IntrospectModel
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 18) {
+            Grid(alignment: .leading, horizontalSpacing: 18, verticalSpacing: 14) {
+                StatusRow("Agent files", value: "\(model.promptSurfaces.count)", systemImage: "doc.text")
+                StatusRow("Skill files", value: "\(model.skillSurfaces.count)", systemImage: "hammer")
+                StatusRow("Current project", value: model.repoPath, systemImage: "folder")
+            }
+
+            HStack(spacing: 12) {
+                Button {
+                    Task { await model.refresh() }
+                } label: {
+                    Label("Refresh", systemImage: "arrow.clockwise")
+                }
+                .buttonStyle(.bordered)
+
+                Button {
+                    Task { await model.initializeCurrentProjectAgentFiles() }
+                } label: {
+                    Label("Initialize Current Project", systemImage: "plus.app")
+                }
+                .buttonStyle(.borderedProminent)
+
+                Button {
+                    Task { await model.openRepoFolder() }
+                } label: {
+                    Label("Open Repo", systemImage: "folder")
+                }
+                .buttonStyle(.bordered)
+            }
+
+            ProjectSurfaceList(title: "Agent Files", items: model.promptSurfaces)
+            ProjectSurfaceList(title: "Project Skills", items: model.skillSurfaces)
+        }
+    }
+}
+
+struct ProjectSurfaceList: View {
+    let title: String
+    let items: [ProjectSurfaceRecord]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Text(title)
+                    .font(.headline)
+                Text("\(items.count)")
+                    .font(.caption.weight(.semibold))
+                    .padding(.horizontal, 7)
+                    .padding(.vertical, 3)
+                    .background(Color.green.opacity(0.16))
+                    .clipShape(Capsule())
+            }
+
+            if items.isEmpty {
+                Text("None found in the scanned roots.")
+                    .foregroundStyle(.secondary)
+            } else {
+                VStack(alignment: .leading, spacing: 0) {
+                    ForEach(items) { item in
+                        ProjectSurfaceRow(item: item)
+                        if item.id != items.last?.id {
+                            Divider()
+                        }
+                    }
+                }
+                .overlay(
+                    RoundedRectangle(cornerRadius: 8)
+                        .stroke(Color(nsColor: .separatorColor))
+                )
+            }
+        }
+    }
+}
+
+struct ProjectSurfaceRow: View {
+    let item: ProjectSurfaceRecord
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 12) {
+            Image(systemName: item.systemImage)
+                .foregroundStyle(.secondary)
+                .frame(width: 18)
+            VStack(alignment: .leading, spacing: 4) {
+                HStack {
+                    Text(item.name)
+                        .font(.headline)
+                    Text(item.scope)
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                }
+                Text(item.path)
+                    .font(.system(.caption, design: .monospaced))
+                    .textSelection(.enabled)
+                if let target = item.target {
+                    Text("-> \(target)")
+                        .font(.system(.caption, design: .monospaced))
+                        .foregroundStyle(.secondary)
+                        .textSelection(.enabled)
+                }
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(10)
+    }
+}
+
 struct WordChipList: View {
     let words: [String]
 
@@ -392,6 +506,7 @@ struct CommandOutputView: View {
 enum IntrospectSection: Hashable {
     case status
     case hooks
+    case projects
     case words
     case profile
 }
@@ -439,6 +554,15 @@ enum ReflectionMode: String, CaseIterable, Identifiable {
     }
 }
 
+struct ProjectSurfaceRecord: Identifiable {
+    let id: String
+    let name: String
+    let scope: String
+    let path: String
+    let target: String?
+    let systemImage: String
+}
+
 @MainActor
 final class IntrospectModel: ObservableObject {
     @Published var selectedSection: IntrospectSection? = .status
@@ -457,6 +581,8 @@ final class IntrospectModel: ObservableObject {
     @Published var wordProfileOK = false
     @Published var profileLastCommit = "none"
     @Published var lastCommandOutput = ""
+    @Published var promptSurfaces: [ProjectSurfaceRecord] = []
+    @Published var skillSurfaces: [ProjectSurfaceRecord] = []
 
     private let fileManager = FileManager.default
     private let repoURL: URL
@@ -470,6 +596,10 @@ final class IntrospectModel: ObservableObject {
         "retarded", "shitty", "stupid", "wtf"
     ]
     private var savedTriggerWords: [String] = []
+    private let skippedScanDirectories = Set([
+        ".build", ".cache", ".git", ".next", ".swiftpm", "DerivedData", "__pycache__",
+        "build", "cache", "dist", "node_modules", "plugins"
+    ])
 
     init() {
         homeURL = URL(fileURLWithPath: NSHomeDirectory())
@@ -550,6 +680,9 @@ final class IntrospectModel: ObservableObject {
         profileGitOK = fileManager.fileExists(atPath: profileURL.appendingPathComponent(".git").path)
         wordProfileOK = fileManager.fileExists(atPath: wordProfileURL.path)
         profileLastCommit = await gitOutput(["-C", profileURL.path, "log", "-1", "--oneline"]).trimmedOr("none")
+        let surfaces = scanProjectSurfaces()
+        promptSurfaces = surfaces.prompts
+        skillSurfaces = surfaces.skills
     }
 
     func applySystemPromptAndHooks() async {
@@ -644,6 +777,47 @@ final class IntrospectModel: ObservableObject {
         NSWorkspace.shared.open(profileURL)
     }
 
+    func openRepoFolder() async {
+        NSWorkspace.shared.open(repoURL)
+    }
+
+    func initializeCurrentProjectAgentFiles() async {
+        do {
+            let agentsURL = repoURL.appendingPathComponent("AGENTS.md")
+            if !fileManager.fileExists(atPath: agentsURL.path) {
+                try """
+                # AGENTS.md
+
+                ## Project Notes
+
+                - Add project-specific build, test, architecture, and agent behavior here.
+                - Keep user-wide rules in the global prompt; keep private local notes in `CLAUDE.local.md`.
+                """.write(to: agentsURL, atomically: true, encoding: .utf8)
+            }
+
+            let claudeURL = repoURL.appendingPathComponent("CLAUDE.md")
+            if !fileManager.fileExists(atPath: claudeURL.path) {
+                try """
+                @AGENTS.md
+
+                ## Claude Code
+
+                - Shared project instructions live in `AGENTS.md`.
+                - Add only Claude-specific project behavior below this line.
+                """.write(to: claudeURL, atomically: true, encoding: .utf8)
+            }
+
+            try fileManager.createDirectory(at: repoURL.appendingPathComponent(".agents/skills"), withIntermediateDirectories: true)
+            try fileManager.createDirectory(at: repoURL.appendingPathComponent(".claude/skills"), withIntermediateDirectories: true)
+            try fileManager.createDirectory(at: repoURL.appendingPathComponent(".claude/rules"), withIntermediateDirectories: true)
+            try ensureGitignoreEntry("CLAUDE.local.md")
+            lastCommandOutput = "Initialized project agent files in \(repoURL.path)."
+        } catch {
+            lastCommandOutput = "Failed to initialize project agent files: \(error)"
+        }
+        await refresh()
+    }
+
     private func commitProfileChanges(message: String) async {
         _ = await gitOutput(["-C", profileURL.path, "add", "."])
         let status = await gitOutput(["-C", profileURL.path, "status", "--porcelain"])
@@ -652,6 +826,196 @@ final class IntrospectModel: ObservableObject {
             return
         }
         lastCommandOutput = await gitOutput(["-C", profileURL.path, "commit", "-m", message])
+    }
+
+    private func scanProjectSurfaces() -> (prompts: [ProjectSurfaceRecord], skills: [ProjectSurfaceRecord]) {
+        var prompts: [ProjectSurfaceRecord] = []
+        var skills: [ProjectSurfaceRecord] = []
+        var visitedDirectories: Set<String> = []
+        var seenFiles: Set<String> = []
+        for root in scanRoots() where fileManager.fileExists(atPath: root.path) {
+            collectProjectSurfaces(
+                at: root.standardizedFileURL,
+                depth: 0,
+                maxDepth: 6,
+                prompts: &prompts,
+                skills: &skills,
+                visitedDirectories: &visitedDirectories,
+                seenFiles: &seenFiles
+            )
+        }
+        prompts.sort { $0.path.localizedStandardCompare($1.path) == .orderedAscending }
+        skills.sort { $0.path.localizedStandardCompare($1.path) == .orderedAscending }
+        return (prompts, skills)
+    }
+
+    private func scanRoots() -> [URL] {
+        [
+            repoURL,
+            homeURL.appendingPathComponent("Projects"),
+            homeURL.appendingPathComponent("Companion/Code"),
+            homeURL.appendingPathComponent("Documents/Codex"),
+            homeURL.appendingPathComponent(".codex"),
+            homeURL.appendingPathComponent(".claude")
+        ]
+    }
+
+    private func collectProjectSurfaces(
+        at directory: URL,
+        depth: Int,
+        maxDepth: Int,
+        prompts: inout [ProjectSurfaceRecord],
+        skills: inout [ProjectSurfaceRecord],
+        visitedDirectories: inout Set<String>,
+        seenFiles: inout Set<String>
+    ) {
+        guard depth <= maxDepth else { return }
+        let directoryPath = directory.standardizedFileURL.path
+        guard visitedDirectories.insert(directoryPath).inserted else { return }
+        guard let entries = try? fileManager.contentsOfDirectory(
+            at: directory,
+            includingPropertiesForKeys: [.isDirectoryKey, .isSymbolicLinkKey],
+            options: []
+        ) else {
+            return
+        }
+
+        for entry in entries {
+            let name = entry.lastPathComponent
+            let values = try? entry.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey])
+            let isDirectory = values?.isDirectory == true
+            let path = entry.standardizedFileURL.path
+
+            if isDirectory {
+                if skippedScanDirectories.contains(name) { continue }
+                collectProjectSurfaces(
+                    at: entry,
+                    depth: depth + 1,
+                    maxDepth: maxDepth,
+                    prompts: &prompts,
+                    skills: &skills,
+                    visitedDirectories: &visitedDirectories,
+                    seenFiles: &seenFiles
+                )
+                continue
+            }
+
+            guard seenFiles.insert(path).inserted else { continue }
+            if isAgentPromptFile(entry) {
+                prompts.append(surfaceRecord(for: entry, isSkill: false))
+            }
+            if isSkillFile(entry) {
+                skills.append(surfaceRecord(for: entry, isSkill: true))
+            }
+        }
+    }
+
+    private func isAgentPromptFile(_ url: URL) -> Bool {
+        let name = url.lastPathComponent
+        if ["AGENTS.md", "AGENTS.override.md", "CLAUDE.md", "CLAUDE.local.md"].contains(name) {
+            return true
+        }
+        return url.path.contains("/.claude/rules/") && name.hasSuffix(".md")
+    }
+
+    private func isSkillFile(_ url: URL) -> Bool {
+        url.lastPathComponent == "SKILL.md" && url.path.contains("/skills/")
+    }
+
+    private func surfaceRecord(for url: URL, isSkill: Bool) -> ProjectSurfaceRecord {
+        let path = url.standardizedFileURL.path
+        return ProjectSurfaceRecord(
+            id: path,
+            name: surfaceName(for: url, isSkill: isSkill),
+            scope: surfaceScope(for: url, isSkill: isSkill),
+            path: displayPath(url),
+            target: symlinkTarget(for: url),
+            systemImage: isSkill ? "hammer" : "doc.text"
+        )
+    }
+
+    private func surfaceName(for url: URL, isSkill: Bool) -> String {
+        if isSkill {
+            return url.deletingLastPathComponent().lastPathComponent
+        }
+        if url.path.contains("/.claude/rules/") {
+            return ".claude/rules/\(url.lastPathComponent)"
+        }
+        return url.lastPathComponent
+    }
+
+    private func surfaceScope(for url: URL, isSkill: Bool) -> String {
+        let path = url.standardizedFileURL.path
+        let homePath = homeURL.standardizedFileURL.path
+        if path.hasPrefix(homePath + "/.codex/skills/") {
+            return "Codex user skill"
+        }
+        if path.hasPrefix(homePath + "/.codex/") {
+            return url.lastPathComponent == "AGENTS.override.md" ? "Codex global override" : "Codex global"
+        }
+        if path.hasPrefix(homePath + "/.claude/skills/") {
+            return "Claude personal skill"
+        }
+        if path.hasPrefix(homePath + "/.claude/rules/") {
+            return "Claude user rule"
+        }
+        if path.hasPrefix(homePath + "/.claude/") {
+            return "Claude user"
+        }
+        if isSkill {
+            if path.contains("/.agents/skills/") { return "Codex project skill" }
+            if path.contains("/.claude/skills/") { return "Claude project skill" }
+            return "Repo skill"
+        }
+        if path.contains("/.claude/rules/") {
+            return "Claude project rule"
+        }
+        switch url.lastPathComponent {
+        case "AGENTS.override.md":
+            return "Codex project override"
+        case "AGENTS.md":
+            return "Codex project append"
+        case "CLAUDE.local.md":
+            return "Claude local append"
+        case "CLAUDE.md":
+            return "Claude project append"
+        default:
+            return "Agent file"
+        }
+    }
+
+    private func displayPath(_ url: URL) -> String {
+        let path = url.standardizedFileURL.path
+        let homePath = homeURL.standardizedFileURL.path
+        if path == homePath {
+            return "~"
+        }
+        if path.hasPrefix(homePath + "/") {
+            return "~" + String(path.dropFirst(homePath.count))
+        }
+        return path
+    }
+
+    private func symlinkTarget(for url: URL) -> String? {
+        guard let destination = try? fileManager.destinationOfSymbolicLink(atPath: url.path) else {
+            return nil
+        }
+        let targetURL: URL
+        if destination.hasPrefix("/") {
+            targetURL = URL(fileURLWithPath: destination)
+        } else {
+            targetURL = url.deletingLastPathComponent().appendingPathComponent(destination)
+        }
+        return displayPath(targetURL.standardizedFileURL)
+    }
+
+    private func ensureGitignoreEntry(_ entry: String) throws {
+        let gitignoreURL = repoURL.appendingPathComponent(".gitignore")
+        let current = (try? String(contentsOf: gitignoreURL, encoding: .utf8)) ?? ""
+        let lines = current.split(whereSeparator: \.isNewline).map(String.init)
+        guard !lines.contains(entry) else { return }
+        let prefix = current.isEmpty || current.hasSuffix("\n") ? current : current + "\n"
+        try (prefix + entry + "\n").write(to: gitignoreURL, atomically: true, encoding: .utf8)
     }
 
     private func loadWordProfile() {

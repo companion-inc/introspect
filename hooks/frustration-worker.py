@@ -348,13 +348,17 @@ Skills directory:
 Workflow:
 1. Read the recent turns for the relevant transcript/session and identify the agent behavior that caused the frustration, not the wording of the user's message.
 2. Run {REPO}/hooks/frustration-stats.sh and compare the current prompt version against prior versions.
-3. Classify the change target as exactly one of: no_change, core_prompt, skill_new, skill_update, skill_prune.
+3. Classify the change target as exactly one of: no_change, core_prompt, project_prompt, profile_memory, skill_new, skill_update, project_skill_new, project_skill_update, skill_prune.
 4. Use core_prompt only for an always-loaded invariant that should apply across nearly every task. Before editing AGENTS.md, read skills/agent-md-creator/SKILL.md for placement and skills/writing-agent-prompt/SKILL.md for wording, then verify with a realistic response probe drawn from the failure transcript.
-5. Use skill_new or skill_update for scoped workflows, domains, repeated failure shapes, or instructions that should load only in relevant situations. Use skill_prune for stale, duplicated, overbroad, unsupported, or harmful skills. Before any skill operation, read skills/skill-creator/SKILL.md, its source map, the skills index, and the closest existing skill. Prefer updating or pruning a close skill over creating a duplicate.
-6. For skill changes, write or edit a self-contained skills/<slug>/SKILL.md in this repo, update skills/index.json, and run INTROSPECT_SKILLS_DIR={SKILLS_DIR} {REPO}/scripts/validate-skills.py. For skill_prune, prefer marking status deprecated or narrowing activation before deleting files.
-7. If the frustration rate rose after a recent AGENTS.md change, prefer reverting or narrowing that change over adding another rule.
-8. Commit with a behavioral message and push.
-9. If no change is justified, make no file changes and say why in the log output.
+5. Use project_prompt for repo-specific behavior. Create or update the target repo's AGENTS.md for shared guidance, create CLAUDE.md as @AGENTS.md plus Claude-only additions when Claude should read it, and use CLAUDE.local.md for private project notes.
+6. Use profile_memory for durable facts, preferences, user vocabulary, or machine/project state that should be remembered but should not change agent behavior globally. Write it under ~/.introspect/profile only when it is directly supported by the transcript.
+7. Use skill_new or skill_update only for repeatable procedures, tool workflows, domain references, scripts, or assets that future agents should load on demand. Do not create a skill from one noisy event unless it captures a recurring workflow or a corrected procedure that will likely repeat.
+8. Prefer updating an existing umbrella skill or support file over creating a narrow duplicate. Use project_skill_new or project_skill_update when the workflow belongs to one codebase; write Codex project skills under .agents/skills/<slug>/SKILL.md and Claude project skills under .claude/skills/<slug>/SKILL.md in that target repo.
+9. Use skill_prune for stale, duplicated, overbroad, unsupported, or harmful skills. Before any skill operation, read skills/skill-creator/SKILL.md, its source map, the skills index, and the closest existing skill. Prefer updating or pruning a close skill over creating a duplicate.
+10. For user-wide skill changes, write or edit a self-contained skills/<slug>/SKILL.md in this repo, update skills/index.json, and run INTROSPECT_SKILLS_DIR={SKILLS_DIR} {REPO}/scripts/validate-skills.py. For project skills, validate the SKILL.md frontmatter and verify the relevant agent can discover it. For skill_prune, prefer marking status deprecated or narrowing activation before deleting files.
+11. If the frustration rate rose after a recent AGENTS.md change, prefer reverting or narrowing that change over adding another rule.
+12. Commit with a behavioral message and push.
+13. If no change is justified, make no file changes and say why in the log output.
 
 Constraints:
 - One batch, one decision. Do not spawn more agents.
@@ -392,7 +396,7 @@ def invoke_reflector(events: list[dict]) -> int:
             "Bash(git *)",
             "Bash(*frustration-stats.sh)",
             "Bash(*validate-skills.py)",
-            "Bash(mkdir -p skills/*)",
+            "Bash(mkdir -p *)",
         ]
     )
     env = os.environ.copy()

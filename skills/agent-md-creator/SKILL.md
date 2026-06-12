@@ -18,6 +18,15 @@ A prompt is **soft conditioning on a probability distribution, not control.** An
 
 If a rule must hold 100% of the time, it is a hook, not a prompt line.
 
+## Scope map — global, project, override, local
+
+- **Codex global:** `~/.codex/AGENTS.md`, or `~/.codex/AGENTS.override.md` when the entire global file must be replaced. Use only for cross-project invariants.
+- **Codex project:** `AGENTS.md` in the repo root or nested directory. Codex concatenates global, repo, and nested files; later/closer files win on conflicts.
+- **Codex override:** `AGENTS.override.md` replaces the regular `AGENTS.md` for that directory level. Use it only for a subtree that must not inherit that level's normal guidance.
+- **Claude project:** Claude reads `CLAUDE.md`, not `AGENTS.md`; create `CLAUDE.md` with `@AGENTS.md` when shared repo guidance should load in Claude, then append Claude-only additions below it.
+- **Claude local:** `CLAUDE.local.md` is private project-specific guidance and should be gitignored.
+- **Project skills:** Codex repo skills live under `.agents/skills/<skill>/SKILL.md`; Claude project skills live under `.claude/skills/<skill>/SKILL.md`. Use them for codebase-specific workflows that should not follow the user everywhere.
+
 ## What content earns a line
 
 Include only what the agent can't infer and will otherwise get wrong: commands it can't guess, conventions that differ from defaults, gotchas, behavioral rules learned from real failures. Exclude what's readable from the code, standard conventions the model already knows, fast-changing facts, and reference docs (link instead). The test for every candidate line is the same per-line test below.

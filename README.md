@@ -27,6 +27,8 @@ The app can:
 - install hooks in `immediate`, `nightly`, or `off` mode
 - remove hooks without deleting the prompt links
 - initialize `~/.introspect/profile` as a local Git repo
+- show discovered global/project agent files and project skills
+- initialize a project's `AGENTS.md`, `CLAUDE.md`, `.agents/skills/`, `.claude/skills/`, and `.claude/rules/` surface
 - edit the exact frustration trigger word list
 - show queue, prompt-link, hook, LaunchAgent, and last-run status
 
@@ -72,9 +74,34 @@ INTROSPECT_SKILLS_DIR="$PWD/skills" ./scripts/validate-skills.py
 4. If the prompt contains an explicit active frustration word, the hook appends it to `feedback/frustration-queue.jsonl`.
 5. In immediate mode, the hook kicks `hooks/frustration-worker.py --kick`. In nightly mode, the LaunchAgent runs `hooks/frustration-worker.py --nightly`.
 6. The worker holds a lock, batches nearby events, applies cooldowns, and runs at most one reflector process.
-7. The reflector inspects the transcript and stats, then chooses one target: `no_change`, `core_prompt`, `skill_new`, `skill_update`, or `skill_prune`.
+7. The reflector inspects the transcript and stats, then chooses one target: `no_change`, `core_prompt`, `project_prompt`, `profile_memory`, `skill_new`, `skill_update`, `project_skill_new`, `project_skill_update`, or `skill_prune`.
 
 When a real reflector process starts, the worker also sends a macOS notification titled `Introspect`. Set `INTROSPECT_NOTIFY=0` in the hook environment to disable the popup.
+
+## Agent File Scopes
+
+Introspect treats agent memory as a routing problem, not one giant prompt.
+
+- Global invariants belong in `~/.codex/AGENTS.md` or the linked global Claude/Codex prompt this repo installs.
+- Project-wide Codex guidance belongs in the repo's `AGENTS.md`; nested `AGENTS.md` files append narrower instructions, with closer files winning on conflicts.
+- `AGENTS.override.md` is different: it replaces the regular `AGENTS.md` at that directory level, so use it only when a subtree should override that layer instead of appending to it.
+- Claude reads `CLAUDE.md` / `.claude/CLAUDE.md`, not `AGENTS.md` directly, so project `CLAUDE.md` should import shared guidance with `@AGENTS.md` before Claude-only additions.
+- Private project notes belong in `CLAUDE.local.md` and should stay gitignored.
+- Project skills belong beside the codebase: `.agents/skills/<skill>/SKILL.md` for Codex-style project skills and `.claude/skills/<skill>/SKILL.md` for Claude project skills.
+
+References used for this hierarchy: [OpenAI Codex AGENTS.md](https://developers.openai.com/codex/guides/agents-md), [AGENTS.md](https://agents.md/), [Claude memory](https://code.claude.com/docs/en/memory), and [Claude skills](https://code.claude.com/docs/en/skills).
+
+## Learning Layers
+
+Self-evolution should not mean "append everything to the system prompt."
+
+- System prompt: durable behavior that should shape nearly every task.
+- Project prompt: repo-specific facts, decisions, and local working rules.
+- Profile memory: durable user preferences, vocabulary, and local machine facts.
+- Skills: repeatable procedures, tool workflows, references, scripts, and assets loaded on demand.
+- Training/adapters: later behavior work only after enough examples and eval gates exist.
+
+Hermes was reviewed as the main reference for this split. The conclusion is in `docs/hermes-self-evolution-review.md`: use its layered memory/skills/curator shape, but do not copy its eager default skill-writing bias or promote any learned behavior without evals and approval/staging.
 
 ## Files
 
@@ -88,6 +115,7 @@ When a real reflector process starts, the worker also sends a macOS notification
 - `hooks/frustration-worker.py`: locked background batch worker.
 - `hooks/frustration-stats.sh`: feedback scoreboard by prompt commit.
 - `docs/frustration-tripwires.md`: human-readable list of active and ignored tripwire words.
+- `docs/hermes-self-evolution-review.md`: source-backed review of Hermes memory, skill, curator, and training loops.
 - `scripts/install-hooks.sh`: installs/uninstalls prompt links and hooks.
 - `scripts/build-introspect-app.sh`: builds `.build/Introspect.app`.
 - `scripts/validate-skills.py`: validates the skill index and skill files.
