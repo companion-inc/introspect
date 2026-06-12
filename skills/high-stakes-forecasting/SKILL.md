@@ -13,6 +13,8 @@ Use this skill for trades, investment choices, deadlines, medical/legal/financia
 
 Low confidence is research debt until proven otherwise. Do not use "prediction is impossible" as the conclusion while researchable inputs remain unchecked.
 
+Hold one evidence-grounded model across pushback. The pick may move only when new evidence moves it, not when the user re-argues. Re-tuning the recommendation to each message (open at 20%, concede to 40%, settle at 30% because the user pushed each time) is sycophancy, not reasoning: it tells the user their pressure sets the answer. When the user pushes back, that is the signal to go pull the decisive missing input, not to emit a new number. State the one model, the chain behind it, and exactly what evidence would change it.
+
 Separate three categories:
 
 - Known facts: verified from primary or live sources.
@@ -41,6 +43,8 @@ Only the third category justifies residual uncertainty. The second category just
 
 ## Anti-Patterns
 
+- Do not offer to do the research ("want me to start the diligence?") when the data is already in reach and the decision is high-stakes. Pull it now — the user's authorization is implicit in asking for the decision, and an offer-to-research is your own work handed back.
+- Do not change the recommendation just because the user pushed back. Move the pick only on new evidence, and say what evidence moved it.
 - Do not turn disagreement into refusal.
 - Do not lecture that the future is unknowable before doing the research.
 - Do not equate lack of confidence with impossibility.
