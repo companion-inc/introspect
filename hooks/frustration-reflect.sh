@@ -39,8 +39,9 @@ except Exception:
     sys.exit(0)
 
 prompt = data.get("prompt") or ""
-# Exact words only. No prefix matching and no phrase triggers; keep this as a
-# literal recall list so ordinary words do not trip the hook accidentally.
+# Exact words only. No prefix matching and no phrase triggers. The bare word
+# "shit" is intentionally excluded because this user often uses it as filler
+# meaning "stuff"; stronger compounds like "bullshit" and "shitty" still count.
 BAD_WORDS = {
     "arse",
     "ass",
@@ -81,7 +82,6 @@ BAD_WORDS = {
     "retard",
     "retarded",
     "retards",
-    "shit",
     "shitty",
     "stupid",
     "wtf",

@@ -31,6 +31,8 @@ readlink ~/.claude/CLAUDE.md
 readlink ~/.codex/AGENTS.md
 rg "frustration-reflect.sh" ~/.claude/settings.json ~/.codex/hooks.json
 AGENTS_MD_SKILLS_DIR="$PWD/skills" ./scripts/validate-skills.py
+./scripts/test-frustration-tripwire.py
+./scripts/agent-loop-status.sh
 ```
 
 ## How It Works
@@ -53,4 +55,8 @@ AGENTS_MD_SKILLS_DIR="$PWD/skills" ./scripts/validate-skills.py
 - `hooks/frustration-stats.sh`: feedback scoreboard by prompt commit.
 - `scripts/install-hooks.sh`: installs/uninstalls prompt links and hooks.
 - `scripts/validate-skills.py`: validates the skill index and skill files.
+- `scripts/test-frustration-tripwire.py`: regression test for the foreground frustration detector.
+- `scripts/agent-loop-status.sh`: health check for links, hooks, skills, queue, and recent reflector runs.
 - `feedback/`: ignored local queue, stats, and reflector logs.
+
+The exact word `shit` is ignored by the foreground tripwire because it is often casual filler in this user's messages. Stronger exact words and compounds such as `fuck`, `bullshit`, and `shitty` still trigger the background reflector.
