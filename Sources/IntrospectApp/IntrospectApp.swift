@@ -2,21 +2,48 @@ import AppKit
 import SwiftUI
 
 @main
-struct IntrospectApplication: App {
-    @StateObject private var model = IntrospectModel()
+@MainActor
+final class IntrospectApplication: NSObject, NSApplicationDelegate {
+    private let model = IntrospectModel()
+    private var window: NSWindow?
 
-    var body: some Scene {
-        MenuBarExtra("Introspect", systemImage: "brain.head.profile") {
-            MenuContent(model: model)
-        }
-        .menuBarExtraStyle(.menu)
+    static func main() {
+        let app = NSApplication.shared
+        let delegate = IntrospectApplication()
+        app.delegate = delegate
+        app.setActivationPolicy(.regular)
+        app.run()
+    }
 
-        WindowGroup("Introspect") {
-            ContentView(model: model)
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        showWindow()
+        Task { await model.refresh() }
+    }
+
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        showWindow()
+        return true
+    }
+
+    private func showWindow() {
+        if window == nil {
+            let content = ContentView(model: model)
                 .frame(minWidth: 840, minHeight: 640)
-                .task { await model.refresh() }
+            let hostingView = NSHostingView(rootView: content)
+            let newWindow = NSWindow(
+                contentRect: NSRect(x: 0, y: 0, width: 980, height: 720),
+                styleMask: [.titled, .closable, .miniaturizable, .resizable],
+                backing: .buffered,
+                defer: false
+            )
+            newWindow.title = "Introspect"
+            newWindow.contentView = hostingView
+            newWindow.isReleasedWhenClosed = false
+            newWindow.center()
+            window = newWindow
         }
-        .windowResizability(.contentMinSize)
+        window?.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
     }
 }
 
