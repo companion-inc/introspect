@@ -23,26 +23,19 @@ The foreground hook uses exact lowercase word matches only. No prefixes, no wild
 - `fuck`
 - `fucked`
 - `fucker`
-- `fuckers`
 - `fuckin`
 - `fucking`
-- `fucks`
 - `goddamn`
+- `hell`
 - `idiot`
-- `idiots`
 - `mf`
 - `moron`
-- `morons`
 - `motherfucker`
-- `motherfuckers`
 - `motherfucking`
 - `nigga`
-- `niggas`
 - `nigger`
-- `niggers`
 - `retard`
 - `retarded`
-- `retards`
 - `shitty`
 - `stupid`
 - `wtf`
@@ -50,5 +43,6 @@ The foreground hook uses exact lowercase word matches only. No prefixes, no wild
 ## Examples
 
 - `what the fuck is going on` -> triggers on `fuck`
+- `why the hell would it do that` -> triggers on `hell`
 - `this is bullshit` -> triggers on `bullshit`
 - `that behavior is shitty` -> triggers on `shitty`

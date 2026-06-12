@@ -89,6 +89,8 @@ def main() -> int:
         ("same with shit locally in companion and stuff", False, None),
         ("holy shit can you open this file", False, None),
         ("this shitshow should not match a prefix", False, None),
+        ("you idiots should not trigger a plural match", False, None),
+        ("why the hell would it do that", True, "hell"),
         ("what the fuck is going on", True, "fuck"),
         ("this is bullshit", True, "bullshit"),
         ("that behavior is shitty", True, "shitty"),
