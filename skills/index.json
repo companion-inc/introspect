@@ -186,6 +186,23 @@
         "user points at a chat thread or clipboard history for a credential",
         "about to declare a credential missing that a teammate may have shared"
       ]
+    },
+    {
+      "id": "browser-form-automation",
+      "path": "skills/browser-form-automation/SKILL.md",
+      "status": "active",
+      "tier": "domain-workflow",
+      "description": "Fill and edit authenticated web-console forms through semantic browser controls, Playwright/DOM locators, or form APIs instead of repeated coordinate clicks and blind typing when focus is unreliable.",
+      "activation_signals": [
+        "filling an authenticated browser or Chrome form",
+        "editing Google Cloud Console OAuth client settings",
+        "editing Infisical or secret-manager settings in the web UI",
+        "browser typing is not sticking or focus is missed",
+        "cmd+a selects the page instead of an input",
+        "coordinate clicks are missing form fields",
+        "drive a multi-field admin console form",
+        "set origins redirect URIs secrets or settings in a browser"
+      ]
     }
   ]
 }
