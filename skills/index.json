@@ -165,7 +165,9 @@
         "an env var like SENTRY_AUTH_TOKEN is unset",
         "need an auth token to deploy or call a service",
         "calling a provider API like Sentry or Supabase programmatically",
-        "about to read or decrypt browser cookies to authenticate an API"
+        "about to read or decrypt browser cookies to authenticate an API",
+        "user points at a chat thread or clipboard history for a credential",
+        "about to declare a credential missing that a teammate may have shared"
       ]
     }
   ]
