@@ -103,6 +103,22 @@
       ]
     },
     {
+      "id": "billing-economics-source",
+      "path": "skills/billing-economics-source/SKILL.md",
+      "status": "active",
+      "tier": "domain-workflow",
+      "description": "Keep Companion credit markup, provider-cost-to-credit conversion, ledger costMicroCents, Autumn credit tracking, and usage UI display math tied to src/lib/billing/economics.ts instead of duplicating billing math in money helpers or UI code.",
+      "activation_signals": [
+        "changing CREDIT_MARKUP or global usage markup",
+        "provider cost to credits conversion",
+        "editing billing economics money helpers or rate math",
+        "usage_events costMicroCents or Autumn credits tracking",
+        "usage UI credit display or raw provider cost display math",
+        "top-up price auto-reload or credit conversion",
+        "global 1.25x or 1.5x pricing behavior"
+      ]
+    },
+    {
       "id": "product-surface-polish",
       "path": "skills/product-surface-polish/SKILL.md",
       "status": "active",
