@@ -138,6 +138,21 @@
       ]
     },
     {
+      "id": "obsidian-vault-handoff",
+      "path": "skills/obsidian-vault-handoff/SKILL.md",
+      "status": "active",
+      "tier": "domain-workflow",
+      "description": "Register a folder as an Obsidian vault in ~/Library/Application Support/obsidian/obsidian.json before sending the user an obsidian:// URI, and verify Obsidian actually opened it before claiming the handoff worked.",
+      "activation_signals": [
+        "about to send the user an obsidian:// open URL",
+        "Unable to find a vault for the URL",
+        "wrote markdown intended for Obsidian into a new folder",
+        "pre-created a .obsidian directory in a project folder",
+        "handing off a generated vault on macOS",
+        "obsidian://open?vault= or obsidian://open?path= failed"
+      ]
+    },
+    {
       "id": "local-secret-retrieval",
       "path": "skills/local-secret-retrieval/SKILL.md",
       "status": "active",
