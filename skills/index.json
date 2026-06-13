@@ -92,13 +92,14 @@
       "path": "skills/tiered-plan-limits/SKILL.md",
       "status": "active",
       "tier": "domain-workflow",
-      "description": "Derive per-plan caps and quotas from the existing price/credit ladder in PLAN_TIERS instead of inventing round numbers that break the tier multiple.",
+      "description": "Derive per-plan caps, quotas, and compute sizes from the existing price/credit ladder in PLAN_TIERS / COMPUTER_RUNTIME_TIERS instead of inventing round numbers or evenly-doubling tiers that break the price multiple.",
       "activation_signals": [
-        "editing PLAN_TIERS or billing constants",
+        "editing PLAN_TIERS COMPUTER_RUNTIME_TIERS or billing constants",
         "adding a per-plan cap quota or limit",
+        "sizing per-plan compute vCPU RAM or sandbox template",
         "building a plan gate for a feature",
         "picking automation storage or rate limits per tier",
-        "pricing tier multiple looks off"
+        "pricing tier multiple looks off or doubles every tier"
       ]
     },
     {

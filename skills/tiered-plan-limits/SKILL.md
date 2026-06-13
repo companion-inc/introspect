@@ -1,6 +1,6 @@
 ---
 name: tiered-plan-limits
-description: Set per-plan caps, quotas, and limits in Companion's billing tiers by deriving the numbers from the existing price/credit ladder, not by inventing round numbers. Load when adding or changing a per-tier limit (automations cap, storage, rate limit, feature quota) or editing PLAN_TIERS in src/lib/billing/constants.ts. Not for one-off non-tiered constants.
+description: Set per-plan caps, quotas, limits, and compute sizes in Companion's billing tiers by deriving the numbers from the existing price/credit ladder, not by inventing round or evenly-doubling numbers. Load when adding or changing a per-tier quantity (automations cap, storage, rate limit, feature quota, or per-plan compute/runtime sizing like vCPU/RAM or sandbox template) or editing PLAN_TIERS / COMPUTER_RUNTIME_TIERS in src/lib/billing/constants.ts. Not for one-off non-tiered constants.
 ---
 
 # Tiered plan limits
@@ -17,9 +17,11 @@ multiple off" — because every other field scales 5× then 2×, but 25 is 2.5×
 
 ## Activation boundary
 
-Load when: adding or changing a field in `PLAN_TIERS`
-(`src/lib/billing/constants.ts`); building a plan gate; picking a per-plan cap,
-quota, storage size, rate limit, or feature count; reviewing such a change.
+Load when: adding or changing a field in `PLAN_TIERS` or
+`COMPUTER_RUNTIME_TIERS` (`src/lib/billing/constants.ts`); building a plan gate;
+picking a per-plan cap, quota, storage size, rate limit, feature count, or
+compute/runtime size (vCPU, RAM, sandbox/E2B template per plan); reviewing such
+a change.
 
 Near-misses (do not load): a single non-tiered constant; pricing copy with no
 quantitative tier ladder; a flat limit that is identical across all plans.
@@ -47,6 +49,13 @@ quantitative tier ladder; a flat limit that is identical across all plans.
 
 - Roundness is a trap. 10 / 25 / 100 reads as a clean ladder but isn't; anchor
   on the *ratio* the other fields use, not on numbers ending in 0 or 5.
+- Evenly doubling every tier is the same trap in disguise. A neat 2×/2× ladder
+  (Plus 2 vCPU / 2 GiB, Pro 4 / 4, Max 8 / 8) is *not* the price/credit ladder,
+  which is 5×/2×. Compute and hardware may legitimately follow a flatter curve
+  than price — but that is a deviating curve, so state it and confirm with the
+  user before shipping; do not present the doubled ladder as the obvious plan.
+  Shipping `COMPUTER_RUNTIME_TIERS` at 2/4/8 vCPU drew "really? u double for
+  each thats retarded?" and was re-sized to 1 / 2 / 4 vCPU.
 - Paused / inactive items count toward caps — pausing must not free a slot
   (see the `maxAutomations` comment in `PlanTierSpec`).
 - `emailStorageMb` does not scale uniformly (1000 / 25000 / 100000) — confirm
@@ -64,5 +73,9 @@ quantitative tier ladder; a flat limit that is identical across all plans.
 
 - `src/lib/billing/constants.ts:71-107` — `PlanTierSpec`, `PLAN_TIERS`,
   `maxAutomationsForPlan`, `baseTierFor`.
-- Frustration transcript c11d13a6 (2026-06-11): shipped 10/25/100, user flagged
+- `src/lib/billing/constants.ts:107-159` — `COMPUTER_RUNTIME_TIERS`,
+  `computerRuntimeTierForPlan` (per-plan vCPU/RAM and sandbox template).
+- Trigger transcript c11d13a6 (2026-06-11): shipped 10/25/100, user flagged
   the broken multiple; corrected to 10/50/100.
+- Trigger transcript 019ec299 (2026-06-13): sized per-plan computer runtime as a
+  neat 2/4/8 vCPU (2×/2×) ladder; user flagged the doubling, re-sized to 1/2/4.
