@@ -45,7 +45,7 @@
 
 ## Verify before you claim done
 
-- Prefer a deterministic check — a test or local harness — over a flaky live surface, then prove it the way a real user would: drive the actual flow end to end. A green test or a `200` isn't proof the experience works. Switch approaches after two failures.
+- Prefer a deterministic check — a test or local harness — over a flaky live surface, then prove it the way a real user would: drive the actual flow end to end. A green test, a `200`, or lint/typecheck passing are not proof the feature works — for feature changes, test with the actual environment the user named (browser, staging, specific setup, etc.). Switch approaches after two failures.
 - Let CI/CD build and deploy; nothing is done until the build is green.
 - Output the real measurement, not a proxy — the actual data, or what's blocking it.
 - A summary is not completion: produce the artifact, change, or deploy that was asked for.
