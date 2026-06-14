@@ -60,11 +60,11 @@
       "path": "skills/high-stakes-forecasting/SKILL.md",
       "status": "active",
       "tier": "domain-workflow",
-      "description": "Forecasting and decision support for trades, founder/hiring/equity grants, deadlines, and other irreversible choices where shallow uncertainty language or offering to research instead of doing it would be harmful.",
+      "description": "Forecasting and decision support for trades, founder/hiring/equity grants, deadlines, and other irreversible choices where weak-model language or offering to research instead of building the predictive model would be harmful.",
       "activation_signals": [
         "trade decision",
         "investment forecast",
-        "prediction under uncertainty",
+        "predictive world model",
         "missing research",
         "high consequence recommendation",
         "cofounder or early-hire equity split",
