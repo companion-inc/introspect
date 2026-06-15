@@ -4,7 +4,7 @@
 Codex command hooks can be skipped when a changed hook has not been trusted yet
 or when an already-open app session has not reloaded hook config. This scanner
 uses Codex's own JSONL session files as the second signal path, then feeds the
-same frustration queue handled by frustration-worker.py.
+same trigger queue handled by trigger-worker.py.
 """
 
 from __future__ import annotations
@@ -23,19 +23,19 @@ from pathlib import Path
 from typing import Any
 
 
-REPO = Path(os.path.expanduser(os.environ.get("INTROSPECT_REPO", "~/Projects/introspect")))
+REPO = Path(os.path.expanduser(os.environ.get("INTROSPECT_REPO", "~/Companion/Code/introspect")))
 FEEDBACK_DIR = Path(
     os.path.expanduser(os.environ.get("INTROSPECT_FEEDBACK_DIR", str(REPO / "feedback")))
 )
 EVENTS = FEEDBACK_DIR / "events.jsonl"
-QUEUE = FEEDBACK_DIR / "frustration-queue.jsonl"
+QUEUE = FEEDBACK_DIR / "trigger-queue.jsonl"
 STATE = FEEDBACK_DIR / "codex-transcript-scan-state.json"
-WORKER = REPO / "hooks" / "frustration-worker.py"
-HOOK = REPO / "hooks" / "frustration-reflect.sh"
+WORKER = REPO / "hooks" / "trigger-worker.py"
+HOOK = REPO / "hooks" / "trigger-reflect.sh"
 PROFILE_DIR = Path(
     os.path.expanduser(os.environ.get("INTROSPECT_PROFILE_DIR") or "~/.introspect/profile")
 )
-PROFILE_FILE = PROFILE_DIR / "frustration-words.json"
+PROFILE_FILE = PROFILE_DIR / "trigger-words.json"
 CODEX_SESSIONS_DIR = Path(
     os.path.expanduser(os.environ.get("INTROSPECT_CODEX_SESSIONS_DIR", "~/.codex/sessions"))
 )
@@ -96,10 +96,10 @@ def normalize_words(values: object) -> set[str]:
     return words
 
 
-def load_default_bad_words() -> set[str]:
+def load_default_trigger_words() -> set[str]:
     try:
         text = HOOK.read_text()
-        match = re.search(r"DEFAULT_BAD_WORDS = (\{.*?\})", text, flags=re.S)
+        match = re.search(r"DEFAULT_TRIGGER_WORDS = (\{.*?\})", text, flags=re.S)
         if match:
             parsed = ast.literal_eval(match.group(1))
             if isinstance(parsed, set):
@@ -130,8 +130,8 @@ def load_default_bad_words() -> set[str]:
     }
 
 
-def active_bad_words() -> set[str]:
-    words = load_default_bad_words()
+def active_trigger_words() -> set[str]:
+    words = load_default_trigger_words()
     try:
         data = json.loads(PROFILE_FILE.read_text())
     except Exception:
@@ -184,6 +184,7 @@ def is_codex_control_message(prompt: str) -> bool:
         stripped.startswith("# AGENTS.md instructions for ")
         or stripped.startswith("<codex_internal_context ")
         or stripped.startswith("<turn_aborted>")
+        or stripped.startswith("You are the Introspect trigger reflector.")
     )
 
 
@@ -247,7 +248,7 @@ def scan_file(
 ) -> tuple[int, int, list[dict]]:
     session_id, cwd = session_metadata(path)
     new_events = 0
-    frustrated_events = 0
+    triggered_events = 0
     queued: list[dict] = []
 
     try:
@@ -285,7 +286,7 @@ def scan_file(
             "observed_at": iso_now(),
             "source": "codex_transcript_scan",
             "version": version,
-            "frustrated": bool(matches),
+            "triggered": bool(matches),
             "session_id": session_id,
             "cwd": cwd,
             "transcript_path": str(path),
@@ -298,14 +299,14 @@ def scan_file(
             queued_event = dict(event)
             queued_event["prompt"] = prompt[:4000]
             queued.append(queued_event)
-            frustrated_events += 1
+            triggered_events += 1
 
         if write_events:
             append_json(EVENTS, event)
         processed[key] = iso_now()
         new_events += 1
 
-    return new_events, frustrated_events, queued
+    return new_events, triggered_events, queued
 
 
 def kick_worker() -> None:
@@ -351,18 +352,18 @@ def main() -> int:
     if not isinstance(processed, dict):
         processed = {}
 
-    words = active_bad_words()
+    words = active_trigger_words()
     version = git_version()
     cutoff_ts = utc_now() - dt.timedelta(minutes=max(args.since_minutes, 1))
     files = candidate_files(args.since_minutes)
     new_events = 0
-    frustrated_events = 0
+    triggered_events = 0
     queued_events: list[dict] = []
 
     if args.dry_run:
         dry_processed = dict(processed)
         for path in files:
-            new_count, frustrated_count, queued = scan_file(
+            new_count, triggered_count, queued = scan_file(
                 path,
                 dry_processed,
                 words,
@@ -371,17 +372,17 @@ def main() -> int:
                 write_events=False,
             )
             new_events += new_count
-            frustrated_events += frustrated_count
+            triggered_events += triggered_count
             queued_events.extend(queued)
         print(
             "codex-transcript-scan: "
-            f"files={len(files)} new_events={new_events} frustrated={frustrated_events} "
+            f"files={len(files)} new_events={new_events} triggered={triggered_events} "
             f"queued={len(queued_events)} dry_run=True"
         )
         return 0
 
     for path in files:
-        new_count, frustrated_count, queued = scan_file(
+        new_count, triggered_count, queued = scan_file(
             path,
             processed,
             words,
@@ -390,7 +391,7 @@ def main() -> int:
             write_events=True,
         )
         new_events += new_count
-        frustrated_events += frustrated_count
+        triggered_events += triggered_count
         queued_events.extend(queued)
 
     if queued_events and REFLECT_MODE != "off":
@@ -403,12 +404,12 @@ def main() -> int:
     state["last_scan_at"] = iso_now()
     state["last_scan_files"] = len(files)
     state["last_new_events"] = new_events
-    state["last_frustrated_events"] = frustrated_events
+    state["last_triggered_events"] = triggered_events
     write_json(STATE, state)
 
     print(
         "codex-transcript-scan: "
-        f"files={len(files)} new_events={new_events} frustrated={frustrated_events} "
+        f"files={len(files)} new_events={new_events} triggered={triggered_events} "
         f"queued={len(queued_events) if REFLECT_MODE != 'off' else 0}"
     )
     return 0

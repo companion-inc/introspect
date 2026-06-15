@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""Regression tests for the foreground frustration tripwire."""
+"""Regression tests for foreground trigger-word detection."""
 
 from __future__ import annotations
 
 import json
+import importlib.util
 import os
 import subprocess
 import sys
@@ -13,8 +14,25 @@ from pathlib import Path
 
 
 REPO = Path(__file__).resolve().parents[1]
-HOOK = REPO / "hooks" / "frustration-reflect.sh"
+HOOK = REPO / "hooks" / "trigger-reflect.sh"
 SCANNER = REPO / "hooks" / "codex-transcript-scan.py"
+WORKER = REPO / "hooks" / "trigger-worker.py"
+
+
+def load_worker_module(name: str, env_updates: dict[str, str] | None = None):
+    old_env = os.environ.copy()
+    try:
+        if env_updates:
+            os.environ.update(env_updates)
+        spec = importlib.util.spec_from_file_location(name, WORKER)
+        if spec is None or spec.loader is None:
+            raise AssertionError("could not load trigger-worker.py")
+        worker = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(worker)
+        return worker
+    finally:
+        os.environ.clear()
+        os.environ.update(old_env)
 
 
 def read_jsonl(path: Path) -> list[dict]:
@@ -33,7 +51,7 @@ def run_case(
     expected_match: str | None = None,
     reflect_mode: str = "immediate",
 ) -> None:
-    with tempfile.TemporaryDirectory(prefix="agent-loop-tripwire-") as tmp_raw:
+    with tempfile.TemporaryDirectory(prefix="agent-loop-trigger-") as tmp_raw:
         tmp = Path(tmp_raw)
         env = os.environ.copy()
         env.update(
@@ -42,9 +60,9 @@ def run_case(
                 "INTROSPECT_PROMPT": str(REPO / "AGENTS.md"),
                 "INTROSPECT_SKILLS_DIR": str(REPO / "skills"),
                 "INTROSPECT_FEEDBACK_DIR": str(tmp),
-                "FRUSTRATION_REFLECTOR_DRY_RUN": "1",
-                "FRUSTRATION_DEBOUNCE_SECONDS": "0",
-                "FRUSTRATION_DISABLE_SCHEDULE": "1",
+                "TRIGGER_REFLECTOR_DRY_RUN": "1",
+                "TRIGGER_DEBOUNCE_SECONDS": "0",
+                "TRIGGER_DISABLE_SCHEDULE": "1",
             }
         )
         if reflect_mode:
@@ -53,7 +71,7 @@ def run_case(
             env.pop("INTROSPECT_REFLECT_MODE", None)
         payload = {
             "prompt": prompt,
-            "session_id": "tripwire-test",
+            "session_id": "trigger-test",
             "cwd": str(REPO),
             "transcript_path": "",
         }
@@ -71,8 +89,8 @@ def run_case(
         if len(events) != 1:
             raise AssertionError(f"{prompt!r}: expected exactly one logged event, got {len(events)}")
         event = events[0]
-        if bool(event.get("frustrated")) != should_trigger:
-            raise AssertionError(f"{prompt!r}: frustrated={event.get('frustrated')} expected {should_trigger}")
+        if bool(event.get("triggered")) != should_trigger:
+            raise AssertionError(f"{prompt!r}: triggered={event.get('triggered')} expected {should_trigger}")
 
         if expected_match and expected_match not in event.get("matched", []):
             raise AssertionError(f"{prompt!r}: missing expected match {expected_match!r} in {event.get('matched')}")
@@ -88,14 +106,26 @@ def run_case(
         if should_trigger:
             if not batches:
                 raise AssertionError(f"{prompt!r}: expected a dry-run reflector batch")
-            if batches[-1].get("event_count") != 1:
-                raise AssertionError(f"{prompt!r}: expected one batched event, got {batches[-1]}")
+            batch = batches[-1]
+            if batch.get("event_count") != 1:
+                raise AssertionError(f"{prompt!r}: expected one batched event, got {batch}")
+            prompt_path_raw = batch.get("prompt_path", "")
+            surface_diff_path_raw = batch.get("surface_diff_path", "")
+            prompt_path = Path(prompt_path_raw)
+            surface_diff_path = Path(surface_diff_path_raw)
+            if not prompt_path_raw or not prompt_path.is_file():
+                raise AssertionError(f"{prompt!r}: missing persisted reflector prompt {prompt_path}")
+            if not surface_diff_path_raw or not surface_diff_path.is_file():
+                raise AssertionError(f"{prompt!r}: missing persisted surface diff {surface_diff_path}")
+            diff_payload = json.loads(surface_diff_path.read_text())
+            if diff_payload.get("changed_count") != 0:
+                raise AssertionError(f"{prompt!r}: dry run should record zero surface changes")
         elif batches:
             raise AssertionError(f"{prompt!r}: should not have created a reflector batch")
 
 
 def run_mode_case(reflect_mode: str, expected_queue: int, expected_batches: int) -> None:
-    with tempfile.TemporaryDirectory(prefix="agent-loop-tripwire-") as tmp_raw:
+    with tempfile.TemporaryDirectory(prefix="agent-loop-trigger-") as tmp_raw:
         tmp = Path(tmp_raw)
         env = os.environ.copy()
         env.update(
@@ -104,9 +134,9 @@ def run_mode_case(reflect_mode: str, expected_queue: int, expected_batches: int)
                 "INTROSPECT_PROMPT": str(REPO / "AGENTS.md"),
                 "INTROSPECT_SKILLS_DIR": str(REPO / "skills"),
                 "INTROSPECT_FEEDBACK_DIR": str(tmp),
-                "FRUSTRATION_REFLECTOR_DRY_RUN": "1",
-                "FRUSTRATION_DEBOUNCE_SECONDS": "0",
-                "FRUSTRATION_DISABLE_SCHEDULE": "1",
+                "TRIGGER_REFLECTOR_DRY_RUN": "1",
+                "TRIGGER_DEBOUNCE_SECONDS": "0",
+                "TRIGGER_DISABLE_SCHEDULE": "1",
             }
         )
         env["INTROSPECT_REFLECT_MODE"] = reflect_mode
@@ -115,7 +145,7 @@ def run_mode_case(reflect_mode: str, expected_queue: int, expected_batches: int)
             input=json.dumps(
                 {
                     "prompt": "what the fuck is going on",
-                    "session_id": "tripwire-queue-only-test",
+                    "session_id": "trigger-queue-only-test",
                     "cwd": str(REPO),
                     "transcript_path": "",
                 }
@@ -127,10 +157,10 @@ def run_mode_case(reflect_mode: str, expected_queue: int, expected_batches: int)
             timeout=10,
         )
         events = read_jsonl(tmp / "events.jsonl")
-        queue = read_jsonl(tmp / "frustration-queue.jsonl")
+        queue = read_jsonl(tmp / "trigger-queue.jsonl")
         batches = read_jsonl(tmp / "reflector-batches.jsonl")
-        if len(events) != 1 or not events[0].get("frustrated"):
-            raise AssertionError("queue-only case did not log one frustrated event")
+        if len(events) != 1 or not events[0].get("triggered"):
+            raise AssertionError("queue-only case did not log one triggered event")
         if len(queue) != expected_queue:
             raise AssertionError(f"{reflect_mode}: expected {expected_queue} queued event(s), got {len(queue)}")
         if len(batches) != expected_batches:
@@ -142,7 +172,7 @@ def run_profile_case() -> None:
         tmp = Path(tmp_raw)
         profile = tmp / "profile"
         profile.mkdir()
-        (profile / "frustration-words.json").write_text(json.dumps({"words": ["bruh"]}))
+        (profile / "trigger-words.json").write_text(json.dumps({"words": ["bruh"]}))
         env = os.environ.copy()
         env.update(
             {
@@ -152,9 +182,9 @@ def run_profile_case() -> None:
                 "INTROSPECT_FEEDBACK_DIR": str(tmp / "feedback"),
                 "INTROSPECT_PROFILE_DIR": str(profile),
                 "INTROSPECT_REFLECT_MODE": "off",
-                "FRUSTRATION_REFLECTOR_DRY_RUN": "1",
-                "FRUSTRATION_DEBOUNCE_SECONDS": "0",
-                "FRUSTRATION_DISABLE_SCHEDULE": "1",
+                "TRIGGER_REFLECTOR_DRY_RUN": "1",
+                "TRIGGER_DEBOUNCE_SECONDS": "0",
+                "TRIGGER_DISABLE_SCHEDULE": "1",
             }
         )
         for prompt in ("bruh fix this", "why the hell"):
@@ -170,9 +200,9 @@ def run_profile_case() -> None:
         events = read_jsonl(tmp / "feedback" / "events.jsonl")
         if len(events) != 2:
             raise AssertionError(f"profile case expected 2 events, got {len(events)}")
-        if not events[0].get("frustrated") or "bruh" not in events[0].get("matched", []):
+        if not events[0].get("triggered") or "bruh" not in events[0].get("matched", []):
             raise AssertionError("profile words did not trigger bruh")
-        if events[1].get("frustrated"):
+        if events[1].get("triggered"):
             raise AssertionError("profile words should replace defaults")
 
 
@@ -220,6 +250,20 @@ def run_codex_scanner_case() -> None:
                     "content": [{"type": "input_text", "text": "what the hell is happening"}],
                 },
             },
+            {
+                "timestamp": ts(4),
+                "type": "response_item",
+                "payload": {
+                    "type": "message",
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "input_text",
+                            "text": "You are the Introspect trigger reflector.\n\nQueued events:\n{\"matched\": [\"fuck\"]}",
+                        }
+                    ],
+                },
+            },
         ]
         rollout.write_text("\n".join(json.dumps(row) for row in rows) + "\n")
         now = time.time()
@@ -245,15 +289,53 @@ def run_codex_scanner_case() -> None:
             )
 
         events = read_jsonl(tmp / "feedback" / "events.jsonl")
-        queue = read_jsonl(tmp / "feedback" / "frustration-queue.jsonl")
+        queue = read_jsonl(tmp / "feedback" / "trigger-queue.jsonl")
         if len(events) != 2:
             raise AssertionError(f"scanner expected 2 real prompt events, got {len(events)}")
-        if events[0].get("frustrated"):
-            raise AssertionError("scanner should not mark plain prompt frustrated")
-        if not events[1].get("frustrated") or "hell" not in events[1].get("matched", []):
-            raise AssertionError(f"scanner did not detect exact frustration word: {events[1]}")
+        if events[0].get("triggered"):
+            raise AssertionError("scanner should not mark plain prompt triggered")
+        if not events[1].get("triggered") or "hell" not in events[1].get("matched", []):
+            raise AssertionError(f"scanner did not detect exact trigger word: {events[1]}")
         if len(queue) != 1:
             raise AssertionError(f"scanner expected one queued event, got {len(queue)}")
+
+
+def run_worker_notification_summary_case() -> None:
+    worker = load_worker_module("trigger_worker_summary")
+
+    events = [
+        {"matched": ["fuck", "retard", "fuck"]},
+        {"matched": ["hell"]},
+        {"matched": []},
+    ]
+    if worker.matched_words(events) != ["fuck", "hell", "retard"]:
+        raise AssertionError(f"worker matched_words returned {worker.matched_words(events)!r}")
+    if worker.trigger_words_text(events) != "fuck, hell, retard":
+        raise AssertionError(f"worker trigger_words_text returned {worker.trigger_words_text(events)!r}")
+
+
+def run_worker_command_model_case() -> None:
+    worker = load_worker_module(
+        "trigger_worker_models",
+        {
+            "INTROSPECT_REFLECTOR_CLAUDE_MODEL": "sonnet-test",
+            "INTROSPECT_REFLECTOR_CLAUDE_FALLBACK_MODEL": "haiku-test",
+            "INTROSPECT_REFLECTOR_CODEX_MODEL": "gpt-test",
+        },
+    )
+    claude_cmd = worker.build_reflector_command("claude", "/usr/local/bin/claude", "prompt", "Read")
+    if "--model" not in claude_cmd or "sonnet-test" not in claude_cmd:
+        raise AssertionError(f"claude command missing model override: {claude_cmd}")
+    if "--fallback-model" not in claude_cmd or "haiku-test" not in claude_cmd:
+        raise AssertionError(f"claude command missing fallback override: {claude_cmd}")
+
+    codex_cmd = worker.build_reflector_command("codex", "/usr/local/bin/codex", "prompt", "Read")
+    for expected in ("exec", "--dangerously-bypass-approvals-and-sandbox", "-C", "--model", "gpt-test"):
+        if expected not in codex_cmd:
+            raise AssertionError(f"codex command missing {expected}: {codex_cmd}")
+    for removed in ("--ask-for-approval", "--search"):
+        if removed in codex_cmd:
+            raise AssertionError(f"codex command still uses removed flag {removed}: {codex_cmd}")
 
 
 def main() -> int:
@@ -273,7 +355,9 @@ def main() -> int:
     run_mode_case("off", expected_queue=0, expected_batches=0)
     run_profile_case()
     run_codex_scanner_case()
-    print(f"test-frustration-tripwire: ok ({len(cases) + 4} cases)")
+    run_worker_notification_summary_case()
+    run_worker_command_model_case()
+    print(f"test-trigger-words: ok ({len(cases) + 6} cases)")
     return 0
 
 

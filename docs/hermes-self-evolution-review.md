@@ -30,7 +30,7 @@ Understanding score: 86/100. The remaining unknown is whether a newer private He
 
 ## What Is Weak For Introspect
 
-- The background review prompt is too aggressive for a frustration-triggered system. It explicitly biases toward "most sessions produce at least one skill update"; that is the wrong default when the input is anger/noise and the safe outcome is often `no_change`.
+- The background review prompt is too aggressive for a trigger-driven system. It explicitly biases toward "most sessions produce at least one skill update"; that is the wrong default when the input is anger/noise and the safe outcome is often `no_change`.
 - Default skill write approval is false in the checked local config. Silent autonomous skill edits are too much power for a v1 loop unless the user explicitly enables auto-apply.
 - New foreground skills default to `~/.hermes/skills`; that is not project-aware enough. Introspect needs project `AGENTS.md`, `.agents/skills/`, and `.claude/skills/` routing.
 - External skill directories can be modified in place if writable. That is useful, but Introspect should classify scope first so it does not mutate a shared/global skill for a project-specific problem.
@@ -43,7 +43,7 @@ Use Hermes as a reference architecture, not as a template to copy blindly.
 
 Introspect should route each observation into exactly one layer:
 
-1. `no_change`: profanity, casual register, external frustration, or weak evidence.
+1. `no_change`: profanity, casual register, external-system trigger, or weak evidence.
 2. `core_prompt`: cross-project behavior that should shape almost every future task.
 3. `project_prompt`: repo-specific behavior, architecture facts, local decisions, and project gotchas.
 4. `profile_memory`: durable user facts, preferences, vocabulary, and local machine state.
@@ -53,7 +53,7 @@ Introspect should route each observation into exactly one layer:
 
 ## Guardrails To Keep
 
-- One frustration batch yields one decision.
+- One trigger batch yields one decision.
 - Prefer `no_change` unless the transcript shows a real agent failure.
 - Prefer narrowing/reverting a bad prompt change over adding a new rule.
 - Prefer updating an existing umbrella skill/support file over creating a narrow duplicate.

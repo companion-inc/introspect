@@ -3,10 +3,20 @@ set -euo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 FEEDBACK_DIR="${INTROSPECT_FEEDBACK_DIR:-$REPO/feedback}"
+PROFILE_DIR="${INTROSPECT_PROFILE_DIR:-$HOME/.introspect/profile}"
+PROFILE_SETTINGS="$PROFILE_DIR/settings.json"
+BUILT_NOTIFICATION_HELPER="$REPO/.build/Introspect.app/Contents/MacOS/Introspect"
+INSTALLED_NOTIFICATION_HELPER="/Applications/Introspect.app/Contents/MacOS/Introspect"
+NOTIFICATION_HELPER="$BUILT_NOTIFICATION_HELPER"
+if [[ -x "$INSTALLED_NOTIFICATION_HELPER" ]]; then
+  NOTIFICATION_HELPER="$INSTALLED_NOTIFICATION_HELPER"
+fi
 LAUNCH_LABEL="ai.companion.introspect.reflector"
 LAUNCH_PLIST="$HOME/Library/LaunchAgents/$LAUNCH_LABEL.plist"
 SCAN_LABEL="ai.companion.introspect.codex-scanner"
 SCAN_PLIST="$HOME/Library/LaunchAgents/$SCAN_LABEL.plist"
+MONITOR_LABEL="ai.companion.introspect.health"
+MONITOR_PLIST="$HOME/Library/LaunchAgents/$MONITOR_LABEL.plist"
 
 check_link() {
   local label="$1"
@@ -24,11 +34,37 @@ check_link() {
 check_hook() {
   local label="$1"
   local path="$2"
-  if [[ -f "$path" ]] && grep -q "$REPO/hooks/frustration-reflect.sh" "$path"; then
+  if [[ -f "$path" ]] && grep -q "$REPO/hooks/trigger-reflect.sh" "$path"; then
     printf "ok   %s hook installed\n" "$label"
   else
     printf "bad  %s hook missing from %s\n" "$label" "$path"
   fi
+}
+
+reflector_env_summary() {
+  local plist="$1"
+  python3 - "$plist" <<'PY'
+import plistlib
+import sys
+from pathlib import Path
+
+data = plistlib.loads(Path(sys.argv[1]).read_bytes())
+env = data.get("EnvironmentVariables", {})
+
+def value(name, default=""):
+    raw = env.get(name, default)
+    return raw if isinstance(raw, str) else default
+
+def model(raw):
+    cleaned = raw.strip()
+    return cleaned if cleaned else "CLI default"
+
+runner = value("INTROSPECT_REFLECTOR_RUNNER", "default")
+claude = model(value("INTROSPECT_REFLECTOR_CLAUDE_MODEL"))
+fallback = model(value("INTROSPECT_REFLECTOR_CLAUDE_FALLBACK_MODEL"))
+codex = model(value("INTROSPECT_REFLECTOR_CODEX_MODEL"))
+print(f"runner={runner} claude_model={claude} claude_fallback={fallback} codex_model={codex}")
+PY
 }
 
 cd "$REPO"
@@ -59,7 +95,7 @@ for raw in sys.argv[1:]:
     for group in groups if isinstance(groups, list) else []:
         for hook in group.get("hooks", []) if isinstance(group, dict) else []:
             command = hook.get("command") if isinstance(hook, dict) else ""
-            if "frustration-reflect.sh" not in command:
+            if "trigger-reflect.sh" not in command:
                 continue
             match = re.search(r"INTROSPECT_REFLECT_MODE=([^ ]+)", command)
             print(match.group(1) if match else "immediate")
@@ -68,7 +104,7 @@ print("off")
 PY
 )"
 if [[ "$mode" == "immediate" ]]; then
-  printf "ok   foreground hooks kick locked worker after frustration\n"
+  printf "ok   foreground hooks kick locked worker after trigger\n"
 elif [[ "$mode" == "nightly" ]]; then
   printf "ok   foreground hooks queue for nightly reflection\n"
 elif [[ "$mode" == "off" ]]; then
@@ -77,7 +113,7 @@ else
   printf "warn unknown reflector mode: %s\n" "$mode"
 fi
 if [[ "$mode" == "nightly" ]]; then
-  if [[ -f "$LAUNCH_PLIST" ]] && grep -q "$REPO/hooks/frustration-worker.py" "$LAUNCH_PLIST"; then
+  if [[ -f "$LAUNCH_PLIST" ]] && grep -q "$REPO/hooks/trigger-worker.py" "$LAUNCH_PLIST"; then
     printf "ok   nightly LaunchAgent installed -> %s\n" "$LAUNCH_PLIST"
   else
     printf "bad  nightly LaunchAgent missing -> %s\n" "$LAUNCH_PLIST"
@@ -99,49 +135,75 @@ elif [[ -f "$SCAN_PLIST" ]] && grep -q "$REPO/hooks/codex-transcript-scan.py" "$
   else
     printf "warn Codex transcript scanner installed but not loaded -> %s\n" "$SCAN_PLIST"
   fi
-  scan_runner="$(python3 - "$SCAN_PLIST" <<'PY'
-import plistlib
-import sys
-from pathlib import Path
-
-data = plistlib.loads(Path(sys.argv[1]).read_bytes())
-env = data.get("EnvironmentVariables", {})
-print(env.get("INTROSPECT_REFLECTOR_RUNNER", "default"))
-PY
-)"
-  printf "ok   reflector runner=%s" "$scan_runner"
-  if [[ "$scan_runner" == "default" ]]; then
+  scan_env="$(reflector_env_summary "$SCAN_PLIST")"
+  printf "ok   scanner reflector %s" "$scan_env"
+  if [[ "$scan_env" == runner=default* ]]; then
     printf " (most-used installed agent; no random selection)"
   fi
   printf "\n"
 else
   printf "bad  Codex transcript scanner missing -> %s\n" "$SCAN_PLIST"
 fi
+if [[ -f "$MONITOR_PLIST" ]] && grep -q "$REPO/scripts/introspect-healthcheck.sh" "$MONITOR_PLIST"; then
+  if launchctl print "gui/$(id -u)/$MONITOR_LABEL" >/dev/null 2>&1; then
+    printf "ok   health monitor loaded -> %s\n" "$MONITOR_PLIST"
+  else
+    printf "warn health monitor installed but not loaded -> %s\n" "$MONITOR_PLIST"
+  fi
+else
+  printf "bad  health monitor missing -> %s\n" "$MONITOR_PLIST"
+fi
 if [[ -f "$LAUNCH_PLIST" ]]; then
-  runner="$(python3 - "$LAUNCH_PLIST" <<'PY'
-import plistlib
-import sys
-from pathlib import Path
-
-data = plistlib.loads(Path(sys.argv[1]).read_bytes())
-env = data.get("EnvironmentVariables", {})
-print(env.get("INTROSPECT_REFLECTOR_RUNNER", "default"))
-PY
-)"
+  runner_env="$(reflector_env_summary "$LAUNCH_PLIST")"
   claude_path="$(command -v claude || true)"
   codex_path="$(command -v codex || true)"
-  printf "ok   reflector runner=%s" "$runner"
-  if [[ -n "$claude_path" && -n "$codex_path" && "$runner" == "default" ]]; then
+  printf "ok   nightly reflector %s" "$runner_env"
+  if [[ -n "$claude_path" && -n "$codex_path" && "$runner_env" == runner=default* ]]; then
     printf " (claude+codex found; most-used installed agent wins)"
   elif [[ -n "$claude_path" || -n "$codex_path" ]]; then
     printf " (found:%s%s)" "${claude_path:+ claude}" "${codex_path:+ codex}"
   fi
   printf "\n"
 fi
+notify_setting="$(python3 - "$PROFILE_SETTINGS" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+path = Path(sys.argv[1])
+try:
+    data = json.loads(path.read_text())
+except Exception:
+    print("enabled")
+    raise SystemExit(0)
+if isinstance(data, dict) and data.get("notifications_enabled") is False:
+    print("disabled")
+else:
+    print("enabled")
+PY
+)"
 if [[ "${INTROSPECT_NOTIFY:-1}" == "0" ]]; then
-  printf "off  macOS spawn notifications disabled by env\n"
+  printf "off  reflector notifications disabled by env\n"
+elif [[ "$notify_setting" == "disabled" ]]; then
+  printf "off  reflector notifications disabled in %s\n" "$PROFILE_SETTINGS"
 else
-  printf "ok   macOS spawn notifications enabled\n"
+  printf "ok   reflector notifications enabled in %s\n" "$PROFILE_SETTINGS"
+fi
+if [[ -x "$NOTIFICATION_HELPER" ]]; then
+  helper_status="$("$NOTIFICATION_HELPER" --notification-status 2>/dev/null | head -n 1 || true)"
+  case "$helper_status" in
+    "allowed by macOS"|"delivered quietly by macOS"|"temporarily allowed by macOS")
+      printf "ok   notifications post through Introspect.app -> %s\n" "$NOTIFICATION_HELPER"
+      ;;
+    "not requested yet")
+      printf "warn Introspect.app notification permission not requested yet -> %s\n" "$NOTIFICATION_HELPER"
+      ;;
+    *)
+      printf "warn Introspect.app notification helper blocked by macOS (%s)\n" "${helper_status:-unknown}"
+      ;;
+  esac
+else
+  printf "warn Introspect.app notification helper missing\n"
 fi
 
 printf "\nskills:\n"
@@ -160,8 +222,8 @@ from pathlib import Path
 feedback = Path(sys.argv[1])
 repo = feedback.parent
 active_words = None
-hook_text = (repo / "hooks" / "frustration-reflect.sh").read_text()
-match = re.search(r"DEFAULT_BAD_WORDS = (\{.*?\})", hook_text, flags=re.S)
+hook_text = (repo / "hooks" / "trigger-reflect.sh").read_text()
+match = re.search(r"DEFAULT_TRIGGER_WORDS = (\{.*?\})", hook_text, flags=re.S)
 if match:
     active_words = set(ast.literal_eval(match.group(1)))
 
@@ -172,14 +234,14 @@ for line in (feedback / "events.jsonl").read_text().splitlines():
     except Exception:
         pass
 
-frustrated = [event for event in events if event.get("frustrated")]
-print(f"events: {len(events)} total, {len(frustrated)} frustrated")
+triggered = [event for event in events if event.get("triggered")]
+print(f"events: {len(events)} total, {len(triggered)} triggered")
 if events:
-    print(f"latest event: {events[-1].get('ts')} frustrated={events[-1].get('frustrated')}")
-if frustrated:
+    print(f"latest event: {events[-1].get('ts')} triggered={events[-1].get('triggered')}")
+if triggered:
     words = Counter(
         word
-        for event in frustrated
+        for event in triggered
         for word in event.get("matched", [])
         if active_words is None or word in active_words
     )
@@ -204,7 +266,7 @@ if state_path.exists():
     print(f"last run: {state.get('last_run_at')}")
     print(f"scheduled retry: {state.get('scheduled_retry_at')}")
 
-queue_path = feedback / "frustration-queue.jsonl"
+queue_path = feedback / "trigger-queue.jsonl"
 if queue_path.exists():
     queued = sum(1 for line in queue_path.read_text().splitlines() if line.strip())
 else:
@@ -220,7 +282,7 @@ if scan_state_path.exists():
         "codex scanner: "
         f"last_scan={scan_state.get('last_scan_at')} "
         f"new={scan_state.get('last_new_events')} "
-        f"frustrated={scan_state.get('last_frustrated_events')}"
+        f"triggered={scan_state.get('last_triggered_events')}"
     )
 else:
     print("codex scanner: never ran")
@@ -252,6 +314,7 @@ def is_control(prompt):
         stripped.startswith("# AGENTS.md instructions for ")
         or stripped.startswith("<codex_internal_context ")
         or stripped.startswith("<turn_aborted>")
+        or stripped.startswith("You are the Introspect trigger reflector.")
     )
 
 latest_codex = None
@@ -298,7 +361,7 @@ if latest_codex:
         None,
     )
     if processed_latest:
-        print(f"ok   latest Codex message processed by scanner frustrated={processed_latest.get('frustrated')}")
+        print(f"ok   latest Codex message processed by scanner triggered={processed_latest.get('triggered')}")
         raise SystemExit(0)
     latest_event_ts = parse_ts(events[-1].get("ts")) if events else None
     latest_scan_ts = parse_ts(scan_state.get("last_scan_at"))

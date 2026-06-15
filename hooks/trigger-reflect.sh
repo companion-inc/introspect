@@ -2,16 +2,16 @@
 # UserPromptSubmit hook (Claude Code + Codex — both deliver {"prompt": ...} on
 # stdin).
 #
-# Design: the regex is a cheap tripwire with broad recall — judging whether a
-# match is GENUINE frustration at agent behavior is the reflector's job, done
-# out-of-band by hooks/frustration-worker.py. The foreground model never gets a
+# Design: the regex is a cheap trigger with broad recall — judging whether a
+# match is GENUINE trigger at agent behavior is the reflector's job, done
+# out-of-band by hooks/trigger-worker.py. The foreground model never gets a
 # spawned-agent instruction from this hook.
 #
 # Two jobs:
 # 1. Log EVERY prompt to feedback/events.jsonl tagged with the AGENTS.md commit
-#    that was live, so each prompt version gets a frustration rate
-#    (the RL signal; run hooks/frustration-stats.sh for the scoreboard).
-# 2. On a tripwire match, enqueue the event and, in immediate mode, kick the
+#    that was live, so each prompt version gets a trigger rate
+#    (the RL signal; run hooks/trigger-stats.sh for the scoreboard).
+# 2. On a trigger match, enqueue the event and, in immediate mode, kick the
 #    single-worker batch reflector. The worker handles debouncing, cooldowns,
 #    and locking. Nightly mode queues only; off mode logs only.
 import datetime
@@ -22,21 +22,21 @@ import subprocess
 import sys
 
 if os.environ.get("INTROSPECT_REFLECTOR") == "1":
-    # The background reflector prompt contains frustration snippets. Do not let
+    # The background reflector prompt contains trigger snippets. Do not let
     # the reflector recursively trigger itself.
     sys.exit(0)
 
-REPO = os.path.expanduser(os.environ.get("INTROSPECT_REPO", "~/Projects/introspect"))
+REPO = os.path.expanduser(os.environ.get("INTROSPECT_REPO", "~/Companion/Code/introspect"))
 FEEDBACK_DIR = os.path.expanduser(
     os.environ.get("INTROSPECT_FEEDBACK_DIR", os.path.join(REPO, "feedback"))
 )
 EVENTS = os.path.join(FEEDBACK_DIR, "events.jsonl")
-QUEUE = os.path.join(FEEDBACK_DIR, "frustration-queue.jsonl")
-WORKER = os.path.join(REPO, "hooks", "frustration-worker.py")
+QUEUE = os.path.join(FEEDBACK_DIR, "trigger-queue.jsonl")
+WORKER = os.path.join(REPO, "hooks", "trigger-worker.py")
 PROFILE_DIR = os.path.expanduser(
     os.environ.get("INTROSPECT_PROFILE_DIR") or "~/.introspect/profile"
 )
-PROFILE_FILE = os.path.join(PROFILE_DIR, "frustration-words.json")
+PROFILE_FILE = os.path.join(PROFILE_DIR, "trigger-words.json")
 REFLECT_MODE = (
     os.environ.get("INTROSPECT_REFLECT_MODE") or "immediate"
 ).strip().lower()
@@ -49,7 +49,7 @@ except Exception:
 prompt = data.get("prompt") or ""
 # Exact words only. No prefix matching and no phrase triggers. Common filler
 # terms stay out of this list; regression tests cover known false positives.
-DEFAULT_BAD_WORDS = {
+DEFAULT_TRIGGER_WORDS = {
     "arse",
     "ass",
     "asshole",
@@ -100,8 +100,8 @@ def normalize_words(values):
     return words
 
 
-def active_bad_words():
-    words = set(DEFAULT_BAD_WORDS)
+def active_trigger_words():
+    words = set(DEFAULT_TRIGGER_WORDS)
     try:
         with open(PROFILE_FILE) as f:
             data = json.load(f)
@@ -117,8 +117,8 @@ def active_bad_words():
     return profile_words or words
 
 
-BAD_WORDS = active_bad_words()
-matches = [word for word in re.findall(r"[a-z]+", prompt.lower()) if word in BAD_WORDS]
+TRIGGER_WORDS = active_trigger_words()
+matches = [word for word in re.findall(r"[a-z]+", prompt.lower()) if word in TRIGGER_WORDS]
 
 try:
     version = subprocess.run(
@@ -147,7 +147,7 @@ try:
     event = {
         "ts": datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds"),
         "version": version,
-        "frustrated": bool(matches),
+        "triggered": bool(matches),
         "session_id": pick("session_id", "sessionId"),
         "cwd": pick("cwd"),
         "transcript_path": pick("transcript_path", "transcriptPath"),

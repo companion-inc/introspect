@@ -9,7 +9,7 @@ description: Create, update, prune, and validate agent-loop skills as scoped pro
 
 A skill is not a second global prompt. It is scoped procedural memory: a compact, source-backed workflow that loads only when the task needs it.
 
-Create or update a skill only when the lesson is reusable for a class of future tasks and too specific for always-loaded AGENTS.md. Prune a skill when evidence shows it is stale, overbroad, duplicative, or causing bad behavior. If the lesson must apply across nearly every task, edit AGENTS.md instead. If it is one-off anger, casual profanity, or frustration about an external system, make no change.
+Create or update a skill only when the lesson is reusable for a class of future tasks and too specific for always-loaded AGENTS.md. Prune a skill when evidence shows it is stale, overbroad, duplicative, or causing bad behavior. If the lesson must apply across nearly every task, edit AGENTS.md instead. If it is one-off anger, casual profanity, or trigger about an external system, make no change.
 
 ## Source gate
 

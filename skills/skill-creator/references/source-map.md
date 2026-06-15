@@ -104,7 +104,7 @@ Relevant facts:
 - Description iteration should avoid overfitting to exact failed queries.
 
 Repo consequences:
-- `activation_signals` should include intent-level signals, not only exact words from one frustration message.
+- `activation_signals` should include intent-level signals, not only exact words from one trigger message.
 - Near-miss negatives belong in the skill body or reflector log for broad changes.
 - If routing becomes noisy, improve descriptions before adding embedding retrieval.
 

@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
-# Frustration scoreboard: prompts, frustrations, and rate per AGENTS.md version
-# (commit), from feedback/events.jsonl logged by frustration-reflect.sh.
-# The objective is to MINIMIZE the frustration rate. A version whose rate rose
+# Trigger scoreboard: prompts, triggers, and rate per AGENTS.md version
+# (commit), from feedback/events.jsonl logged by trigger-reflect.sh.
+# The objective is to MINIMIZE the trigger rate. A version whose rate rose
 # after a prompt change is evidence to revert that change.
 import json
 import os
 import subprocess
 import sys
 
-REPO = os.path.expanduser(os.environ.get("INTROSPECT_REPO", "~/Projects/introspect"))
+REPO = os.path.expanduser(os.environ.get("INTROSPECT_REPO", "~/Companion/Code/introspect"))
 EVENTS = os.path.expanduser(os.environ.get("INTROSPECT_FEEDBACK_DIR", os.path.join(REPO, "feedback")))
 EVENTS = os.path.join(EVENTS, "events.jsonl")
 
@@ -16,7 +16,7 @@ if not os.path.exists(EVENTS):
     print("No events logged yet.")
     sys.exit(0)
 
-stats = {}   # version -> [prompts, frustrations, first_ts, last_ts]
+stats = {}   # version -> [prompts, triggers, first_ts, last_ts]
 order = []
 for line in open(EVENTS):
     try:
@@ -29,7 +29,7 @@ for line in open(EVENTS):
         order.append(v)
     s = stats[v]
     s[0] += 1
-    s[1] += int(bool(e.get("frustrated")))
+    s[1] += int(bool(e.get("triggered")))
     s[3] = e.get("ts", s[3])
 
 
@@ -43,7 +43,7 @@ def subject(version):
         return ""
 
 
-print(f"{'version':<10} {'prompts':>7} {'frustr':>6} {'rate':>6}  first..last (UTC)        commit subject")
+print(f"{'version':<10} {'prompts':>7} {'trig':>6} {'rate':>6}  first..last (UTC)        commit subject")
 best = None
 for v in order:
     p, f, first, last = stats[v]
