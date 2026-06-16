@@ -138,6 +138,23 @@
       ]
     },
     {
+      "id": "visual-asset-remaster",
+      "path": "skills/visual-asset-remaster/SKILL.md",
+      "status": "active",
+      "tier": "domain-workflow",
+      "description": "Remaster, upscale, or rebuild visual assets and sprite packs by running hard-case provider/prompt/alpha experiments before scaling to a full generated asset pack.",
+      "activation_signals": [
+        "remaster or upscale an image asset",
+        "pixelated mascot sprite pack or animation frames",
+        "preserve transparent background or alpha channel",
+        "compare image generation edit or upscaler APIs",
+        "GPT Gemini Fal Flux Topaz Aura ESRGAN image quality",
+        "contact sheet batch generation and crop back into frames",
+        "white halo matte checkerboard green screen or background removal",
+        "generate a production visual asset pack"
+      ]
+    },
+    {
       "id": "ui-component-polish",
       "path": "skills/ui-component-polish/SKILL.md",
       "status": "active",

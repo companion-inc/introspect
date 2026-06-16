@@ -811,8 +811,12 @@ Agent loop repo:
 Skills directory:
 - {SKILLS_DIR}
 
+Codex thread tools:
+- Resolve a codex://threads/<id> link with: python3 /Users/advaitpaliwal/.claude/skills/read-codex-threads/scripts/resolve-codex-thread.py <link-or-id>
+- Parse the resolved rollout with: python3 /Users/advaitpaliwal/.claude/skills/read-codex-threads/scripts/parse-codex-thread.py <rollout-or-id> --messages-only
+
 Workflow:
-1. Read the recent turns for the relevant transcript/session and identify the agent behavior that caused the trigger, not the wording of the user's message.
+1. Read the recent turns for the relevant transcript/session and identify the agent behavior that caused the trigger, not the wording of the user's message. A codex://threads/<id> link is local evidence, not an inaccessible external URL; resolve and parse it before classifying the event.
 2. Run {REPO}/hooks/trigger-stats.sh and compare the current prompt version against prior versions.
 3. Classify the change target as exactly one of: no_change, core_prompt, project_prompt, profile_memory, skill_new, skill_update, project_skill_new, project_skill_update, skill_prune.
 4. Use core_prompt only for an always-loaded invariant that should apply across nearly every task. Before editing AGENTS.md, read skills/agent-md-creator/SKILL.md for placement and skills/writing-agent-prompt/SKILL.md for wording, then verify with a realistic response probe drawn from the failure transcript.
@@ -884,6 +888,8 @@ def invoke_reflector(events: list[dict]) -> int:
             "WebSearch",
             "WebFetch",
             "Bash(git *)",
+            "Bash(python3 /Users/advaitpaliwal/.claude/skills/read-codex-threads/scripts/resolve-codex-thread.py *)",
+            "Bash(python3 /Users/advaitpaliwal/.claude/skills/read-codex-threads/scripts/parse-codex-thread.py *)",
             "Bash(*trigger-stats.sh)",
             "Bash(*validate-skills.py)",
             "Bash(mkdir -p *)",
