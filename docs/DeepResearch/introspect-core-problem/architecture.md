@@ -8,7 +8,7 @@ It should feel like:
 
 - A flight recorder for Claude/Codex work across projects.
 - A triage queue for high-friction agent behavior.
-- A routing engine for global prompt, project prompt, profile memory, skills, and hooks.
+- A routing engine for global prompt, project prompt, home memory, skills, and hooks.
 - A proposal/staging UI for changes that affect future agents.
 
 It should not feel like:
@@ -39,13 +39,13 @@ Claude/Codex user prompt
 - Hooks and scanner capture signals only. They should not decide what to change.
 - Worker/curator owns batching, evidence gathering, classification, and proposal generation.
 - App/UI owns visibility, review, approval, and rollback.
-- Profile repo owns private user state, trigger words, pending proposals, and personal skills.
+- Introspect home owns private user state, trigger words, pending proposals, and personal skills.
 - Project repos own project prompts and project skills.
 
 ## Storage, Config, Secrets
 
 - Public reusable engine: this repo.
-- Private profile: `~/.introspect/profile`.
+- Private Introspect home: `~/.introspect`.
 - Runtime feedback: `feedback/` while local and ignored.
 - Installed launchd state: `~/Library/LaunchAgents/ai.companion.introspect.*.plist`.
 - No secret values should be written into events, bundles, or staged changes.
@@ -101,7 +101,7 @@ Targets:
 - `no_change`
 - `core_prompt`
 - `project_prompt`
-- `profile_memory`
+- `home_memory`
 - `skill_new`
 - `skill_update`
 - `project_skill_new`
@@ -118,7 +118,7 @@ Routing order:
 1. Current project skills.
 2. Current project prompt.
 3. User-wide skills.
-4. User profile memory.
+4. User home memory.
 5. Global prompt.
 6. Hook/script only for deterministic requirements.
 

@@ -95,27 +95,33 @@ def run_case(
         if expected_match and expected_match not in event.get("matched", []):
             raise AssertionError(f"{prompt!r}: missing expected match {expected_match!r} in {event.get('matched')}")
 
-        deadline = time.time() + 5
+        deadline = time.time() + 10
         batches: list[dict] = []
+        batch: dict | None = None
+        prompt_path = Path("")
+        surface_diff_path = Path("")
         while time.time() < deadline:
             batches = read_jsonl(tmp / "reflector-batches.jsonl")
-            if batches or not should_trigger:
+            if not should_trigger:
                 break
+            if batches:
+                batch = batches[-1]
+                prompt_path_raw = batch.get("prompt_path", "")
+                surface_diff_path_raw = batch.get("surface_diff_path", "")
+                prompt_path = Path(prompt_path_raw)
+                surface_diff_path = Path(surface_diff_path_raw)
+                if prompt_path_raw and surface_diff_path_raw and prompt_path.is_file() and surface_diff_path.is_file():
+                    break
             time.sleep(0.1)
 
         if should_trigger:
-            if not batches:
+            if not batch:
                 raise AssertionError(f"{prompt!r}: expected a dry-run reflector batch")
-            batch = batches[-1]
             if batch.get("event_count") != 1:
                 raise AssertionError(f"{prompt!r}: expected one batched event, got {batch}")
-            prompt_path_raw = batch.get("prompt_path", "")
-            surface_diff_path_raw = batch.get("surface_diff_path", "")
-            prompt_path = Path(prompt_path_raw)
-            surface_diff_path = Path(surface_diff_path_raw)
-            if not prompt_path_raw or not prompt_path.is_file():
+            if not prompt_path.is_file():
                 raise AssertionError(f"{prompt!r}: missing persisted reflector prompt {prompt_path}")
-            if not surface_diff_path_raw or not surface_diff_path.is_file():
+            if not surface_diff_path.is_file():
                 raise AssertionError(f"{prompt!r}: missing persisted surface diff {surface_diff_path}")
             diff_payload = json.loads(surface_diff_path.read_text())
             if diff_payload.get("changed_count") != 0:
@@ -167,12 +173,12 @@ def run_mode_case(reflect_mode: str, expected_queue: int, expected_batches: int)
             raise AssertionError(f"{reflect_mode}: expected {expected_batches} batch(es), got {len(batches)}")
 
 
-def run_profile_case() -> None:
-    with tempfile.TemporaryDirectory(prefix="agent-loop-profile-") as tmp_raw:
+def run_home_case() -> None:
+    with tempfile.TemporaryDirectory(prefix="introspect-home-") as tmp_raw:
         tmp = Path(tmp_raw)
-        profile = tmp / "profile"
-        profile.mkdir()
-        (profile / "trigger-words.json").write_text(json.dumps({"words": ["bruh"]}))
+        home = tmp / ".introspect"
+        home.mkdir()
+        (home / "trigger-words.txt").write_text("bruh\n")
         env = os.environ.copy()
         env.update(
             {
@@ -180,7 +186,7 @@ def run_profile_case() -> None:
                 "INTROSPECT_PROMPT": str(REPO / "AGENTS.md"),
                 "INTROSPECT_SKILLS_DIR": str(REPO / "skills"),
                 "INTROSPECT_FEEDBACK_DIR": str(tmp / "feedback"),
-                "INTROSPECT_PROFILE_DIR": str(profile),
+                "INTROSPECT_HOME": str(home),
                 "INTROSPECT_REFLECT_MODE": "off",
                 "TRIGGER_REFLECTOR_DRY_RUN": "1",
                 "TRIGGER_DEBOUNCE_SECONDS": "0",
@@ -190,7 +196,7 @@ def run_profile_case() -> None:
         for prompt in ("bruh fix this", "why the hell"):
             subprocess.run(
                 [sys.executable, str(HOOK)],
-                input=json.dumps({"prompt": prompt, "session_id": "profile-test", "cwd": str(REPO)}),
+                input=json.dumps({"prompt": prompt, "session_id": "home-test", "cwd": str(REPO)}),
                 text=True,
                 env=env,
                 cwd=REPO,
@@ -199,11 +205,11 @@ def run_profile_case() -> None:
             )
         events = read_jsonl(tmp / "feedback" / "events.jsonl")
         if len(events) != 2:
-            raise AssertionError(f"profile case expected 2 events, got {len(events)}")
+            raise AssertionError(f"home case expected 2 events, got {len(events)}")
         if not events[0].get("triggered") or "bruh" not in events[0].get("matched", []):
-            raise AssertionError("profile words did not trigger bruh")
+            raise AssertionError("home words did not trigger bruh")
         if events[1].get("triggered"):
-            raise AssertionError("profile words should replace defaults")
+            raise AssertionError("home words should replace defaults")
 
 
 def run_codex_scanner_case() -> None:
@@ -353,7 +359,7 @@ def main() -> int:
         run_case(prompt, should_trigger, expected_match)
     run_mode_case("nightly", expected_queue=1, expected_batches=0)
     run_mode_case("off", expected_queue=0, expected_batches=0)
-    run_profile_case()
+    run_home_case()
     run_codex_scanner_case()
     run_worker_notification_summary_case()
     run_worker_command_model_case()

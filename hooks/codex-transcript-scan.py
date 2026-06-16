@@ -32,10 +32,8 @@ QUEUE = FEEDBACK_DIR / "trigger-queue.jsonl"
 STATE = FEEDBACK_DIR / "codex-transcript-scan-state.json"
 WORKER = REPO / "hooks" / "trigger-worker.py"
 HOOK = REPO / "hooks" / "trigger-reflect.sh"
-PROFILE_DIR = Path(
-    os.path.expanduser(os.environ.get("INTROSPECT_PROFILE_DIR") or "~/.introspect/profile")
-)
-PROFILE_FILE = PROFILE_DIR / "trigger-words.json"
+INTROSPECT_HOME = Path(os.path.expanduser(os.environ.get("INTROSPECT_HOME") or "~/.introspect"))
+TRIGGER_WORDS_FILE = INTROSPECT_HOME / "trigger-words.txt"
 CODEX_SESSIONS_DIR = Path(
     os.path.expanduser(os.environ.get("INTROSPECT_CODEX_SESSIONS_DIR", "~/.codex/sessions"))
 )
@@ -133,17 +131,11 @@ def load_default_trigger_words() -> set[str]:
 def active_trigger_words() -> set[str]:
     words = load_default_trigger_words()
     try:
-        data = json.loads(PROFILE_FILE.read_text())
+        home_words = normalize_words(TRIGGER_WORDS_FILE.read_text().splitlines())
     except Exception:
         return words
 
-    if isinstance(data, list):
-        return normalize_words(data) or words
-    if not isinstance(data, dict):
-        return words
-
-    profile_words = normalize_words(data.get("words"))
-    return profile_words or words
+    return home_words or words
 
 
 def git_version() -> str:

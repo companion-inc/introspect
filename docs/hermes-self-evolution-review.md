@@ -46,7 +46,7 @@ Introspect should route each observation into exactly one layer:
 1. `no_change`: profanity, casual register, external-system trigger, or weak evidence.
 2. `core_prompt`: cross-project behavior that should shape almost every future task.
 3. `project_prompt`: repo-specific behavior, architecture facts, local decisions, and project gotchas.
-4. `profile_memory`: durable user facts, preferences, vocabulary, and local machine state.
+4. `home_memory`: durable user facts, preferences, vocabulary, and local machine state.
 5. `skill_new` / `skill_update`: repeatable user-wide procedures, references, scripts, or assets.
 6. `project_skill_new` / `project_skill_update`: repeatable codebase-specific procedures.
 7. `skill_prune`: stale, duplicated, overbroad, unsupported, or harmful skills.

@@ -3,8 +3,8 @@ set -euo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 FEEDBACK_DIR="${INTROSPECT_FEEDBACK_DIR:-$REPO/feedback}"
-PROFILE_DIR="${INTROSPECT_PROFILE_DIR:-$HOME/.introspect/profile}"
-PROFILE_SETTINGS="$PROFILE_DIR/settings.json"
+INTROSPECT_HOME_DIR="${INTROSPECT_HOME:-$HOME/.introspect}"
+HOME_SETTINGS="$INTROSPECT_HOME_DIR/settings.json"
 BUILT_NOTIFICATION_HELPER="$REPO/.build/Introspect.app/Contents/MacOS/Introspect"
 INSTALLED_NOTIFICATION_HELPER="/Applications/Introspect.app/Contents/MacOS/Introspect"
 NOTIFICATION_HELPER="$BUILT_NOTIFICATION_HELPER"
@@ -73,8 +73,8 @@ printf "repo: %s\n" "$REPO"
 printf "commit: "
 git rev-parse --short HEAD
 
-check_link "claude prompt" "$HOME/.claude/CLAUDE.md" "$REPO/AGENTS.md"
-check_link "codex prompt" "$HOME/.codex/AGENTS.md" "$REPO/AGENTS.md"
+check_link "claude prompt" "$HOME/.claude/CLAUDE.md" "$INTROSPECT_HOME_DIR/AGENTS.md"
+check_link "codex prompt" "$HOME/.codex/AGENTS.md" "$INTROSPECT_HOME_DIR/AGENTS.md"
 check_hook "claude" "$HOME/.claude/settings.json"
 check_hook "codex" "$HOME/.codex/hooks.json"
 mode="$(python3 - "$HOME/.claude/settings.json" "$HOME/.codex/hooks.json" <<'PY'
@@ -165,7 +165,7 @@ if [[ -f "$LAUNCH_PLIST" ]]; then
   fi
   printf "\n"
 fi
-notify_setting="$(python3 - "$PROFILE_SETTINGS" <<'PY'
+notify_setting="$(python3 - "$HOME_SETTINGS" <<'PY'
 import json
 import sys
 from pathlib import Path
@@ -185,9 +185,9 @@ PY
 if [[ "${INTROSPECT_NOTIFY:-1}" == "0" ]]; then
   printf "off  reflector notifications disabled by env\n"
 elif [[ "$notify_setting" == "disabled" ]]; then
-  printf "off  reflector notifications disabled in %s\n" "$PROFILE_SETTINGS"
+  printf "off  reflector notifications disabled in %s\n" "$HOME_SETTINGS"
 else
-  printf "ok   reflector notifications enabled in %s\n" "$PROFILE_SETTINGS"
+  printf "ok   reflector notifications enabled in %s\n" "$HOME_SETTINGS"
 fi
 if [[ -x "$NOTIFICATION_HELPER" ]]; then
   helper_status="$("$NOTIFICATION_HELPER" --notification-status 2>/dev/null | head -n 1 || true)"
@@ -211,7 +211,7 @@ printf "\nskills:\n"
 
 printf "\nfeedback:\n"
 if [[ -f "$FEEDBACK_DIR/events.jsonl" ]]; then
-  python3 - "$FEEDBACK_DIR" <<'PY'
+  python3 - "$FEEDBACK_DIR" "$INTROSPECT_HOME_DIR" <<'PY'
 import ast
 import json
 import re
@@ -220,12 +220,21 @@ from collections import Counter
 from pathlib import Path
 
 feedback = Path(sys.argv[1])
+home = Path(sys.argv[2])
 repo = feedback.parent
 active_words = None
-hook_text = (repo / "hooks" / "trigger-reflect.sh").read_text()
-match = re.search(r"DEFAULT_TRIGGER_WORDS = (\{.*?\})", hook_text, flags=re.S)
-if match:
-    active_words = set(ast.literal_eval(match.group(1)))
+words_file = home / "trigger-words.txt"
+if words_file.exists():
+    active_words = {
+        line.strip().lower()
+        for line in words_file.read_text().splitlines()
+        if re.fullmatch(r"[a-z]+", line.strip().lower())
+    }
+else:
+    hook_text = (repo / "hooks" / "trigger-reflect.sh").read_text()
+    match = re.search(r"DEFAULT_TRIGGER_WORDS = (\{.*?\})", hook_text, flags=re.S)
+    if match:
+        active_words = set(ast.literal_eval(match.group(1)))
 
 events = []
 for line in (feedback / "events.jsonl").read_text().splitlines():

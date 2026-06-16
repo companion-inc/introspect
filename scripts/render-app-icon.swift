@@ -49,10 +49,10 @@ highlight?.draw(
     angle: -90
 )
 
-// Glyph: the brain/head profile the app already uses as its identity, in white.
+// Glyph: a simple brain mark in white.
 let symbolConfig = NSImage.SymbolConfiguration(pointSize: 430, weight: .medium)
 guard let symbol = NSImage(
-    systemSymbolName: "brain.head.profile",
+    systemSymbolName: "brain",
     accessibilityDescription: nil
 )?.withSymbolConfiguration(symbolConfig) else {
     fatalError("Could not load SF Symbol")

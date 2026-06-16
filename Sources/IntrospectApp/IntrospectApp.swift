@@ -517,8 +517,8 @@ struct ContentView: View {
                         .tag(IntrospectSection.notifications)
                 }
                 Section("Storage") {
-                    Label("Local Profile", systemImage: "archivebox")
-                        .tag(IntrospectSection.profile)
+                    Label("Introspect Home", systemImage: "archivebox")
+                        .tag(IntrospectSection.home)
                 }
             }
             .listStyle(.sidebar)
@@ -561,8 +561,8 @@ struct ContentView: View {
                                 ProjectsSection(model: model)
                             case .words:
                                 WordsSection(model: model)
-                            case .profile:
-                                ProfileSection(model: model)
+                            case .home:
+                                IntrospectHomeSection(model: model)
                             }
                             if !model.lastCommandOutput.isEmpty {
                                 CommandOutputView(output: model.lastCommandOutput) {
@@ -687,8 +687,8 @@ struct OverviewSection: View {
                 Task { await model.openRepoFolder() }
             }
             Divider()
-            LocationRow(label: "Private profile", path: model.profileDisplayPath) {
-                Task { await model.openProfileFolder() }
+            LocationRow(label: "Introspect home", path: model.introspectHomeDisplayPath) {
+                Task { await model.openIntrospectHomeFolder() }
             }
         }
     }
@@ -1036,7 +1036,7 @@ struct WordsSection: View {
 
         HStack(spacing: 10) {
             Button {
-                Task { await model.saveWordProfile() }
+                Task { await model.saveTriggerWords() }
             } label: {
                 Label("Save Changes", systemImage: "square.and.arrow.down")
             }
@@ -2196,27 +2196,27 @@ struct WordChipList: View {
     }
 }
 
-struct ProfileSection: View {
+struct IntrospectHomeSection: View {
     @ObservedObject var model: IntrospectModel
 
     var body: some View {
         PageHeader(
-            title: "Local Profile",
+            title: "Introspect Home",
             subtitle: "A private git repo for your prompt variants, personal skills, trigger words, and reflector logs. It stays on this machine and out of the open-source app repo."
         )
 
         Card("State") {
-            CheckRow("Git repo", detail: model.profileGitStatus, ok: model.profileGitOK)
+            CheckRow("Git repo", detail: model.homeGitStatus, ok: model.homeGitOK)
             Divider()
-            CheckRow("Word profile", detail: model.wordProfileStatus, ok: model.wordProfileOK)
+            CheckRow("Trigger words", detail: model.triggerWordsStatus, ok: model.triggerWordsOK)
             Divider()
-            InfoRow(label: "Last commit", value: model.profileLastCommit)
+            InfoRow(label: "Last commit", value: model.homeLastCommit)
         }
 
         HStack(spacing: 10) {
-            if model.profileGitOK {
+            if model.homeGitOK {
                 Button {
-                    Task { await model.commitProfileChanges() }
+                    Task { await model.commitHomeChanges() }
                 } label: {
                     Label("Commit Changes", systemImage: "checkmark.circle")
                 }
@@ -2224,7 +2224,7 @@ struct ProfileSection: View {
             }
 
             Button {
-                Task { await model.openProfileFolder() }
+                Task { await model.openIntrospectHomeFolder() }
             } label: {
                 Label("Open in Finder", systemImage: "folder")
             }
@@ -2306,7 +2306,7 @@ enum IntrospectSection: Hashable {
     case runs
     case projects
     case words
-    case profile
+    case home
 }
 
 enum ReflectionMode: String, CaseIterable, Identifiable {
@@ -2381,7 +2381,7 @@ enum ReflectorRunner: String, CaseIterable, Identifiable {
     var helpText: String {
         switch self {
         case .defaultRunner:
-            "Uses the installed agent with the most recent local usage profile. Model overrides apply after the runner is selected."
+            "Uses the installed agent with the most recent local usage history. Model overrides apply after the runner is selected."
         case .claude:
             "Forces reflector runs through Claude. Leave the model fields empty to use Claude's CLI default."
         case .codex:
@@ -2640,9 +2640,9 @@ final class IntrospectModel: ObservableObject {
     @Published var queuedEvents = 0
     @Published var lastRunText = "unknown"
     @Published var triggerWordsText = ""
-    @Published var profileGitOK = false
-    @Published var wordProfileOK = false
-    @Published var profileLastCommit = "none"
+    @Published var homeGitOK = false
+    @Published var triggerWordsOK = false
+    @Published var homeLastCommit = "none"
     @Published var lastCommandOutput = ""
     @Published var promptSurfaces: [ProjectSurfaceRecord] = []
     @Published var skillSurfaces: [ProjectSurfaceRecord] = []
@@ -2666,7 +2666,7 @@ final class IntrospectModel: ObservableObject {
 
     private let fileManager = FileManager.default
     private let repoURL: URL
-    private let profileURL: URL
+    private let introspectHomeURL: URL
     private let homeURL: URL
     private let defaultTriggerWords = [
         "arse", "ass", "asshole", "bastard", "bitch", "bullshit", "crap", "cunt",
@@ -2685,22 +2685,22 @@ final class IntrospectModel: ObservableObject {
         homeURL = URL(fileURLWithPath: NSHomeDirectory())
         let env = ProcessInfo.processInfo.environment
         let repoPath = env["INTROSPECT_REPO"] ?? "\(NSHomeDirectory())/Companion/Code/introspect"
-        let profilePath = env["INTROSPECT_PROFILE_DIR"] ?? "\(NSHomeDirectory())/.introspect/profile"
+        let introspectHomePath = env["INTROSPECT_HOME"] ?? "\(NSHomeDirectory())/.introspect"
         repoURL = URL(fileURLWithPath: repoPath).standardizedFileURL
-        profileURL = URL(fileURLWithPath: profilePath).standardizedFileURL
+        introspectHomeURL = URL(fileURLWithPath: introspectHomePath).standardizedFileURL
     }
 
     var repoPath: String { repoURL.path }
-    var profilePath: String { profileURL.path }
+    var introspectHomePath: String { introspectHomeURL.path }
     var repoDisplayPath: String { displayPath(repoURL) }
-    var profileDisplayPath: String { displayPath(profileURL) }
+    var introspectHomeDisplayPath: String { displayPath(introspectHomeURL) }
 
     var claudePromptStatus: String {
-        claudePromptOK ? "~/.claude/CLAUDE.md -> \(displayPath(repoURL))/AGENTS.md" : "not linked to this repo"
+        claudePromptOK ? "~/.claude/CLAUDE.md -> \(displayPath(introspectHomeURL))/AGENTS.md" : "not linked to Introspect home"
     }
 
     var codexPromptStatus: String {
-        codexPromptOK ? "~/.codex/AGENTS.md -> \(displayPath(repoURL))/AGENTS.md" : "not linked to this repo"
+        codexPromptOK ? "~/.codex/AGENTS.md -> \(displayPath(introspectHomeURL))/AGENTS.md" : "not linked to Introspect home"
     }
 
     var hooksSummary: String {
@@ -2801,20 +2801,20 @@ final class IntrospectModel: ObservableObject {
         }
     }
 
-    var profileGitStatus: String {
-        profileGitOK ? "\(displayPath(profileURL))/.git" : "not initialized"
+    var homeGitStatus: String {
+        homeGitOK ? "\(displayPath(introspectHomeURL))/.git" : "not initialized"
     }
 
-    var wordProfileStatus: String {
-        wordProfileOK ? displayPath(wordProfileURL) : "missing"
+    var triggerWordsStatus: String {
+        triggerWordsOK ? displayPath(triggerWordsURL) : "missing"
     }
 
-    private var wordProfileURL: URL {
-        profileURL.appendingPathComponent("trigger-words.json")
+    private var triggerWordsURL: URL {
+        introspectHomeURL.appendingPathComponent("trigger-words.txt")
     }
 
-    private var profileSettingsURL: URL {
-        profileURL.appendingPathComponent("settings.json")
+    private var homeSettingsURL: URL {
+        introspectHomeURL.appendingPathComponent("settings.json")
     }
 
     private var builtNotificationHelperURL: URL {
@@ -2859,7 +2859,7 @@ final class IntrospectModel: ObservableObject {
     }
 
     func refreshNotificationState() async {
-        loadProfileSettings()
+        loadHomeSettings()
         notificationHelperInstalled = fileManager.isExecutableFile(atPath: notificationHelperURL.path)
         notificationPermission = IntrospectNotificationPermission(await IntrospectNotifications.authorizationStatus())
     }
@@ -2867,7 +2867,7 @@ final class IntrospectModel: ObservableObject {
     func setNotificationsEnabled(_ enabled: Bool) async {
         notificationsEnabled = enabled
         do {
-            try saveProfileSettings(["notifications_enabled": enabled])
+            try saveHomeSettings(["notifications_enabled": enabled])
             lastCommandOutput = enabled ? "Enabled reflector notifications." : "Disabled reflector notifications."
         } catch {
             lastCommandOutput = "Failed to save notification setting: \(error.localizedDescription)"
@@ -2953,8 +2953,8 @@ final class IntrospectModel: ObservableObject {
         defer { isApplyingConfiguration = false }
 
         var repaired = false
-        if !profileGitOK || !wordProfileOK || !fileManager.fileExists(atPath: profileSettingsURL.path) {
-            await initializeProfileRepo(report: false, refreshAfter: false)
+        if !homeGitOK || !triggerWordsOK || !fileManager.fileExists(atPath: homeSettingsURL.path) {
+            await initializeIntrospectHome(report: false, refreshAfter: false)
             repaired = true
         }
 
@@ -2983,8 +2983,9 @@ final class IntrospectModel: ObservableObject {
 
     func refresh() async {
         await refreshNotificationState()
-        claudePromptOK = symlink(homeURL.appendingPathComponent(".claude/CLAUDE.md"), pointsTo: repoURL.appendingPathComponent("AGENTS.md"))
-        codexPromptOK = symlink(homeURL.appendingPathComponent(".codex/AGENTS.md"), pointsTo: repoURL.appendingPathComponent("AGENTS.md"))
+        let homePrompt = introspectHomeURL.appendingPathComponent("AGENTS.md")
+        claudePromptOK = symlink(homeURL.appendingPathComponent(".claude/CLAUDE.md"), pointsTo: homePrompt)
+        codexPromptOK = symlink(homeURL.appendingPathComponent(".codex/AGENTS.md"), pointsTo: homePrompt)
         let claude = hookStatus(path: homeURL.appendingPathComponent(".claude/settings.json"))
         let codex = hookStatus(path: homeURL.appendingPathComponent(".codex/hooks.json"))
         claudeHookInstalled = claude.installed
@@ -3002,11 +3003,11 @@ final class IntrospectModel: ObservableObject {
         queuedEvents = lineCount(repoURL.appendingPathComponent("feedback/trigger-queue.jsonl"))
         lastRunText = readLastRun()
         loadTriggerHistory()
-        loadWordProfile()
-        profileGitOK = fileManager.fileExists(atPath: profileURL.appendingPathComponent(".git").path)
-        wordProfileOK = fileManager.fileExists(atPath: wordProfileURL.path)
-        profileLastCommit = profileGitOK
-            ? await gitOutput(["-C", profileURL.path, "log", "-1", "--oneline"]).trimmedOr("none")
+        loadTriggerWords()
+        homeGitOK = fileManager.fileExists(atPath: introspectHomeURL.appendingPathComponent(".git").path)
+        triggerWordsOK = fileManager.fileExists(atPath: triggerWordsURL.path)
+        homeLastCommit = homeGitOK
+            ? await gitOutput(["-C", introspectHomeURL.path, "log", "-1", "--oneline"]).trimmedOr("none")
             : "none"
 
         isScanningSurfaces = true
@@ -3029,10 +3030,13 @@ final class IntrospectModel: ObservableObject {
     }
 
     func applySystemPromptAndHooks(report: Bool = true, refreshAfter: Bool = true) async {
-        await initializeProfileRepo(report: false, refreshAfter: false)
+        await initializeIntrospectHome(report: false, refreshAfter: false)
         try? saveConfigurationSettings()
         var args = [
             repoURL.appendingPathComponent("scripts/install-hooks.sh").path,
+            "--home", introspectHomeURL.path,
+            "--prompt", introspectHomeURL.appendingPathComponent("AGENTS.md").path,
+            "--user-skills", introspectHomeURL.appendingPathComponent("skills").path,
             "--reflect-mode", mode.rawValue,
             "--nightly-hour", "\(nightlyHour)",
             "--nightly-minute", "\(nightlyMinute)",
@@ -3044,6 +3048,9 @@ final class IntrospectModel: ObservableObject {
         if mode == .off {
             args = [
                 repoURL.appendingPathComponent("scripts/install-hooks.sh").path,
+                "--home", introspectHomeURL.path,
+                "--prompt", introspectHomeURL.appendingPathComponent("AGENTS.md").path,
+                "--user-skills", introspectHomeURL.appendingPathComponent("skills").path,
                 "--reflect-mode", "off"
             ]
         }
@@ -3102,7 +3109,7 @@ final class IntrospectModel: ObservableObject {
     }
 
     private func saveConfigurationSettings() throws {
-        try saveProfileSettings([
+        try saveHomeSettings([
             "notifications_enabled": notificationsEnabled,
             "reflect_mode": mode.rawValue,
             "reflector_runner": reflectorRunner.rawValue,
@@ -3114,19 +3121,38 @@ final class IntrospectModel: ObservableObject {
         ])
     }
 
-    func initializeProfileRepo(report: Bool = true, refreshAfter: Bool = true) async {
+    func initializeIntrospectHome(report: Bool = true, refreshAfter: Bool = true) async {
         do {
-            try fileManager.createDirectory(at: profileURL.appendingPathComponent("skills"), withIntermediateDirectories: true)
-            try fileManager.createDirectory(at: profileURL.appendingPathComponent("prompts"), withIntermediateDirectories: true)
-            if !fileManager.fileExists(atPath: wordProfileURL.path) {
-                let data: [String: Any] = [
-                    "words": defaultTriggerWords,
-                    "learned_candidates": [],
-                    "notes": "Local Introspect profile. Only these exact words trigger the hook."
-                ]
-                try writeJSON(data, to: wordProfileURL)
+            try fileManager.createDirectory(at: introspectHomeURL.appendingPathComponent("skills"), withIntermediateDirectories: true)
+            try fileManager.createDirectory(at: introspectHomeURL.appendingPathComponent("memory"), withIntermediateDirectories: true)
+            try fileManager.createDirectory(at: introspectHomeURL.appendingPathComponent("runs"), withIntermediateDirectories: true)
+            try fileManager.createDirectory(at: introspectHomeURL.appendingPathComponent("proposals"), withIntermediateDirectories: true)
+            let agentsHomeURL = introspectHomeURL.appendingPathComponent("AGENTS.md")
+            if !fileManager.fileExists(atPath: agentsHomeURL.path) {
+                let repoPromptURL = repoURL.appendingPathComponent("AGENTS.md")
+                if fileManager.fileExists(atPath: repoPromptURL.path) {
+                    try fileManager.copyItem(at: repoPromptURL, to: agentsHomeURL)
+                } else {
+                    try """
+                    # AGENTS.md
+
+                    ## Mission
+
+                    - Add global user-wide agent guidance here.
+                    """.write(to: agentsHomeURL, atomically: true, encoding: .utf8)
+                }
             }
-            if !fileManager.fileExists(atPath: profileSettingsURL.path) {
+            let skillsIndexURL = introspectHomeURL.appendingPathComponent("skills/index.json")
+            if !fileManager.fileExists(atPath: skillsIndexURL.path) {
+                try writeJSON([
+                    "version": 1,
+                    "skills": []
+                ], to: skillsIndexURL)
+            }
+            if !fileManager.fileExists(atPath: triggerWordsURL.path) {
+                try (defaultTriggerWords.joined(separator: "\n") + "\n").write(to: triggerWordsURL, atomically: true, encoding: .utf8)
+            }
+            if !fileManager.fileExists(atPath: homeSettingsURL.path) {
                 try writeJSON([
                     "notifications_enabled": notificationsEnabled,
                     "reflect_mode": mode.rawValue,
@@ -3136,50 +3162,53 @@ final class IntrospectModel: ObservableObject {
                     "reflector_codex_model": normalizedModelSetting(reflectorCodexModel),
                     "nightly_hour": nightlyHour,
                     "nightly_minute": nightlyMinute
-                ], to: profileSettingsURL)
+                ], to: homeSettingsURL)
             }
-            let readme = profileURL.appendingPathComponent("README.md")
+            let readme = introspectHomeURL.appendingPathComponent("README.md")
             if !fileManager.fileExists(atPath: readme.path) {
                 try """
-                # Introspect Local Profile
+                # Introspect Home
 
                 This repository is private local state for Introspect:
 
-                - `trigger-words.json`: exact trigger words.
+                - `AGENTS.md`: the canonical user-wide prompt linked into Claude and Codex.
+                - `trigger-words.txt`: exact trigger words, one lowercase word per line.
                 - `settings.json`: local app preferences such as notification delivery.
-                - `prompts/`: private prompt variants.
                 - `skills/`: private user skills.
+                - `memory/`: durable user and machine facts.
+                - `runs/`: local run artifacts.
+                - `proposals/`: reflector proposals before they are accepted.
 
                 Commit changes locally when you want a checkpoint.
                 """.write(to: readme, atomically: true, encoding: .utf8)
             }
         } catch {
             if report {
-                lastCommandOutput = "Failed to initialize profile files: \(error)"
+                lastCommandOutput = "Failed to initialize home files: \(error)"
             }
             return
         }
 
-        if !fileManager.fileExists(atPath: profileURL.appendingPathComponent(".git").path) {
-            _ = await gitOutput(["init", profileURL.path])
+        if !fileManager.fileExists(atPath: introspectHomeURL.appendingPathComponent(".git").path) {
+            _ = await gitOutput(["init", introspectHomeURL.path])
         }
-        await commitProfileChanges(message: "Initialize Introspect profile", report: report)
+        await commitHomeChanges(message: "Initialize Introspect home", report: report)
         if refreshAfter {
             await refresh()
         }
     }
 
-    func saveWordProfile() async {
+    func saveTriggerWords() async {
         let words = parseWords(triggerWordsText)
         do {
-            try fileManager.createDirectory(at: profileURL, withIntermediateDirectories: true)
-            try writeJSON(["words": words], to: wordProfileURL)
+            try fileManager.createDirectory(at: introspectHomeURL, withIntermediateDirectories: true)
+            try (words.joined(separator: "\n") + "\n").write(to: triggerWordsURL, atomically: true, encoding: .utf8)
             savedTriggerWords = words
             lastCommandOutput = "Saved \(words.count) trigger word(s)."
         } catch {
-            lastCommandOutput = "Failed to save word profile: \(error)"
+            lastCommandOutput = "Failed to save trigger words: \(error)"
         }
-        await commitProfileChanges(message: "Update trigger word profile")
+        await commitHomeChanges(message: "Update trigger words")
         await refresh()
     }
 
@@ -3200,13 +3229,13 @@ final class IntrospectModel: ObservableObject {
         triggerWordsText = activeTriggerWords.filter { $0 != word }.joined(separator: "\n")
     }
 
-    func commitProfileChanges() async {
-        await commitProfileChanges(message: "Update Introspect profile")
+    func commitHomeChanges() async {
+        await commitHomeChanges(message: "Update Introspect home")
         await refresh()
     }
 
-    func openProfileFolder() async {
-        NSWorkspace.shared.open(profileURL)
+    func openIntrospectHomeFolder() async {
+        NSWorkspace.shared.open(introspectHomeURL)
     }
 
     func openRepoFolder() async {
@@ -3384,14 +3413,7 @@ final class IntrospectModel: ObservableObject {
 
             let claudeURL = repoURL.appendingPathComponent("CLAUDE.md")
             if !fileManager.fileExists(atPath: claudeURL.path) {
-                try """
-                @AGENTS.md
-
-                ## Claude Code
-
-                - Shared project instructions live in `AGENTS.md`.
-                - Add only Claude-specific project behavior below this line.
-                """.write(to: claudeURL, atomically: true, encoding: .utf8)
+                try fileManager.createSymbolicLink(atPath: claudeURL.path, withDestinationPath: "AGENTS.md")
             }
 
             try fileManager.createDirectory(at: repoURL.appendingPathComponent(".agents/skills"), withIntermediateDirectories: true)
@@ -3411,16 +3433,16 @@ final class IntrospectModel: ObservableObject {
         }
     }
 
-    private func commitProfileChanges(message: String, report: Bool = true) async {
-        _ = await gitOutput(["-C", profileURL.path, "add", "."])
-        let status = await gitOutput(["-C", profileURL.path, "status", "--porcelain"])
+    private func commitHomeChanges(message: String, report: Bool = true) async {
+        _ = await gitOutput(["-C", introspectHomeURL.path, "add", "."])
+        let status = await gitOutput(["-C", introspectHomeURL.path, "status", "--porcelain"])
         if status.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             if report {
-                lastCommandOutput = "Profile repo has no uncommitted changes."
+                lastCommandOutput = "Introspect home has no uncommitted changes."
             }
             return
         }
-        let output = await gitOutput(["-C", profileURL.path, "commit", "-m", message])
+        let output = await gitOutput(["-C", introspectHomeURL.path, "commit", "-m", message])
         if report {
             lastCommandOutput = output
         }
@@ -3491,18 +3513,20 @@ final class IntrospectModel: ObservableObject {
     private func projectSortRank(_ path: String) -> Int {
         let homePath = homeURL.standardizedFileURL.path
         if path == repoURL.standardizedFileURL.path { return 0 }
-        if path == homePath + "/.codex" { return 1 }
-        if path == homePath + "/.claude" { return 2 }
-        if path == homePath + "/.agents" { return 3 }
-        if path.hasPrefix(homePath + "/Projects/") { return 4 }
-        if path.hasPrefix(homePath + "/Companion/Code/") { return 5 }
-        if path.hasPrefix(homePath + "/Documents/Codex/") { return 6 }
+        if path == introspectHomeURL.standardizedFileURL.path { return 1 }
+        if path == homePath + "/.codex" { return 2 }
+        if path == homePath + "/.claude" { return 3 }
+        if path == homePath + "/.agents" { return 4 }
+        if path.hasPrefix(homePath + "/Projects/") { return 5 }
+        if path.hasPrefix(homePath + "/Companion/Code/") { return 6 }
+        if path.hasPrefix(homePath + "/Documents/Codex/") { return 7 }
         return 10
     }
 
     private func scanRoots() -> [URL] {
         [
             repoURL,
+            introspectHomeURL,
             homeURL.appendingPathComponent("Projects"),
             homeURL.appendingPathComponent("Companion/Code"),
             homeURL.appendingPathComponent("Documents/Codex"),
@@ -3515,6 +3539,7 @@ final class IntrospectModel: ObservableObject {
     private func priorityScanRoots() -> [URL] {
         [
             repoURL,
+            introspectHomeURL,
             homeURL.appendingPathComponent(".codex"),
             homeURL.appendingPathComponent(".claude"),
             homeURL.appendingPathComponent(".agents")
@@ -3638,6 +3663,13 @@ final class IntrospectModel: ObservableObject {
     private func surfaceScope(for url: URL, isSkill: Bool) -> String {
         let path = url.standardizedFileURL.path
         let homePath = homeURL.standardizedFileURL.path
+        let introspectHomePath = introspectHomeURL.standardizedFileURL.path
+        if path.hasPrefix(introspectHomePath + "/skills/") {
+            return "Introspect user skill"
+        }
+        if path == introspectHomePath || path.hasPrefix(introspectHomePath + "/") {
+            return url.lastPathComponent == "AGENTS.md" ? "Introspect home prompt" : "Introspect home"
+        }
         if path.hasPrefix(homePath + "/.codex/skills/") {
             return "Codex user skill"
         }
@@ -3678,6 +3710,10 @@ final class IntrospectModel: ObservableObject {
     private func projectRoot(for url: URL) -> URL {
         let path = url.standardizedFileURL.path
         let homePath = homeURL.standardizedFileURL.path
+        let introspectHomePath = introspectHomeURL.standardizedFileURL.path
+        if path == introspectHomePath || path.hasPrefix(introspectHomePath + "/") {
+            return introspectHomeURL.standardizedFileURL
+        }
         for globalDirectory in [".codex", ".claude", ".agents"] {
             let globalURL = homeURL.appendingPathComponent(globalDirectory).standardizedFileURL
             let globalPath = globalURL.path
@@ -3724,6 +3760,8 @@ final class IntrospectModel: ObservableObject {
         let path = root.standardizedFileURL.path
         let homePath = homeURL.standardizedFileURL.path
         switch path {
+        case introspectHomeURL.standardizedFileURL.path:
+            return "Introspect Home"
         case homePath + "/.codex":
             return "Codex Global"
         case homePath + "/.claude":
@@ -3740,6 +3778,9 @@ final class IntrospectModel: ObservableObject {
 
     private func projectIcon(for projectPath: String) -> String {
         let homePath = homeURL.standardizedFileURL.path
+        if projectPath == introspectHomeURL.standardizedFileURL.path {
+            return "archivebox"
+        }
         if projectPath == homePath + "/.codex" {
             return "terminal"
         }
@@ -3801,20 +3842,20 @@ final class IntrospectModel: ObservableObject {
         try (prefix + entry + "\n").write(to: gitignoreURL, atomically: true, encoding: .utf8)
     }
 
-    private func loadWordProfile() {
-        wordProfileOK = fileManager.fileExists(atPath: wordProfileURL.path)
-        guard let data = try? Data(contentsOf: wordProfileURL),
-              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+    private func loadTriggerWords() {
+        triggerWordsOK = fileManager.fileExists(atPath: triggerWordsURL.path)
+        guard let text = try? String(contentsOf: triggerWordsURL, encoding: .utf8) else {
             savedTriggerWords = defaultTriggerWords
             resetWordDraft()
             return
         }
-        savedTriggerWords = (object["words"] as? [String] ?? defaultTriggerWords).sorted()
+        let words = parseWords(text)
+        savedTriggerWords = words.isEmpty ? defaultTriggerWords : words
         resetWordDraft()
     }
 
-    private func loadProfileSettings() {
-        let settings = readProfileSettings()
+    private func loadHomeSettings() {
+        let settings = readHomeSettings()
         notificationsEnabled = settings["notifications_enabled"] as? Bool ?? true
         mode = ReflectionMode.parse(settings["reflect_mode"] as? String)
         reflectorRunner = ReflectorRunner.parse(settings["reflector_runner"] as? String)
@@ -3829,17 +3870,17 @@ final class IntrospectModel: ObservableObject {
         }
     }
 
-    private func saveProfileSettings(_ updates: [String: Any]) throws {
-        try fileManager.createDirectory(at: profileURL, withIntermediateDirectories: true)
-        var settings = readProfileSettings()
+    private func saveHomeSettings(_ updates: [String: Any]) throws {
+        try fileManager.createDirectory(at: introspectHomeURL, withIntermediateDirectories: true)
+        var settings = readHomeSettings()
         for (key, value) in updates {
             settings[key] = value
         }
-        try writeJSON(settings, to: profileSettingsURL)
+        try writeJSON(settings, to: homeSettingsURL)
     }
 
-    private func readProfileSettings() -> [String: Any] {
-        guard let data = try? Data(contentsOf: profileSettingsURL),
+    private func readHomeSettings() -> [String: Any] {
+        guard let data = try? Data(contentsOf: homeSettingsURL),
               let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
             return [:]
         }
@@ -4267,8 +4308,8 @@ final class IntrospectModel: ObservableObject {
             return "Core prompt"
         case "project_prompt":
             return "Project prompt"
-        case "profile_memory":
-            return "Profile memory"
+        case "home_memory":
+            return "Home memory"
         case "skill_new":
             return "New skill"
         case "skill_update":
@@ -4298,8 +4339,8 @@ final class IntrospectModel: ObservableObject {
             return "Changed the core agent prompt"
         case "project_prompt":
             return "Changed a project prompt\(suffix)"
-        case "profile_memory":
-            return "Updated profile memory\(suffix)"
+        case "home_memory":
+            return "Updated home memory\(suffix)"
         case "skill_new":
             return "Created a skill\(suffix)"
         case "skill_update":
@@ -4326,7 +4367,7 @@ final class IntrospectModel: ObservableObject {
             return "checkmark.circle"
         case "core_prompt", "project_prompt":
             return "doc.text"
-        case "profile_memory":
+        case "home_memory":
             return "person.crop.circle"
         case "skill_new", "skill_update", "project_skill_new", "project_skill_update", "skill_prune":
             return "hammer"

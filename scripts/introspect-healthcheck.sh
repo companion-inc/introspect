@@ -3,8 +3,9 @@ set -euo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 FEEDBACK_DIR="${INTROSPECT_FEEDBACK_DIR:-$REPO/feedback}"
-PROFILE_DIR="${INTROSPECT_PROFILE_DIR:-$HOME/.introspect/profile}"
-SETTINGS="$PROFILE_DIR/settings.json"
+INTROSPECT_HOME_DIR="${INTROSPECT_HOME:-$HOME/.introspect}"
+SETTINGS="$INTROSPECT_HOME_DIR/settings.json"
+PROMPT="$INTROSPECT_HOME_DIR/AGENTS.md"
 LOG="$FEEDBACK_DIR/healthcheck.log"
 LATEST="$FEEDBACK_DIR/health-status.latest"
 
@@ -89,11 +90,11 @@ reasons=()
 
 echo "$(timestamp) healthcheck start mode=$mode runner=$runner"
 
-if [[ "$(readlink "$HOME/.claude/CLAUDE.md" 2>/dev/null || true)" != "$REPO/AGENTS.md" ]]; then
+if [[ "$(readlink "$HOME/.claude/CLAUDE.md" 2>/dev/null || true)" != "$PROMPT" ]]; then
   needs_repair=1
   reasons+=("Claude prompt link drifted")
 fi
-if [[ "$(readlink "$HOME/.codex/AGENTS.md" 2>/dev/null || true)" != "$REPO/AGENTS.md" ]]; then
+if [[ "$(readlink "$HOME/.codex/AGENTS.md" 2>/dev/null || true)" != "$PROMPT" ]]; then
   needs_repair=1
   reasons+=("Codex prompt link drifted")
 fi
@@ -153,7 +154,7 @@ if [[ "$needs_repair" == "1" ]]; then
     --claude-model "$claude_model" \
     --claude-fallback-model "$claude_fallback_model" \
     --codex-model "$codex_model" \
-    --profile-dir "$PROFILE_DIR" \
+    --home "$INTROSPECT_HOME_DIR" \
     --feedback-dir "$FEEDBACK_DIR"
 else
   echo "$(timestamp) no repair needed"

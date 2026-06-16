@@ -7,7 +7,7 @@ Introspect should solve the problem of too much agent/computer activity spread a
 1. `no_change` when the signal is casual register, external-system pain, or unsupported.
 2. Global agent prompt when the lesson is always-on across nearly every task.
 3. Project prompt when the lesson is repo-specific state, architecture, or workflow policy.
-4. Profile memory when the lesson is a durable user/local-machine preference.
+4. Home memory when the lesson is a durable user/local-machine preference.
 5. User-wide or project-local skills when the lesson is a repeatable procedure, source map, or tool workflow.
 6. Hooks/scripts when the behavior must happen deterministically.
 
@@ -68,7 +68,7 @@ Sources: `hooks/trigger-worker.py:833-834`, `skills/skill-creator/SKILL.md:73`.
 
 - A single user prompt captured by both hook and scanner becomes one canonical event, not four reflector events. Evidence: current duplicate event lines `feedback/events.jsonl:4714-4717`.
 - The scanner remains a backstop for missed Codex Desktop hooks, but it does not behave like a noisy poller. Evidence: installed scanner uses `WatchPaths`, not `StartInterval`, in `/Users/advaitpaliwal/Library/LaunchAgents/ai.companion.introspect.codex-scanner.plist:42-52`.
-- The system can show why a trigger became `no_change`, `core_prompt`, `project_prompt`, `profile_memory`, `skill_new`, `skill_update`, `project_skill_new`, `project_skill_update`, `skill_prune`, or hook/script work.
+- The system can show why a trigger became `no_change`, `core_prompt`, `project_prompt`, `home_memory`, `skill_new`, `skill_update`, `project_skill_new`, `project_skill_update`, `skill_prune`, or hook/script work.
 - A technology-specific repeated complaint routes to the closest existing project/user skill before proposing a new one. Source: `skills/skill-creator/SKILL.md:18-20`, `skills/skill-creator/references/source-map.md:136-139`.
 - A project-specific complaint routes to project prompt or project skill, not the global prompt, unless the same failure shape repeats across projects. Source: `docs/hermes-self-evolution-review.md:44-52`.
 - A visible run includes enough evidence for the user to trust the action: event text, transcript path, classifier reason, chosen target, diff, validation, and rollback path.

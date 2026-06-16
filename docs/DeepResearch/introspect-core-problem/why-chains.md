@@ -54,7 +54,7 @@ Rejected alternatives:
 
 Decision:
 
-Introspect should be an evidence-backed curator that turns repeated operator pain into the narrowest durable improvement. It should maintain a compact global prompt, project prompts for repo facts, project skills for repeatable repo procedures, user skills for cross-project workflows, profile memory for durable user/local facts, and hooks for deterministic guarantees.
+Introspect should be an evidence-backed curator that turns repeated operator pain into the narrowest durable improvement. It should maintain a compact global prompt, project prompts for repo facts, project skills for repeatable repo procedures, user skills for cross-project workflows, home memory for durable user/local facts, and hooks for deterministic guarantees.
 
 Verification:
 

@@ -33,10 +33,10 @@ FEEDBACK_DIR = os.path.expanduser(
 EVENTS = os.path.join(FEEDBACK_DIR, "events.jsonl")
 QUEUE = os.path.join(FEEDBACK_DIR, "trigger-queue.jsonl")
 WORKER = os.path.join(REPO, "hooks", "trigger-worker.py")
-PROFILE_DIR = os.path.expanduser(
-    os.environ.get("INTROSPECT_PROFILE_DIR") or "~/.introspect/profile"
+INTROSPECT_HOME = os.path.expanduser(
+    os.environ.get("INTROSPECT_HOME") or "~/.introspect"
 )
-PROFILE_FILE = os.path.join(PROFILE_DIR, "trigger-words.json")
+TRIGGER_WORDS_FILE = os.path.join(INTROSPECT_HOME, "trigger-words.txt")
 REFLECT_MODE = (
     os.environ.get("INTROSPECT_REFLECT_MODE") or "immediate"
 ).strip().lower()
@@ -89,8 +89,6 @@ DEFAULT_TRIGGER_WORDS = {
 
 
 def normalize_words(values):
-    if not isinstance(values, list):
-        return set()
     words = set()
     for value in values:
         if isinstance(value, str):
@@ -103,18 +101,12 @@ def normalize_words(values):
 def active_trigger_words():
     words = set(DEFAULT_TRIGGER_WORDS)
     try:
-        with open(PROFILE_FILE) as f:
-            data = json.load(f)
+        with open(TRIGGER_WORDS_FILE) as f:
+            home_words = normalize_words(f.read().splitlines())
     except Exception:
         return words
 
-    if isinstance(data, list):
-        return normalize_words(data) or words
-    if not isinstance(data, dict):
-        return words
-
-    profile_words = normalize_words(data.get("words"))
-    return profile_words or words
+    return home_words or words
 
 
 TRIGGER_WORDS = active_trigger_words()

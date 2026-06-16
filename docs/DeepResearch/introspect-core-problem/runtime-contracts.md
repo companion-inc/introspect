@@ -71,9 +71,9 @@ Contract:
   },
   "agent_surfaces": [
     {
-      "kind": "global_prompt|project_prompt|profile_memory|skill|project_skill|hook",
+      "kind": "global_prompt|project_prompt|home_memory|skill|project_skill|hook",
       "path": "...",
-      "scope": "global|project|profile",
+      "scope": "global|project|home",
       "loaded_for_event": true
     }
   ],
@@ -103,7 +103,7 @@ Contract:
 {
   "decision_id": "...",
   "batch_id": "...",
-  "classification": "no_change|core_prompt|project_prompt|profile_memory|skill_new|skill_update|project_skill_new|project_skill_update|skill_prune|hook_or_script",
+  "classification": "no_change|core_prompt|project_prompt|home_memory|skill_new|skill_update|project_skill_new|project_skill_update|skill_prune|hook_or_script",
   "confidence": 0.0,
   "diagnosis": "one-sentence behavioral failure or false-positive reason",
   "evidence": [
@@ -162,6 +162,6 @@ Contract:
 
 Contract:
 
-- Staged changes live under the private profile or ignored feedback directory until approved.
+- Staged changes live under the private Introspect home or ignored feedback directory until approved.
 - Applied changes write surface diffs for rollback.
 - Project skill changes target the project by default, not the global skill library.

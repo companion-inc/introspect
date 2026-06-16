@@ -12,8 +12,9 @@ export STAMP
 MODE="install"
 PROMPT=""
 SKILLS_DIR=""
+USER_SKILLS_DIR=""
 FEEDBACK_DIR=""
-PROFILE_DIR="${INTROSPECT_PROFILE_DIR:-$HOME/.introspect/profile}"
+INTROSPECT_HOME_DIR="${INTROSPECT_HOME:-$HOME/.introspect}"
 REFLECT_MODE="immediate"
 NIGHTLY_HOUR=3
 NIGHTLY_MINUTE=0
@@ -30,10 +31,11 @@ MONITOR_PLIST="$HOME/Library/LaunchAgents/$MONITOR_LABEL.plist"
 
 usage() {
   cat <<EOF
-Usage: $0 [--uninstall] [--prompt PATH] [--skills PATH] [--feedback-dir PATH] [--profile-dir PATH] [--reflect-mode immediate|nightly|off] [--nightly-hour H] [--nightly-minute M] [--runner default|claude|codex] [--claude-model MODEL] [--claude-fallback-model MODEL] [--codex-model MODEL]
+Usage: $0 [--uninstall] [--prompt PATH] [--skills PATH] [--user-skills PATH] [--feedback-dir PATH] [--home PATH] [--reflect-mode immediate|nightly|off] [--nightly-hour H] [--nightly-minute M] [--runner default|claude|codex] [--claude-model MODEL] [--claude-fallback-model MODEL] [--codex-model MODEL]
 
-install          Link this repo's prompt and configure Claude/Codex hooks.
---uninstall      Remove this repo's prompt links, hooks, scanner, monitor, and reflector LaunchAgents.
+install          Link ~/.introspect/AGENTS.md and configure Claude/Codex hooks.
+--uninstall      Remove Introspect prompt links, hooks, scanner, monitor, and reflector LaunchAgents.
+--home           Introspect home. Default: ~/.introspect.
 --reflect-mode   immediate kicks the locked worker after trigger; nightly queues for the LaunchAgent; off removes hooks but keeps prompt links.
 --runner         Reflector runner. default picks the installed agent with the most recent local usage; claude/codex force one.
 --claude-model   Optional Claude model alias/id for reflector runs. Blank/default/auto uses Claude CLI default.
@@ -61,12 +63,16 @@ while [[ $# -gt 0 ]]; do
       SKILLS_DIR="${2:-}"
       shift 2
       ;;
+    --user-skills)
+      USER_SKILLS_DIR="${2:-}"
+      shift 2
+      ;;
     --feedback-dir)
       FEEDBACK_DIR="${2:-}"
       shift 2
       ;;
-    --profile-dir)
-      PROFILE_DIR="${2:-}"
+    --home|--introspect-home)
+      INTROSPECT_HOME_DIR="${2:-}"
       shift 2
       ;;
     --reflect-mode|--mode)
@@ -131,13 +137,103 @@ quote() {
   printf "%q" "$1"
 }
 
-if [[ -z "$PROMPT" ]]; then
-  if [[ -f "$REPO/AGENTS.md" ]]; then
-    PROMPT="$REPO/AGENTS.md"
-  else
-    echo "missing --prompt PATH" >&2
-    exit 2
+INTROSPECT_HOME_DIR="$(expand_path "$INTROSPECT_HOME_DIR")"
+
+ensure_home_files() {
+  mkdir -p "$INTROSPECT_HOME_DIR/skills" "$INTROSPECT_HOME_DIR/memory" "$INTROSPECT_HOME_DIR/runs" "$INTROSPECT_HOME_DIR/proposals"
+  if [[ ! -f "$INTROSPECT_HOME_DIR/AGENTS.md" ]]; then
+    if [[ -f "$REPO/AGENTS.md" ]]; then
+      cp "$REPO/AGENTS.md" "$INTROSPECT_HOME_DIR/AGENTS.md"
+    else
+      printf '# AGENTS.md\n\n## Mission\n\n- Add global user-wide agent guidance here.\n' > "$INTROSPECT_HOME_DIR/AGENTS.md"
+    fi
   fi
+  if [[ ! -f "$INTROSPECT_HOME_DIR/skills/index.json" ]]; then
+    printf '{\n  "version": 1,\n  "skills": []\n}\n' > "$INTROSPECT_HOME_DIR/skills/index.json"
+  fi
+  if [[ ! -f "$INTROSPECT_HOME_DIR/trigger-words.txt" ]]; then
+    cat > "$INTROSPECT_HOME_DIR/trigger-words.txt" <<'WORDS'
+arse
+ass
+asshole
+bastard
+bitch
+bullshit
+crap
+cunt
+damn
+dipshit
+dumb
+dumbass
+dumbfuck
+fag
+faggot
+ffs
+fuck
+fucked
+fucker
+fuckin
+fucking
+goddamn
+hell
+idiot
+mf
+moron
+motherfucker
+motherfucking
+nigga
+nigger
+retard
+retarded
+shitty
+stupid
+wtf
+WORDS
+  fi
+  if [[ ! -f "$INTROSPECT_HOME_DIR/settings.json" ]]; then
+    cat > "$INTROSPECT_HOME_DIR/settings.json" <<JSON
+{
+  "notifications_enabled": true,
+  "reflect_mode": "$REFLECT_MODE",
+  "reflector_runner": "$REFLECTOR_RUNNER",
+  "reflector_claude_model": "",
+  "reflector_claude_fallback_model": "",
+  "reflector_codex_model": "",
+  "nightly_hour": $NIGHTLY_HOUR,
+  "nightly_minute": $NIGHTLY_MINUTE
+}
+JSON
+  fi
+  if [[ ! -f "$INTROSPECT_HOME_DIR/README.md" ]]; then
+    cat > "$INTROSPECT_HOME_DIR/README.md" <<'MD'
+# Introspect Home
+
+This repository is private local state for Introspect:
+
+- `AGENTS.md`: the canonical user-wide prompt linked into Claude and Codex.
+- `trigger-words.txt`: exact trigger words, one lowercase word per line.
+- `settings.json`: local app preferences such as notification delivery.
+- `skills/`: private user skills.
+- `memory/`: durable user and machine facts.
+- `runs/`: local run artifacts.
+- `proposals/`: reflector proposals before they are accepted.
+
+Commit changes locally when you want a checkpoint.
+MD
+  fi
+  if [[ ! -d "$INTROSPECT_HOME_DIR/.git" ]]; then
+    git init "$INTROSPECT_HOME_DIR" >/dev/null
+  fi
+}
+
+ensure_home_files
+git -C "$INTROSPECT_HOME_DIR" add . >/dev/null 2>&1 || true
+if [[ -d "$INTROSPECT_HOME_DIR/.git" ]] && [[ -n "$(git -C "$INTROSPECT_HOME_DIR" status --porcelain 2>/dev/null || true)" ]]; then
+  git -C "$INTROSPECT_HOME_DIR" commit -m "Update Introspect home" >/dev/null 2>&1 || true
+fi
+
+if [[ -z "$PROMPT" ]]; then
+  PROMPT="$INTROSPECT_HOME_DIR/AGENTS.md"
 fi
 
 PROMPT="$(expand_path "$PROMPT")"
@@ -145,11 +241,14 @@ if [[ -z "$SKILLS_DIR" ]]; then
   SKILLS_DIR="$REPO/skills"
 fi
 SKILLS_DIR="$(expand_path "$SKILLS_DIR")"
+if [[ -z "$USER_SKILLS_DIR" ]]; then
+  USER_SKILLS_DIR="$INTROSPECT_HOME_DIR/skills"
+fi
+USER_SKILLS_DIR="$(expand_path "$USER_SKILLS_DIR")"
 if [[ -z "$FEEDBACK_DIR" ]]; then
   FEEDBACK_DIR="$REPO/feedback"
 fi
 FEEDBACK_DIR="$(expand_path "$FEEDBACK_DIR")"
-PROFILE_DIR="$(expand_path "$PROFILE_DIR")"
 
 if [[ ! -f "$PROMPT" ]]; then
   echo "missing prompt: $PROMPT" >&2
@@ -229,7 +328,7 @@ else
   uninstall_link "$PROMPT" "$HOME/.codex/AGENTS.md"
 fi
 
-HOOK_COMMAND="env INTROSPECT_REFLECT_MODE=$(quote "$REFLECT_MODE") INTROSPECT_REPO=$(quote "$REPO") INTROSPECT_PROMPT=$(quote "$PROMPT") INTROSPECT_SKILLS_DIR=$(quote "$SKILLS_DIR") INTROSPECT_FEEDBACK_DIR=$(quote "$FEEDBACK_DIR") INTROSPECT_PROFILE_DIR=$(quote "$PROFILE_DIR") $(quote "$HOOK")"
+HOOK_COMMAND="env INTROSPECT_REFLECT_MODE=$(quote "$REFLECT_MODE") INTROSPECT_REPO=$(quote "$REPO") INTROSPECT_PROMPT=$(quote "$PROMPT") INTROSPECT_SKILLS_DIR=$(quote "$SKILLS_DIR") INTROSPECT_USER_SKILLS_DIR=$(quote "$USER_SKILLS_DIR") INTROSPECT_FEEDBACK_DIR=$(quote "$FEEDBACK_DIR") INTROSPECT_HOME=$(quote "$INTROSPECT_HOME_DIR") $(quote "$HOOK")"
 HOOK_MODE="$MODE"
 if [[ "$MODE" == "install" && "$REFLECT_MODE" == "off" ]]; then
   HOOK_MODE="uninstall"
@@ -353,12 +452,12 @@ PY
 
 install_launch_agent() {
   mkdir -p "$HOME/Library/LaunchAgents" "$FEEDBACK_DIR"
-  python3 - "$LAUNCH_LABEL" "$REPO" "$WORKER" "$PROMPT" "$SKILLS_DIR" "$FEEDBACK_DIR" "$PROFILE_DIR" "$NIGHTLY_HOUR" "$NIGHTLY_MINUTE" "$REFLECTOR_RUNNER" "$REFLECTOR_CLAUDE_MODEL" "$REFLECTOR_CLAUDE_FALLBACK_MODEL" "$REFLECTOR_CODEX_MODEL" "$LAUNCH_PLIST" <<'PY'
+  python3 - "$LAUNCH_LABEL" "$REPO" "$WORKER" "$PROMPT" "$SKILLS_DIR" "$USER_SKILLS_DIR" "$FEEDBACK_DIR" "$INTROSPECT_HOME_DIR" "$NIGHTLY_HOUR" "$NIGHTLY_MINUTE" "$REFLECTOR_RUNNER" "$REFLECTOR_CLAUDE_MODEL" "$REFLECTOR_CLAUDE_FALLBACK_MODEL" "$REFLECTOR_CODEX_MODEL" "$LAUNCH_PLIST" <<'PY'
 import plistlib
 import sys
 from pathlib import Path
 
-label, repo, worker, prompt, skills_dir, feedback_dir, profile_dir, hour, minute, runner, claude_model, claude_fallback_model, codex_model, plist_path = sys.argv[1:]
+label, repo, worker, prompt, skills_dir, user_skills_dir, feedback_dir, home_dir, hour, minute, runner, claude_model, claude_fallback_model, codex_model, plist_path = sys.argv[1:]
 data = {
     "Label": label,
     "ProgramArguments": ["/usr/bin/env", "python3", worker, "--nightly"],
@@ -368,8 +467,9 @@ data = {
         "INTROSPECT_REPO": repo,
         "INTROSPECT_PROMPT": prompt,
         "INTROSPECT_SKILLS_DIR": skills_dir,
+        "INTROSPECT_USER_SKILLS_DIR": user_skills_dir,
         "INTROSPECT_FEEDBACK_DIR": feedback_dir,
-        "INTROSPECT_PROFILE_DIR": profile_dir,
+        "INTROSPECT_HOME": home_dir,
         "INTROSPECT_REFLECTOR_RUNNER": runner,
         "INTROSPECT_REFLECTOR_CLAUDE_MODEL": claude_model,
         "INTROSPECT_REFLECTOR_CLAUDE_FALLBACK_MODEL": claude_fallback_model,
@@ -404,12 +504,12 @@ uninstall_launch_agent() {
 
 install_scan_agent() {
   mkdir -p "$HOME/Library/LaunchAgents" "$FEEDBACK_DIR"
-  python3 - "$SCAN_LABEL" "$REPO" "$SCANNER" "$PROMPT" "$SKILLS_DIR" "$FEEDBACK_DIR" "$PROFILE_DIR" "$REFLECT_MODE" "$REFLECTOR_RUNNER" "$REFLECTOR_CLAUDE_MODEL" "$REFLECTOR_CLAUDE_FALLBACK_MODEL" "$REFLECTOR_CODEX_MODEL" "$SCAN_PLIST" <<'PY'
+  python3 - "$SCAN_LABEL" "$REPO" "$SCANNER" "$PROMPT" "$SKILLS_DIR" "$USER_SKILLS_DIR" "$FEEDBACK_DIR" "$INTROSPECT_HOME_DIR" "$REFLECT_MODE" "$REFLECTOR_RUNNER" "$REFLECTOR_CLAUDE_MODEL" "$REFLECTOR_CLAUDE_FALLBACK_MODEL" "$REFLECTOR_CODEX_MODEL" "$SCAN_PLIST" <<'PY'
 import plistlib
 import sys
 from pathlib import Path
 
-label, repo, scanner, prompt, skills_dir, feedback_dir, profile_dir, reflect_mode, runner, claude_model, claude_fallback_model, codex_model, plist_path = sys.argv[1:]
+label, repo, scanner, prompt, skills_dir, user_skills_dir, feedback_dir, home_dir, reflect_mode, runner, claude_model, claude_fallback_model, codex_model, plist_path = sys.argv[1:]
 data = {
     "Label": label,
     "ProgramArguments": ["/usr/bin/env", "python3", scanner],
@@ -419,8 +519,9 @@ data = {
         "INTROSPECT_REPO": repo,
         "INTROSPECT_PROMPT": prompt,
         "INTROSPECT_SKILLS_DIR": skills_dir,
+        "INTROSPECT_USER_SKILLS_DIR": user_skills_dir,
         "INTROSPECT_FEEDBACK_DIR": feedback_dir,
-        "INTROSPECT_PROFILE_DIR": profile_dir,
+        "INTROSPECT_HOME": home_dir,
         "INTROSPECT_REFLECTOR_RUNNER": runner,
         "INTROSPECT_REFLECTOR_CLAUDE_MODEL": claude_model,
         "INTROSPECT_REFLECTOR_CLAUDE_FALLBACK_MODEL": claude_fallback_model,
@@ -465,12 +566,12 @@ install_monitor_agent() {
     return
   fi
   mkdir -p "$HOME/Library/LaunchAgents" "$FEEDBACK_DIR"
-  python3 - "$MONITOR_LABEL" "$REPO" "$MONITOR" "$FEEDBACK_DIR" "$PROFILE_DIR" "$MONITOR_PLIST" <<'PY'
+  python3 - "$MONITOR_LABEL" "$REPO" "$MONITOR" "$FEEDBACK_DIR" "$INTROSPECT_HOME_DIR" "$MONITOR_PLIST" <<'PY'
 import plistlib
 import sys
 from pathlib import Path
 
-label, repo, monitor, feedback_dir, profile_dir, plist_path = sys.argv[1:]
+label, repo, monitor, feedback_dir, home_dir, plist_path = sys.argv[1:]
 data = {
     "Label": label,
     "ProgramArguments": ["/bin/bash", monitor],
@@ -478,7 +579,7 @@ data = {
     "EnvironmentVariables": {
         "INTROSPECT_REPO": repo,
         "INTROSPECT_FEEDBACK_DIR": feedback_dir,
-        "INTROSPECT_PROFILE_DIR": profile_dir,
+        "INTROSPECT_HOME": home_dir,
         "PATH": "/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin",
     },
     # Runs once at login to repair setup drift, then stays idle. No polling
