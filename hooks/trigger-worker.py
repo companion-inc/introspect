@@ -785,11 +785,17 @@ def build_prompt(events: list[dict]) -> str:
     for i, event in enumerate(events, 1):
         visible = {
             "n": i,
+            "event_id": event.get("event_id") or event.get("dedupe_key"),
             "ts": event.get("ts"),
+            "source": event.get("source"),
             "version": event.get("version"),
             "session_id": event.get("session_id"),
             "cwd": event.get("cwd"),
             "transcript_path": event.get("transcript_path"),
+            "transcript_line": event.get("transcript_line"),
+            "message_locator": event.get("message_locator"),
+            "dedupe_key": event.get("dedupe_key"),
+            "prompt_hash": event.get("prompt_hash"),
             "matched": event.get("matched", []),
             "snippet": event.get("snippet", ""),
         }
@@ -800,7 +806,7 @@ def build_prompt(events: list[dict]) -> str:
 
     return f"""You are the Introspect trigger reflector.
 
-A batch of trigger-word events fired. The regex is broad recall only. Judge whether each event reflects a real agent-behavior failure or just casual register / external venting. Do not change anything for false positives.
+A batch of classifier wake events fired. Optional review terms are metadata only. Judge whether each event reflects a real agent-behavior failure or just casual register / external venting. Do not change anything for false positives.
 
 Queued events:
 {chr(10).join(event_lines)}
@@ -822,7 +828,7 @@ Codex thread tools:
 - Parse the resolved rollout with: python3 /Users/advaitpaliwal/.claude/skills/read-codex-threads/scripts/parse-codex-thread.py <rollout-or-id> --messages-only
 
 Workflow:
-1. Read the recent turns for the relevant transcript/session and identify the agent behavior that caused the trigger, not the wording of the user's message. A codex://threads/<id> link is local evidence, not an inaccessible external URL; resolve and parse it before classifying the event.
+1. Read the exact message identified by message_locator / transcript_path + transcript_line when present, then the surrounding recent turns for that transcript/session. Identify the agent behavior that caused the trigger, not the wording of the user's message. The snippet is only a preview. A codex://threads/<id> link is local evidence, not an inaccessible external URL; resolve and parse it before classifying the event.
 2. Run {REPO}/hooks/trigger-stats.sh and compare the current prompt version against prior versions.
 3. Classify the change target as exactly one of: no_change, core_prompt, project_prompt, home_memory, skill_new, skill_update, project_skill_new, project_skill_update, skill_prune.
 4. Use core_prompt only for an always-loaded invariant that should apply across nearly every task. Before editing AGENTS.md, read skills/agent-md-creator/SKILL.md for placement and skills/writing-agent-prompt/SKILL.md for wording, then verify with a realistic response probe drawn from the failure transcript.
@@ -840,7 +846,7 @@ Constraints:
 - One batch, one decision. Do not spawn more agents.
 - Do not edit for casual profanity, slurs used as examples, or anger about an external system.
 - Keep changes short and reversible.
-- In log output, use current Introspect vocabulary only: trigger, trigger-word event, Runs, and reflector run. Do not introduce deprecated product labels.
+- In log output, use current Introspect vocabulary only: trigger, classifier wake event, optional review terms, Runs, and reflector run. Do not introduce deprecated product labels.
 - Do not use generic trigger-language placeholders in skills. Use activation_signals.
 """
 
@@ -912,7 +918,7 @@ def invoke_reflector(events: list[dict]) -> int:
     body = f"{runner} reflector spawned for {len(events)} trigger event(s)"
     if words:
         body = f"{body}: {words}"
-        log(f"trigger words: {words}")
+        log(f"review terms: {words}")
     notify("Introspect", body)
     with LOG.open("a") as log_file:
         display_cmd = " ".join(shlex.quote(part) for part in cmd)

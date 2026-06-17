@@ -212,7 +212,6 @@ printf "\nskills:\n"
 printf "\nfeedback:\n"
 if [[ -f "$FEEDBACK_DIR/events.jsonl" ]]; then
   python3 - "$FEEDBACK_DIR" "$INTROSPECT_HOME_DIR" <<'PY'
-import ast
 import json
 import re
 import sys
@@ -222,7 +221,7 @@ from pathlib import Path
 feedback = Path(sys.argv[1])
 home = Path(sys.argv[2])
 repo = feedback.parent
-active_words = None
+active_words = set()
 words_file = home / "trigger-words.txt"
 if words_file.exists():
     active_words = {
@@ -230,11 +229,6 @@ if words_file.exists():
         for line in words_file.read_text().splitlines()
         if re.fullmatch(r"[a-z]+", line.strip().lower())
     }
-else:
-    hook_text = (repo / "hooks" / "trigger-reflect.sh").read_text()
-    match = re.search(r"DEFAULT_TRIGGER_WORDS = (\{.*?\})", hook_text, flags=re.S)
-    if match:
-        active_words = set(ast.literal_eval(match.group(1)))
 
 events = []
 for line in (feedback / "events.jsonl").read_text().splitlines():
@@ -252,7 +246,7 @@ if triggered:
         word
         for event in triggered
         for word in event.get("matched", [])
-        if active_words is None or word in active_words
+        if word in active_words
     )
     if words:
         print("top active matches: " + ", ".join(f"{word}={count}" for word, count in words.most_common(8)))

@@ -2,24 +2,32 @@
 # UserPromptSubmit hook (Claude Code + Codex — both deliver {"prompt": ...} on
 # stdin).
 #
-# Design: the regex is a cheap trigger with broad recall — judging whether a
-# match is GENUINE trigger at agent behavior is the reflector's job, done
-# out-of-band by hooks/trigger-worker.py. The foreground model never gets a
-# spawned-agent instruction from this hook.
+# Design: the local classifier decides whether a prompt is a foreground wake.
+# Optional review terms are metadata only unless an explicit emergency fallback
+# flag is set. The foreground model never gets a spawned-agent instruction from
+# this hook.
 #
 # Two jobs:
 # 1. Log EVERY prompt to feedback/events.jsonl tagged with the AGENTS.md commit
 #    that was live, so each prompt version gets a trigger rate
 #    (the RL signal; run hooks/trigger-stats.sh for the scoreboard).
-# 2. On a trigger match, enqueue the event and, in immediate mode, kick the
+# 2. On a classifier wake, enqueue the event and, in immediate mode, kick the
 #    single-worker batch reflector. The worker handles debouncing, cooldowns,
 #    and locking. Nightly mode queues only; off mode logs only.
 import datetime
+import hashlib
 import json
 import os
 import re
 import subprocess
 import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+try:
+    from intent_classifier import score_prompt
+except Exception:
+    score_prompt = None
 
 if os.environ.get("INTROSPECT_REFLECTOR") == "1":
     # The background reflector prompt contains trigger snippets. Do not let
@@ -47,45 +55,6 @@ except Exception:
     sys.exit(0)
 
 prompt = data.get("prompt") or ""
-# Exact words only. No prefix matching and no phrase triggers. Common filler
-# terms stay out of this list; regression tests cover known false positives.
-DEFAULT_TRIGGER_WORDS = {
-    "arse",
-    "ass",
-    "asshole",
-    "bastard",
-    "bitch",
-    "bullshit",
-    "crap",
-    "cunt",
-    "damn",
-    "dipshit",
-    "dumb",
-    "dumbass",
-    "dumbfuck",
-    "fag",
-    "faggot",
-    "ffs",
-    "fuck",
-    "fucked",
-    "fucker",
-    "fuckin",
-    "fucking",
-    "goddamn",
-    "hell",
-    "idiot",
-    "mf",
-    "moron",
-    "motherfucker",
-    "motherfucking",
-    "nigga",
-    "nigger",
-    "retard",
-    "retarded",
-    "shitty",
-    "stupid",
-    "wtf",
-}
 
 
 def normalize_words(values):
@@ -99,18 +68,34 @@ def normalize_words(values):
 
 
 def active_trigger_words():
-    words = set(DEFAULT_TRIGGER_WORDS)
     try:
         with open(TRIGGER_WORDS_FILE) as f:
-            home_words = normalize_words(f.read().splitlines())
+            return normalize_words(f.read().splitlines())
     except Exception:
-        return words
-
-    return home_words or words
+        return set()
 
 
 TRIGGER_WORDS = active_trigger_words()
-matches = [word for word in re.findall(r"[a-z]+", prompt.lower()) if word in TRIGGER_WORDS]
+matches = sorted({word for word in re.findall(r"[a-z]+", prompt.lower()) if word in TRIGGER_WORDS})
+classifier = None
+classifier_enabled = os.environ.get("INTROSPECT_WAKE_CLASSIFIER", "1") != "0"
+if classifier_enabled and score_prompt is not None:
+    try:
+        classifier = score_prompt(
+            prompt,
+            source=data.get("source") or ("codex" if "codex" in (data.get("transcript_path") or "").lower() else "claude"),
+            old_trigger=bool(matches),
+            matched_words=matches,
+        )
+    except Exception as exc:
+        classifier = {"error": f"{type(exc).__name__}: {str(exc)[:160]}"}
+classifier_triggered = bool(classifier and classifier.get("triggered"))
+classifier_available = bool(classifier and "score" in classifier)
+word_fallback_enabled = os.environ.get("INTROSPECT_TRIGGER_WORD_FALLBACK", "0") == "1"
+triggered = classifier_triggered if classifier_available else (bool(matches) and word_fallback_enabled)
+wake_reason = "classifier" if classifier_available else (
+    "trigger_word_fallback" if word_fallback_enabled else "classifier_unavailable"
+)
 
 try:
     version = subprocess.run(
@@ -135,30 +120,62 @@ def pick(*names):
     return ""
 
 
+event = None
 try:
+    session_id = pick("session_id", "sessionId")
+    transcript_path = pick("transcript_path", "transcriptPath")
+    transcript_line = pick("transcript_line", "transcriptLine")
+    source_message_id = pick("message_id", "messageId", "id")
+    prompt_hash = hashlib.sha256(prompt.encode("utf-8", errors="ignore")).hexdigest()
+    event_id = source_message_id or "|".join(
+        part for part in [session_id, transcript_path, str(transcript_line or ""), prompt_hash] if part
+    )
     event = {
+        "event_id": event_id or prompt_hash,
         "ts": datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds"),
+        "source": "hook",
         "version": version,
-        "triggered": bool(matches),
-        "session_id": pick("session_id", "sessionId"),
+        "triggered": triggered,
+        "wake_reason": wake_reason,
+        "review_triggered": bool(matches) or bool(classifier and classifier.get("review")),
+        "session_id": session_id,
         "cwd": pick("cwd"),
-        "transcript_path": pick("transcript_path", "transcriptPath"),
+        "transcript_path": transcript_path,
+        "prompt_hash": prompt_hash,
     }
+    if classifier:
+        event["classifier"] = classifier
+    if transcript_line:
+        event["transcript_line"] = transcript_line
+    if transcript_path and transcript_line:
+        event["message_locator"] = f"{transcript_path}:{transcript_line}"
+    elif source_message_id:
+        event["message_locator"] = source_message_id
     if matches:
-        event["matched"] = sorted({m.lower() for m in matches})
+        event["matched"] = matches
+    if matches or triggered or event.get("review_triggered"):
         event["snippet"] = prompt[:300]
     json_append(EVENTS, event)
 except Exception:
     pass  # logging must never block the prompt
 
-if not matches:
+if not triggered:
     sys.exit(0)
 
 if REFLECT_MODE == "off":
     sys.exit(0)
 
 try:
-    queued = dict(event)
+    queued = dict(event or {
+        "ts": datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds"),
+        "source": "hook",
+        "version": version,
+        "triggered": triggered,
+        "wake_reason": wake_reason,
+        "session_id": pick("session_id", "sessionId"),
+        "cwd": pick("cwd"),
+        "snippet": prompt[:300],
+    })
     queued["prompt"] = prompt[:4000]
     json_append(QUEUE, queued)
 except Exception:

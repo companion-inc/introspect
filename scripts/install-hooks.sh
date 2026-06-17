@@ -151,45 +151,6 @@ ensure_home_files() {
   if [[ ! -f "$INTROSPECT_HOME_DIR/skills/index.json" ]]; then
     printf '{\n  "version": 1,\n  "skills": []\n}\n' > "$INTROSPECT_HOME_DIR/skills/index.json"
   fi
-  if [[ ! -f "$INTROSPECT_HOME_DIR/trigger-words.txt" ]]; then
-    cat > "$INTROSPECT_HOME_DIR/trigger-words.txt" <<'WORDS'
-arse
-ass
-asshole
-bastard
-bitch
-bullshit
-crap
-cunt
-damn
-dipshit
-dumb
-dumbass
-dumbfuck
-fag
-faggot
-ffs
-fuck
-fucked
-fucker
-fuckin
-fucking
-goddamn
-hell
-idiot
-mf
-moron
-motherfucker
-motherfucking
-nigga
-nigger
-retard
-retarded
-shitty
-stupid
-wtf
-WORDS
-  fi
   if [[ ! -f "$INTROSPECT_HOME_DIR/settings.json" ]]; then
     cat > "$INTROSPECT_HOME_DIR/settings.json" <<JSON
 {
@@ -211,7 +172,7 @@ JSON
 This repository is private local state for Introspect:
 
 - `AGENTS.md`: the canonical user-wide prompt linked into Claude and Codex.
-- `trigger-words.txt`: exact trigger words, one lowercase word per line.
+- `trigger-words.txt`: optional review terms, one lowercase word per line. Introspect does not install defaults.
 - `settings.json`: local app preferences such as notification delivery.
 - `skills/`: private user skills.
 - `memory/`: durable user and machine facts.

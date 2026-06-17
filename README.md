@@ -8,7 +8,7 @@ Bundle identifier:
 ai.companion.introspect
 ```
 
-The public repo contains the app, hooks, worker, scripts, default prompt/skill templates, and docs. User-specific prompt, skill, trigger-word, memory, and run state lives in the private Git repo at `~/.introspect`.
+The public repo contains the app, hooks, worker, scripts, default prompt/skill templates, and docs. User-specific prompt, skill, review-term, memory, model, and run state lives in the private Git repo at `~/.introspect`.
 
 This checkout is the reusable app/engine. The live user-wide prompt is `~/.introspect/AGENTS.md`, which the installer symlinks into Claude and Codex.
 
@@ -31,8 +31,12 @@ The app can:
 - initialize `~/.introspect` as a local Git repo
 - show discovered global/project agent files and project skills
 - initialize a project's `AGENTS.md`, symlinked `CLAUDE.md`, `.agents/skills/`, `.claude/skills/`, and `.claude/rules/` surface
-- edit the exact trigger word list
+- edit optional review terms without installing a default word list
+- inspect trigger signal analytics: optional review-term counts, version trigger rates, run outcomes, and local tone scores
+- inspect classifier audit metrics, threshold curves, and prompt-variant comparisons
 - show recent reflector runs, trigger source, reflector prompt/output, and AGENTS/CLAUDE/skill diffs
+- show the exact event locator for a run's source message when the hook or Codex scanner can provide one
+- browse the private `~/.introspect` Git history and per-commit patches from the app
 - show queue, prompt-link, hook, scanner, monitor, notification, and last-run status
 
 ## Install
@@ -73,16 +77,20 @@ INTROSPECT_SKILLS_DIR="$PWD/skills" ./scripts/validate-skills.py
 
 1. Claude Code or Codex submits a user prompt.
 2. `hooks/trigger-reflect.sh` logs prompt metadata to `feedback/events.jsonl`.
-3. The hook uses the exact word list from `~/.introspect/trigger-words.txt` when present, otherwise the built-in default list.
-4. If the prompt contains an explicit active trigger word, the hook appends it to `feedback/trigger-queue.jsonl`.
-5. In immediate mode, the hook kicks `hooks/trigger-worker.py --kick`. In nightly mode, the LaunchAgent runs `hooks/trigger-worker.py --nightly`.
-6. Separately, `hooks/codex-transcript-scan.py` scans recent Codex Desktop transcript JSONL files, skips Codex control/context records, dedupes by transcript line, and queues any missed trigger prompts into the same queue.
-7. `scripts/introspect-healthcheck.sh` runs from launchd once at login (no polling timer), writes `feedback/health-status.latest`, and repairs local install drift through `scripts/install-hooks.sh`.
-8. The worker holds a lock, batches nearby events, applies cooldowns, writes the exact reflector prompt to `feedback/reflector-prompts/`, snapshots relevant agent surfaces before/after, and runs at most one reflector process.
-9. The reflector inspects the original thread and stats, then chooses one target: `no_change`, `core_prompt`, `project_prompt`, `home_memory`, `skill_new`, `skill_update`, `project_skill_new`, `project_skill_update`, or `skill_prune`.
-10. The app's Runs screen reads `feedback/reflector-batches.jsonl`, `feedback/reflector.log`, and `feedback/surface-diffs/`; it shows matched trigger words, whether the event came from the live hook or Codex scanner backstop, the reflector prompt/output, and the AGENTS/CLAUDE/skill diff. Original Claude/Codex JSONL history stays available as an external open/reveal path instead of an inline chat viewer.
+3. The hook scores wake intent with the exportable local classifier at `~/.introspect/models/wake-logreg-v2-round4.json` unless `INTROSPECT_WAKE_CLASSIFIER=0`. The production wake threshold is `0.675`; lower scores down to the review threshold are logged for audit but do not wake the reflector.
+4. `~/.introspect/trigger-words.txt` is optional review metadata only. Introspect does not install defaults; word fallback is disabled unless `INTROSPECT_TRIGGER_WORD_FALLBACK=1`.
+5. If the classifier says the prompt is a foreground wake, the hook appends it to `feedback/trigger-queue.jsonl` with the event id, message locator, prompt hash, classifier score, optional review-term matches, snippet, and transcript identity fields available from the hook input.
+6. In immediate mode, the hook kicks `hooks/trigger-worker.py --kick`. In nightly mode, the LaunchAgent runs `hooks/trigger-worker.py --nightly`.
+7. Separately, `hooks/codex-transcript-scan.py` scans recent Codex Desktop transcript JSONL files, skips Codex control/context records, dedupes by transcript line, and queues any missed classifier-triggered prompts into the same queue with a stable `message_locator` of `transcript_path:line`.
+8. `scripts/introspect-healthcheck.sh` runs from launchd once at login (no polling timer), writes `feedback/health-status.latest`, and repairs local install drift through `scripts/install-hooks.sh`.
+9. The worker holds a lock, batches nearby events, applies cooldowns, writes the exact reflector prompt to `feedback/reflector-prompts/`, snapshots relevant agent surfaces before/after, and runs at most one reflector process.
+10. The reflector inspects the original thread and stats, then chooses one target: `no_change`, `core_prompt`, `project_prompt`, `home_memory`, `skill_new`, `skill_update`, `project_skill_new`, `project_skill_update`, or `skill_prune`.
+11. The worker passes the event id, source, message locator, transcript line, classifier result, optional review-term matches, and snippet to the reflector so the AI can inspect the exact message before classifying the run.
+12. The app's Signals screen reads `feedback/events.jsonl`, `feedback/reflector-batches.jsonl`, `feedback/surface-diffs/`, and `feedback/intent-classifier/`; it shows optional review-term counts, trigger rates by prompt version, run/change counts by term, local sentiment scores, and classifier audit metrics.
+13. The app's Runs screen reads `feedback/reflector-batches.jsonl`, `feedback/reflector.log`, and `feedback/surface-diffs/`; it shows source, event locator, classifier/review metadata, reflector prompt/output, and the AGENTS/CLAUDE/skill diff. Original Claude/Codex JSONL history stays available as an external open/reveal path instead of an inline chat viewer.
+14. The app's Introspect Home screen reads the private `~/.introspect` Git repo and shows the working-tree status, commit list, and selected commit patch.
 
-When a real reflector process starts, the worker posts the banner through the signed `Introspect.app`, but only when macOS has authorized that bundle for notifications; otherwise it skips and logs why. The banner body includes the matched trigger words for that run. Use the app's Notifications section to request macOS permission, send a test banner, open System Settings when macOS blocks the app, or disable these popups; the setting is stored in `~/.introspect/settings.json`. `INTROSPECT_NOTIFY=0` still disables popups for a hook or LaunchAgent environment.
+When a real reflector process starts, the worker posts the banner through the signed `Introspect.app`, but only when macOS has authorized that bundle for notifications; otherwise it skips and logs why. The banner body includes optional review-term matches when present. Use the app's Notifications section to request macOS permission, send a test banner, open System Settings when macOS blocks the app, or disable these popups; the setting is stored in `~/.introspect/settings.json`. `INTROSPECT_NOTIFY=0` still disables popups for a hook or LaunchAgent environment.
 
 ## Agent File Scopes
 
@@ -122,7 +130,7 @@ Hermes was reviewed as the main reference for this split. The conclusion is in `
 - `hooks/codex-transcript-scan.py`: Codex Desktop transcript scanner backstop.
 - `hooks/trigger-worker.py`: locked background batch worker.
 - `hooks/trigger-stats.sh`: feedback scoreboard by prompt commit.
-- `docs/trigger-words.md`: human-readable list of active and ignored trigger words.
+- `docs/review-terms.md`: classifier-first wake behavior and optional review-term metadata.
 - `docs/hermes-self-evolution-review.md`: source-backed review of Hermes memory, skill, curator, and training loops.
 - `docs/skill-manager-reference-review.md`: source-backed review of public skill-manager apps and self-improvement tools.
 - `scripts/install-hooks.sh`: installs/uninstalls prompt links and hooks.

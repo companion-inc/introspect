@@ -1,12 +1,75 @@
 import AppKit
+import Charts
+import Darwin
+import NaturalLanguage
 import UserNotifications
 import SwiftUI
 
+/// Builds a Color that resolves differently in light vs dark appearance, so the
+/// whole app adapts without threading `colorScheme` through every view.
+private func introspectDynamic(light: Int, dark: Int, alpha: Double = 1) -> Color {
+    Color(nsColor: NSColor(name: nil) { appearance in
+        let isDark = appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
+        return NSColor(introspectHex: isDark ? dark : light, alpha: CGFloat(alpha))
+    })
+}
+
+extension NSColor {
+    convenience init(introspectHex hex: Int, alpha: CGFloat = 1) {
+        self.init(
+            srgbRed: CGFloat((hex >> 16) & 0xff) / 255,
+            green: CGFloat((hex >> 8) & 0xff) / 255,
+            blue: CGFloat(hex & 0xff) / 255,
+            alpha: alpha
+        )
+    }
+}
+
+extension Color {
+    init(introspectHex hex: Int, alpha: Double = 1) {
+        self.init(nsColor: NSColor(introspectHex: hex, alpha: CGFloat(alpha)))
+    }
+}
+
+/// Introspect design language — synthesized from the best-built desktop apps:
+/// Superhuman's semantic token ramp + tight radii, Linear's cool-neutral
+/// restraint and indigo accent, Granola's airy whitespace. Cool refined
+/// neutral, hairline borders, a single indigo accent used sparingly.
 enum IntrospectTheme {
-    static let accent = Color(red: 0.36, green: 0.53, blue: 0.96)
-    static let selection = Color(red: 0.36, green: 0.53, blue: 0.96)
-    static let cardCorner: CGFloat = 12
-    static let pageMaxWidth: CGFloat = 820
+    static let canvas = introspectDynamic(light: 0xF5F6F8, dark: 0x16171D)
+    static let surface = introspectDynamic(light: 0xFFFFFF, dark: 0x1E1F27)
+    static let surfaceAlt = introspectDynamic(light: 0xEDEFF3, dark: 0x131319)
+    static let surfaceSunken = introspectDynamic(light: 0xEFF1F4, dark: 0x202129)
+
+    static let ink = introspectDynamic(light: 0x171922, dark: 0xECEEF4)
+    static let inkSecondary = introspectDynamic(light: 0x595D6B, dark: 0x9FA3B2)
+    static let inkTertiary = introspectDynamic(light: 0x8A8E9C, dark: 0x6B6F7E)
+
+    static let border = introspectDynamic(light: 0x2B2F3A, dark: 0xFFFFFF, alpha: 0.10)
+    static let borderStrong = introspectDynamic(light: 0x2B2F3A, dark: 0xFFFFFF, alpha: 0.18)
+
+    static let accent = introspectDynamic(light: 0x5E6AD2, dark: 0x8A93F0)
+    static let accentSoft = introspectDynamic(light: 0x5E6AD2, dark: 0x8A93F0, alpha: 0.13)
+    static let selection = introspectDynamic(light: 0x5E6AD2, dark: 0x8A93F0, alpha: 0.14)
+
+    static let success = introspectDynamic(light: 0x2F9E5E, dark: 0x5FD08A)
+    static let danger = introspectDynamic(light: 0xD64B4B, dark: 0xF0817F)
+    static let warning = introspectDynamic(light: 0xC2841F, dark: 0xE3B25A)
+
+    static let diffAddBg = introspectDynamic(light: 0xE4F2E8, dark: 0x18301F)
+    static let diffDelBg = introspectDynamic(light: 0xFBE6E6, dark: 0x36201F)
+    static let diffAddFg = introspectDynamic(light: 0x2C7A47, dark: 0x6FCB8C)
+    static let diffDelFg = introspectDynamic(light: 0xC23B3B, dark: 0xEC8581)
+    static let diffMeta = introspectDynamic(light: 0x6E6AD2, dark: 0x9B97E8)
+
+    static let cardCorner: CGFloat = 9
+    static let controlCorner: CGFloat = 6
+    static let pageMaxWidth: CGFloat = 880
+
+    /// New York serif for display titles — editorial weight without aping one brand.
+    static func display(_ size: CGFloat, weight: Font.Weight = .semibold) -> Font {
+        .system(size: size, weight: weight, design: .serif)
+    }
 }
 
 /// A wrapping flow layout: lays children left-to-right, wrapping to the next
@@ -68,9 +131,9 @@ enum HealthState: Equatable {
 
     var color: Color {
         switch self {
-        case .ok: .green
-        case .warning: .orange
-        case .off: Color(nsColor: .tertiaryLabelColor)
+        case .ok: IntrospectTheme.success
+        case .warning: IntrospectTheme.warning
+        case .off: IntrospectTheme.inkTertiary
         }
     }
 }
@@ -80,14 +143,16 @@ struct PageHeader: View {
     let subtitle: String
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 5) {
+        VStack(alignment: .leading, spacing: 6) {
             Text(title)
-                .font(.title.weight(.semibold))
+                .font(IntrospectTheme.display(27))
+                .foregroundStyle(IntrospectTheme.ink)
             Text(subtitle)
                 .font(.callout)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(IntrospectTheme.inkSecondary)
                 .fixedSize(horizontal: false, vertical: true)
         }
+        .padding(.bottom, 2)
     }
 }
 
@@ -105,19 +170,19 @@ struct Card<Content: View>: View {
             if let title {
                 Text(title)
                     .font(.caption.weight(.semibold))
-                    .kerning(0.7)
+                    .kerning(0.6)
                     .textCase(.uppercase)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(IntrospectTheme.inkTertiary)
             }
             content
         }
         .padding(16)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color(nsColor: .controlBackgroundColor))
+        .background(IntrospectTheme.surface)
         .clipShape(RoundedRectangle(cornerRadius: IntrospectTheme.cardCorner))
         .overlay(
             RoundedRectangle(cornerRadius: IntrospectTheme.cardCorner)
-                .stroke(Color(nsColor: .separatorColor).opacity(0.6))
+                .stroke(IntrospectTheme.border)
         )
     }
 }
@@ -409,6 +474,7 @@ final class IntrospectApplication: NSObject, NSApplicationDelegate, UNUserNotifi
         if IntrospectNotifications.runCommandLineIfNeeded() {
             return
         }
+        let runUISmoke = CommandLine.arguments.contains("--ui-smoke")
         let app = NSApplication.shared
         let delegate = IntrospectApplication()
         retainedDelegate = delegate
@@ -416,6 +482,15 @@ final class IntrospectApplication: NSObject, NSApplicationDelegate, UNUserNotifi
         app.setActivationPolicy(.regular)
         app.finishLaunching()
         delegate.startInterfaceIfNeeded()
+        if runUISmoke {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+                let hasWindow = delegate.window != nil
+                let isVisible = delegate.window?.isVisible == true
+                let hasContent = delegate.window?.contentView != nil
+                print("ui-smoke window=\(hasWindow) visible=\(isVisible) content=\(hasContent)")
+                Darwin.exit(hasWindow && isVisible && hasContent ? 0 : 1)
+            }
+        }
         app.run()
     }
 
@@ -453,15 +528,24 @@ final class IntrospectApplication: NSObject, NSApplicationDelegate, UNUserNotifi
             newWindow.titleVisibility = .hidden
             newWindow.toolbarStyle = .unified
             newWindow.isOpaque = true
-            newWindow.backgroundColor = NSColor.windowBackgroundColor
+            newWindow.backgroundColor = NSColor(name: nil) { appearance in
+                let isDark = appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
+                return NSColor(introspectHex: isDark ? 0x262624 : 0xFAF9F5)
+            }
             newWindow.contentView = hostingView
             newWindow.isReleasedWhenClosed = false
             newWindow.setFrameAutosaveName("IntrospectMainWindow")
             newWindow.center()
             window = newWindow
         }
-        window?.makeKeyAndOrderFront(nil)
+        NSApp.setActivationPolicy(.regular)
+        NSApp.unhide(nil)
         NSApp.activate(ignoringOtherApps: true)
+        if window?.isMiniaturized == true {
+            window?.deminiaturize(nil)
+        }
+        window?.makeKeyAndOrderFront(nil)
+        window?.orderFrontRegardless()
     }
 
     private func startInterfaceIfNeeded() {
@@ -500,29 +584,35 @@ struct ContentView: View {
     var body: some View {
         NavigationSplitView {
             List(selection: $model.selectedSection) {
-                Section("Monitor") {
-                    Label("Overview", systemImage: "gauge.with.dots.needle.bottom.50percent")
+                Section {
+                    Label("Overview", systemImage: "house")
                         .tag(IntrospectSection.status)
+                }
+                Section("Activity") {
+                    Label("Signals", systemImage: "chart.bar")
+                        .tag(IntrospectSection.signals)
                     Label("Runs", systemImage: "clock.arrow.circlepath")
                         .tag(IntrospectSection.runs)
+                }
+                Section("Sources") {
                     Label("Projects", systemImage: "folder")
                         .tag(IntrospectSection.projects)
+                    Label("Introspect Home", systemImage: "shippingbox")
+                        .tag(IntrospectSection.home)
                 }
-                Section("Configure") {
+                Section("Setup") {
                     Label("Hooks", systemImage: "bolt")
                         .tag(IntrospectSection.hooks)
-                    Label("Trigger Words", systemImage: "exclamationmark.bubble")
+                    Label("Review Terms", systemImage: "text.badge.checkmark")
                         .tag(IntrospectSection.words)
                     Label("Notifications", systemImage: "bell")
                         .tag(IntrospectSection.notifications)
                 }
-                Section("Storage") {
-                    Label("Introspect Home", systemImage: "archivebox")
-                        .tag(IntrospectSection.home)
-                }
             }
             .listStyle(.sidebar)
-            .navigationSplitViewColumnWidth(min: 196, ideal: 216, max: 240)
+            .scrollContentBackground(.hidden)
+            .background(IntrospectTheme.surfaceAlt)
+            .navigationSplitViewColumnWidth(min: 204, ideal: 224, max: 248)
             .navigationTitle("Introspect")
             .safeAreaInset(edge: .bottom) {
                 SidebarHealthFooter(model: model)
@@ -551,6 +641,8 @@ struct ContentView: View {
                             switch model.selectedSection ?? .status {
                             case .status:
                                 OverviewSection(model: model)
+                            case .signals:
+                                SignalsSection(model: model)
                             case .hooks:
                                 HooksSection(model: model)
                             case .notifications:
@@ -577,7 +669,8 @@ struct ContentView: View {
                     }
                 }
             }
-            .background(Color(nsColor: .windowBackgroundColor))
+            .background(IntrospectTheme.canvas)
+            .foregroundStyle(IntrospectTheme.ink, IntrospectTheme.inkSecondary, IntrospectTheme.inkTertiary)
         }
         .tint(IntrospectTheme.accent)
     }
@@ -633,7 +726,7 @@ struct OverviewSection: View {
     var body: some View {
         PageHeader(
             title: "Overview",
-            subtitle: "Trigger signals from your Claude and Codex sessions feed a reflector that improves your agent instructions."
+            subtitle: "Wake signals from your Claude and Codex sessions feed a reflector that improves your agent instructions."
         )
 
         HealthBanner(model: model)
@@ -733,7 +826,7 @@ struct HealthBanner: View {
         }
         .padding(16)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color(nsColor: .controlBackgroundColor))
+        .background(IntrospectTheme.surface)
         .clipShape(RoundedRectangle(cornerRadius: IntrospectTheme.cardCorner))
         .overlay(
             RoundedRectangle(cornerRadius: IntrospectTheme.cardCorner)
@@ -742,9 +835,9 @@ struct HealthBanner: View {
     }
 
     private var bannerColor: Color {
-        if model.hasWarning { return .orange }
-        if model.mode == .off { return Color(nsColor: .tertiaryLabelColor) }
-        return .green
+        if model.hasWarning { return IntrospectTheme.warning }
+        if model.mode == .off { return IntrospectTheme.inkTertiary }
+        return IntrospectTheme.success
     }
 
     private var bannerSymbol: String {
@@ -783,7 +876,7 @@ struct HooksSection: View {
     var body: some View {
         PageHeader(
             title: "Hooks",
-            subtitle: "Choose when reflection runs after a trigger word, and which agent runs it."
+            subtitle: "Choose when reflection runs after the classifier wakes Introspect, and which agent runs it."
         )
 
         Card("When to reflect") {
@@ -987,26 +1080,26 @@ struct WordsSection: View {
 
     var body: some View {
         PageHeader(
-            title: "Trigger Words",
-            subtitle: "Only these exact words wake the reflector. Everything else in a prompt is ignored."
+            title: "Review Terms",
+            subtitle: "Optional exact terms for review metadata. Wake decisions come from the local intent classifier."
         )
 
         Card {
             HStack(spacing: 8) {
-                TextField("Add a word", text: $newWord)
+                TextField("Add a review term", text: $newWord)
                     .textFieldStyle(.roundedBorder)
                     .frame(maxWidth: 200)
                     .onSubmit(addWord)
                 Button("Add", action: addWord)
                     .disabled(newWord.trimmingCharacters(in: .whitespaces).isEmpty)
                 Spacer()
-                Text("\(model.activeTriggerWords.count) words")
+                Text("\(model.activeTriggerWords.count) terms")
                     .font(.callout)
                     .foregroundStyle(.secondary)
             }
 
             if model.activeTriggerWords.isEmpty {
-                Text("No trigger words — the hook will never fire.")
+                Text("No review terms. The classifier still controls wake decisions.")
                     .foregroundStyle(.secondary)
             } else {
                 WordChipList(words: model.activeTriggerWords) { word in
@@ -1018,7 +1111,7 @@ struct WordsSection: View {
 
             DisclosureGroup("Edit as text", isExpanded: $showBulkEditor) {
                 VStack(alignment: .leading, spacing: 6) {
-                    Text("One exact word per line. Lowercase letters only — no prefixes, no phrases.")
+                    Text("One optional review term per line. Lowercase letters only; empty is the default.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                     TextEditor(text: $model.triggerWordsText)
@@ -1026,7 +1119,7 @@ struct WordsSection: View {
                         .frame(minHeight: 160)
                         .overlay(
                             RoundedRectangle(cornerRadius: 8)
-                                .stroke(Color(nsColor: .separatorColor))
+                                .stroke(IntrospectTheme.border)
                         )
                 }
                 .padding(.top, 6)
@@ -1052,7 +1145,7 @@ struct WordsSection: View {
             if model.hasUnsavedWordChanges {
                 Label("Unsaved changes", systemImage: "circle.fill")
                     .font(.caption)
-                    .foregroundStyle(.orange)
+                    .foregroundStyle(IntrospectTheme.accent)
                     .labelStyle(.titleAndIcon)
                     .imageScale(.small)
             }
@@ -1062,6 +1155,557 @@ struct WordsSection: View {
     private func addWord() {
         model.addTriggerWord(newWord)
         newWord = ""
+    }
+}
+
+struct SignalsSection: View {
+    @ObservedObject var model: IntrospectModel
+
+    private var recentVersions: [TriggerVersionAnalyticsRecord] {
+        Array(model.versionStats.suffix(18))
+    }
+
+    private var topWords: [TriggerWordAnalyticsRecord] {
+        Array(model.wordStats.prefix(12))
+    }
+
+    var body: some View {
+        PageHeader(
+            title: "Signals",
+            subtitle: "Classifier wake scores, review-only events, run outcomes, version rates, and optional review-term metadata."
+        )
+
+        LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 12), count: 4), spacing: 12) {
+            SignalMetricCard(title: "Prompt events", value: "\(model.signalPromptCount)", detail: "\(model.signalClassifierScoredCount) scored")
+            SignalMetricCard(title: "Wake rate", value: model.signalTriggerRateText, detail: "\(model.signalTriggeredCount) woke")
+            SignalMetricCard(title: "Review-only", value: model.signalReviewOnlyRateText, detail: "\(model.signalReviewOnlyCount) held for audit")
+            SignalMetricCard(title: "Reflector runs", value: "\(model.triggerRuns.count)", detail: "\(model.signalChangedRunCount) changed")
+            SignalMetricCard(title: "Avg score", value: model.signalAverageClassifierScoreText, detail: "classifier mean")
+        }
+
+        Card("Classifier score distribution") {
+            if model.classifierScoreBands.allSatisfy({ $0.promptCount == 0 }) {
+                Text("No classifier-scored events have been recorded.")
+                    .foregroundStyle(.secondary)
+            } else {
+                Chart(model.classifierScoreBands) { band in
+                    BarMark(
+                        x: .value("Score band", band.label),
+                        y: .value("Events", band.loggedOnlyCount)
+                    )
+                    .foregroundStyle(by: .value("Decision", "Logged"))
+
+                    BarMark(
+                        x: .value("Score band", band.label),
+                        y: .value("Events", band.reviewOnlyCount)
+                    )
+                    .foregroundStyle(by: .value("Decision", "Review-only"))
+
+                    BarMark(
+                        x: .value("Score band", band.label),
+                        y: .value("Events", band.wakeCount)
+                    )
+                    .foregroundStyle(by: .value("Decision", "Woke"))
+                }
+                .chartForegroundStyleScale([
+                    "Logged": IntrospectTheme.inkTertiary,
+                    "Review-only": IntrospectTheme.warning,
+                    "Woke": IntrospectTheme.danger
+                ])
+                .chartXAxis {
+                    AxisMarks(position: .bottom) {
+                        AxisGridLine().foregroundStyle(IntrospectTheme.border)
+                        AxisValueLabel()
+                            .font(.system(size: 9, design: .monospaced))
+                            .foregroundStyle(IntrospectTheme.inkTertiary)
+                    }
+                }
+                .chartYAxis {
+                    AxisMarks(position: .leading) {
+                        AxisGridLine().foregroundStyle(IntrospectTheme.border)
+                        AxisValueLabel().font(.caption2).foregroundStyle(IntrospectTheme.inkTertiary)
+                    }
+                }
+                .frame(height: 220)
+            }
+        }
+
+        Card("Recent classifier decisions") {
+            if model.recentClassifierEvents.isEmpty {
+                Text("No scored messages to show yet.")
+                    .foregroundStyle(.secondary)
+            } else {
+                LazyVStack(alignment: .leading, spacing: 0) {
+                    SignalEventHeader()
+                    Divider().overlay(IntrospectTheme.border)
+                    ForEach(model.recentClassifierEvents) { event in
+                        SignalEventRow(event: event)
+                        Divider().overlay(IntrospectTheme.border)
+                    }
+                }
+            }
+        }
+
+        Card("Review term frequency") {
+            if topWords.isEmpty {
+                Text("No optional review terms have matched recorded events.")
+                    .foregroundStyle(.secondary)
+            } else {
+                Chart(topWords) { stat in
+                    BarMark(
+                        x: .value("Events", stat.eventCount),
+                        y: .value("Word", stat.word),
+                        height: .fixed(16)
+                    )
+                    .foregroundStyle(IntrospectTheme.accent.gradient)
+                    .cornerRadius(4)
+                    .annotation(position: .trailing, alignment: .leading) {
+                        Text("\(stat.eventCount)")
+                            .font(.caption2.monospacedDigit())
+                            .foregroundStyle(IntrospectTheme.inkTertiary)
+                    }
+                }
+                .chartXAxis {
+                    AxisMarks(position: .bottom) {
+                        AxisGridLine().foregroundStyle(IntrospectTheme.border)
+                        AxisValueLabel().font(.caption2).foregroundStyle(IntrospectTheme.inkTertiary)
+                    }
+                }
+                .chartYAxis {
+                    AxisMarks(position: .leading) {
+                        AxisValueLabel()
+                            .font(.system(.caption, design: .monospaced))
+                            .foregroundStyle(IntrospectTheme.inkSecondary)
+                    }
+                }
+                .chartPlotStyle { plot in
+                    plot.padding(.trailing, 26)
+                }
+                .frame(height: CGFloat(topWords.count * 30 + 28))
+            }
+        }
+
+        Card("Version trigger rate") {
+            if recentVersions.isEmpty {
+                Text("No prompt versions have been recorded.")
+                    .foregroundStyle(.secondary)
+            } else {
+                Chart(recentVersions) { version in
+                    AreaMark(
+                        x: .value("Version", version.shortVersion),
+                        y: .value("Wake rate", version.triggerRate)
+                    )
+                    .interpolationMethod(.monotone)
+                    .foregroundStyle(
+                        .linearGradient(
+                            colors: [IntrospectTheme.accent.opacity(0.22), IntrospectTheme.accent.opacity(0.01)],
+                            startPoint: .top, endPoint: .bottom
+                        )
+                    )
+
+                    LineMark(
+                        x: .value("Version", version.shortVersion),
+                        y: .value("Wake rate", version.triggerRate)
+                    )
+                    .interpolationMethod(.monotone)
+                    .foregroundStyle(IntrospectTheme.accent)
+                    .lineStyle(StrokeStyle(lineWidth: 2))
+
+                    PointMark(
+                        x: .value("Version", version.shortVersion),
+                        y: .value("Wake rate", version.triggerRate)
+                    )
+                    .foregroundStyle(IntrospectTheme.accent)
+                    .symbolSize(26)
+                }
+                .chartYAxis {
+                    AxisMarks(position: .leading) {
+                        AxisGridLine().foregroundStyle(IntrospectTheme.border)
+                        AxisValueLabel(format: FloatingPointFormatStyle<Double>.Percent().precision(.fractionLength(0)))
+                            .font(.caption2).foregroundStyle(IntrospectTheme.inkTertiary)
+                    }
+                }
+                .chartXAxis {
+                    AxisMarks { _ in
+                        AxisValueLabel()
+                            .font(.system(size: 9, design: .monospaced))
+                            .foregroundStyle(IntrospectTheme.inkTertiary)
+                    }
+                }
+                .frame(height: 220)
+
+                Divider().overlay(IntrospectTheme.border)
+
+                LazyVStack(alignment: .leading, spacing: 8) {
+                    ForEach(recentVersions.reversed()) { version in
+                        VersionSignalRow(version: version)
+                    }
+                }
+            }
+        }
+
+        Card("Intent classifier audit") {
+            if model.classifierThresholdStats.isEmpty && model.classifierPromptVariantStats.isEmpty {
+                Text("No classifier audit report has been generated.")
+                    .foregroundStyle(.secondary)
+            } else {
+                VStack(alignment: .leading, spacing: 14) {
+                    if let threshold = model.classifierThresholdStats.first(where: { abs($0.threshold - 0.675) < 0.001 })
+                        ?? model.classifierThresholdStats.last {
+                        HStack(alignment: .firstTextBaseline, spacing: 18) {
+                            ClassifierAuditMetric(title: "Status", value: "High precision", detail: "foreground wake path")
+                            ClassifierAuditMetric(title: "Precision", value: threshold.precisionText, detail: "audit at \(threshold.thresholdText)")
+                            ClassifierAuditMetric(title: "Recall", value: threshold.recallText, detail: "audit at \(threshold.thresholdText)")
+                            ClassifierAuditMetric(title: "Wake rate", value: threshold.wakeRateText, detail: "audit at \(threshold.thresholdText)")
+                        }
+                    }
+
+                    if !model.classifierThresholdStats.isEmpty {
+                        Chart {
+                            ForEach(model.classifierThresholdStats) { stat in
+                                LineMark(
+                                    x: .value("Threshold", stat.threshold),
+                                    y: .value("Score", stat.precision)
+                                )
+                                .foregroundStyle(by: .value("Metric", "Precision"))
+                                .symbol(by: .value("Metric", "Precision"))
+
+                                LineMark(
+                                    x: .value("Threshold", stat.threshold),
+                                    y: .value("Score", stat.recall)
+                                )
+                                .foregroundStyle(by: .value("Metric", "Recall"))
+                                .symbol(by: .value("Metric", "Recall"))
+                            }
+                        }
+                        .chartYScale(domain: 0...1)
+                        .chartXAxis {
+                            AxisMarks(position: .bottom) {
+                                AxisGridLine().foregroundStyle(IntrospectTheme.border)
+                                AxisValueLabel().font(.caption2).foregroundStyle(IntrospectTheme.inkTertiary)
+                            }
+                        }
+                        .chartYAxis {
+                            AxisMarks(position: .leading) {
+                                AxisGridLine().foregroundStyle(IntrospectTheme.border)
+                                AxisValueLabel(format: FloatingPointFormatStyle<Double>.Percent().precision(.fractionLength(0)))
+                                    .font(.caption2).foregroundStyle(IntrospectTheme.inkTertiary)
+                            }
+                        }
+                        .frame(height: 220)
+                    }
+
+                    if !model.classifierPromptVariantStats.isEmpty {
+                        Divider().overlay(IntrospectTheme.border)
+                        LazyVStack(alignment: .leading, spacing: 0) {
+                            ClassifierVariantHeader()
+                            Divider().overlay(IntrospectTheme.border)
+                            ForEach(model.classifierPromptVariantStats) { variant in
+                                ClassifierVariantRow(variant: variant)
+                                Divider().overlay(IntrospectTheme.border)
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        Card("Review terms and outcomes") {
+            if model.wordStats.isEmpty {
+                Text("No review terms to show yet. Classifier score still controls wake decisions.")
+                    .foregroundStyle(.secondary)
+            } else {
+                LazyVStack(alignment: .leading, spacing: 0) {
+                    SignalWordHeader()
+                    Divider()
+                    ForEach(model.wordStats) { stat in
+                        SignalWordRow(stat: stat)
+                        Divider()
+                    }
+                }
+            }
+        }
+    }
+}
+
+struct ClassifierAuditMetric: View {
+    let title: String
+    let value: String
+    let detail: String
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(title)
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(IntrospectTheme.inkTertiary)
+            Text(value)
+                .font(.callout.monospacedDigit().weight(.semibold))
+                .lineLimit(1)
+                .minimumScaleFactor(0.75)
+            Text(detail)
+                .font(.caption)
+                .foregroundStyle(IntrospectTheme.inkSecondary)
+                .lineLimit(1)
+                .minimumScaleFactor(0.75)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+struct ClassifierVariantHeader: View {
+    var body: some View {
+        HStack(spacing: 12) {
+            Text("Variant")
+                .frame(maxWidth: .infinity, alignment: .leading)
+            Text("Precision")
+                .frame(width: 72, alignment: .trailing)
+            Text("Recall")
+                .frame(width: 60, alignment: .trailing)
+            Text("Wake")
+                .frame(width: 58, alignment: .trailing)
+            Text("FP/FN")
+                .frame(width: 76, alignment: .trailing)
+        }
+        .font(.caption.weight(.semibold))
+        .foregroundStyle(IntrospectTheme.inkTertiary)
+        .padding(.vertical, 6)
+    }
+}
+
+struct ClassifierVariantRow: View {
+    let variant: ClassifierPromptVariantRecord
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Text(variant.displayName)
+                .font(.caption.monospaced())
+                .lineLimit(1)
+                .truncationMode(.middle)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            Text(variant.precisionText)
+                .font(.caption.monospacedDigit())
+                .frame(width: 72, alignment: .trailing)
+            Text(variant.recallText)
+                .font(.caption.monospacedDigit())
+                .frame(width: 60, alignment: .trailing)
+            Text(variant.wakeRateText)
+                .font(.caption.monospacedDigit())
+                .frame(width: 58, alignment: .trailing)
+            Text("\(variant.falsePositiveCount)/\(variant.falseNegativeCount)")
+                .font(.caption.monospacedDigit())
+                .foregroundStyle(IntrospectTheme.inkSecondary)
+                .frame(width: 76, alignment: .trailing)
+        }
+        .padding(.vertical, 7)
+    }
+}
+
+struct SignalEventHeader: View {
+    var body: some View {
+        HStack(spacing: 10) {
+            Text("Decision")
+                .frame(width: 94, alignment: .leading)
+            Text("Score")
+                .frame(width: 54, alignment: .trailing)
+            Text("Gate")
+                .frame(width: 76, alignment: .leading)
+            Text("Message")
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .font(.caption.weight(.semibold))
+        .foregroundStyle(IntrospectTheme.inkTertiary)
+        .padding(.vertical, 6)
+    }
+}
+
+struct SignalEventRow: View {
+    let event: TriggerEventRecord
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 10) {
+            Text(event.decisionLabel)
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(event.decisionColor)
+                .frame(width: 94, alignment: .leading)
+            Text(event.classifierScoreText)
+                .font(.caption.monospacedDigit().weight(.semibold))
+                .frame(width: 54, alignment: .trailing)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(event.classifierThresholdText)
+                Text(event.classifierReviewThresholdText)
+            }
+            .font(.caption2.monospacedDigit())
+            .foregroundStyle(.secondary)
+            .frame(width: 76, alignment: .leading)
+
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(spacing: 6) {
+                    Label(event.sourceLabel, systemImage: event.sourceSystemImage)
+                    Text(event.timestampText)
+                    Text(event.wakeReasonLabel)
+                    if !event.matched.isEmpty {
+                        Text(event.matched.joined(separator: ", "))
+                            .foregroundStyle(IntrospectTheme.ink)
+                    }
+                }
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+
+                Text(event.snippet.isEmpty ? "No snippet recorded." : event.snippet)
+                    .font(.system(.caption, design: .monospaced))
+                    .lineLimit(2)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .textSelection(.enabled)
+
+                if !event.messageLocator.isEmpty || !event.eventID.isEmpty {
+                    Text(event.messageLocator.isEmpty ? event.eventID : event.messageLocator)
+                        .font(.system(.caption2, design: .monospaced))
+                        .foregroundStyle(.tertiary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                        .textSelection(.enabled)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .padding(.vertical, 8)
+    }
+}
+
+struct SignalMetricCard: View {
+    let title: String
+    let value: String
+    let detail: String
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 5) {
+            Text(title)
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+            Text(value)
+                .font(.title2.monospacedDigit().weight(.semibold))
+                .lineLimit(1)
+                .minimumScaleFactor(0.7)
+            Text(detail)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .minimumScaleFactor(0.75)
+        }
+        .padding(14)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(IntrospectTheme.surface)
+        .clipShape(RoundedRectangle(cornerRadius: 8))
+        .overlay(
+            RoundedRectangle(cornerRadius: 8)
+                .stroke(IntrospectTheme.border)
+        )
+    }
+}
+
+struct SignalWordHeader: View {
+    var body: some View {
+        HStack(spacing: 12) {
+            Text("Review term")
+                .frame(minWidth: 120, alignment: .leading)
+            Text("Events")
+                .frame(width: 58, alignment: .trailing)
+            Text("Runs")
+                .frame(width: 50, alignment: .trailing)
+            Text("Changed")
+                .frame(width: 70, alignment: .trailing)
+            Text("Tone")
+                .frame(width: 86, alignment: .leading)
+            Text("Last seen")
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .font(.caption.weight(.semibold))
+        .foregroundStyle(.secondary)
+        .padding(.vertical, 6)
+    }
+}
+
+struct SignalWordRow: View {
+    let stat: TriggerWordAnalyticsRecord
+
+    var body: some View {
+        HStack(spacing: 12) {
+            TriggerWordPill(word: stat.word)
+                .frame(minWidth: 120, alignment: .leading)
+            Text("\(stat.eventCount)")
+                .font(.callout.monospacedDigit())
+                .frame(width: 58, alignment: .trailing)
+            Text("\(stat.runCount)")
+                .font(.callout.monospacedDigit())
+                .frame(width: 50, alignment: .trailing)
+            Text("\(stat.changedRunCount)")
+                .font(.callout.monospacedDigit())
+                .frame(width: 70, alignment: .trailing)
+            SentimentBadge(score: stat.averageSentiment)
+                .frame(width: 86, alignment: .leading)
+            Text(stat.lastSeenText)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .padding(.vertical, 8)
+    }
+}
+
+struct VersionSignalRow: View {
+    let version: TriggerVersionAnalyticsRecord
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Text(version.shortVersion)
+                .font(.system(.caption, design: .monospaced).weight(.semibold))
+                .frame(width: 64, alignment: .leading)
+            Text("\(version.promptCount) prompts")
+                .font(.caption.monospacedDigit())
+                .frame(width: 82, alignment: .trailing)
+            Text("\(version.triggerCount) triggered")
+                .font(.caption.monospacedDigit())
+                .frame(width: 92, alignment: .trailing)
+            Text(version.triggerRateText)
+                .font(.caption.monospacedDigit().weight(.semibold))
+                .frame(width: 58, alignment: .trailing)
+            Text(version.deltaText)
+                .font(.caption.monospacedDigit())
+                .foregroundStyle(version.deltaColor)
+                .frame(width: 68, alignment: .trailing)
+            Text(version.subject)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .truncationMode(.tail)
+        }
+    }
+}
+
+struct SentimentBadge: View {
+    let score: Double?
+
+    var body: some View {
+        Text(label)
+            .font(.caption.monospacedDigit())
+            .padding(.horizontal, 7)
+            .padding(.vertical, 3)
+            .background(color.opacity(0.14))
+            .foregroundStyle(color)
+            .clipShape(RoundedRectangle(cornerRadius: 7))
+    }
+
+    private var label: String {
+        guard let score else { return "none" }
+        return String(format: "%+.2f", score)
+    }
+
+    private var color: Color {
+        guard let score else { return IntrospectTheme.inkTertiary }
+        if score < -0.25 { return IntrospectTheme.warning }
+        if score > 0.25 { return IntrospectTheme.success }
+        return IntrospectTheme.inkSecondary
     }
 }
 
@@ -1099,11 +1743,11 @@ struct RunsSection: View {
                     .frame(minWidth: 520, maxWidth: .infinity, alignment: .topLeading)
             }
             .frame(maxHeight: .infinity)
-            .background(Color(nsColor: .controlBackgroundColor))
+            .background(IntrospectTheme.surface)
             .clipShape(RoundedRectangle(cornerRadius: IntrospectTheme.cardCorner))
             .overlay(
                 RoundedRectangle(cornerRadius: IntrospectTheme.cardCorner)
-                    .stroke(Color(nsColor: .separatorColor).opacity(0.6))
+                    .stroke(IntrospectTheme.border)
             )
         }
     }
@@ -1159,7 +1803,7 @@ struct RunsListPane: View {
                 }
             }
         }
-        .background(Color(nsColor: .windowBackgroundColor))
+        .background(IntrospectTheme.canvas)
     }
 }
 
@@ -1199,12 +1843,15 @@ struct RunRow: View {
                             }
                         }
                     }
-                    .accessibilityLabel("Trigger words: \(run.triggerWordsText)")
+                    .accessibilityLabel("Review terms: \(run.triggerWordsText)")
                 }
 
                 HStack(spacing: 6) {
                     if let runner = run.effectiveRunner {
                         Label(runner, systemImage: "terminal")
+                    }
+                    if run.highestClassifierScore != nil {
+                        Label(run.highestClassifierScoreText, systemImage: "gauge")
                     }
                     Label("\(run.surfaceDiffs.count)", systemImage: "rectangle.and.pencil.and.ellipsis")
                     Label(run.timestampText, systemImage: "clock")
@@ -1243,6 +1890,7 @@ struct RunDetailPane: View {
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 14) {
                         RunTriggerCauseBlock(run: run)
+                        RunCountDeltaBlock(run: run)
                         ReflectorTraceBlock(model: model, run: run)
                         AgentSurfaceDiffBlock(run: run)
                     }
@@ -1343,12 +1991,66 @@ struct ReflectorTraceBlock: View {
         }
         .padding(14)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color(nsColor: .windowBackgroundColor))
+        .background(IntrospectTheme.canvas)
         .clipShape(RoundedRectangle(cornerRadius: 8))
         .overlay(
             RoundedRectangle(cornerRadius: 8)
-                .stroke(Color(nsColor: .separatorColor).opacity(0.45))
+                .stroke(IntrospectTheme.border)
         )
+    }
+}
+
+struct RunCountDeltaBlock: View {
+    let run: TriggerRunRecord
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Label("Counts moved", systemImage: "chart.bar.xaxis")
+                .font(.headline)
+
+            LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 10), count: 5), spacing: 10) {
+                RunCountMetric(title: "Messages", value: "\(run.eventCount)", detail: "\(run.wakeEventCount) woke")
+                RunCountMetric(title: "Review", value: "\(run.reviewOnlyEventCount)", detail: "held below wake")
+                RunCountMetric(title: "Files", value: "\(run.surfaceDiffs.count)", detail: "agent surfaces")
+                RunCountMetric(title: "Line delta", value: run.lineDeltaText, detail: "captured diff")
+                RunCountMetric(title: "Sessions", value: "\(run.sessionIDs.count)", detail: "source threads")
+            }
+        }
+        .padding(14)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(IntrospectTheme.canvas)
+        .clipShape(RoundedRectangle(cornerRadius: 8))
+        .overlay(
+            RoundedRectangle(cornerRadius: 8)
+                .stroke(IntrospectTheme.border)
+        )
+    }
+}
+
+struct RunCountMetric: View {
+    let title: String
+    let value: String
+    let detail: String
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Text(title)
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(IntrospectTheme.inkTertiary)
+            Text(value)
+                .font(.callout.monospacedDigit().weight(.semibold))
+                .lineLimit(1)
+                .minimumScaleFactor(0.65)
+            Text(detail)
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .minimumScaleFactor(0.75)
+        }
+        .padding(10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color.primary.opacity(0.035))
+        .clipShape(RoundedRectangle(cornerRadius: 7))
     }
 }
 
@@ -1378,11 +2080,11 @@ struct AgentSurfaceDiffBlock: View {
         }
         .padding(14)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color(nsColor: .windowBackgroundColor))
+        .background(IntrospectTheme.canvas)
         .clipShape(RoundedRectangle(cornerRadius: 8))
         .overlay(
             RoundedRectangle(cornerRadius: 8)
-                .stroke(Color(nsColor: .separatorColor).opacity(0.45))
+                .stroke(IntrospectTheme.border)
         )
     }
 }
@@ -1430,23 +2132,40 @@ struct RunTriggerCauseBlock: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Label("Trigger words", systemImage: "exclamationmark.bubble")
-                .font(.headline)
+            HStack(alignment: .center, spacing: 8) {
+                Label("Classifier decision", systemImage: "gauge")
+                    .font(.headline)
+                Spacer()
+                if run.highestClassifierScore != nil {
+                    ScopePill(text: run.highestClassifierScoreText)
+                }
+                if run.wakeEventCount > 0 {
+                    ScopePill(text: "\(run.wakeEventCount) woke")
+                }
+                if run.reviewOnlyEventCount > 0 {
+                    ScopePill(text: "\(run.reviewOnlyEventCount) review-only")
+                }
+            }
 
             if run.matched.isEmpty {
-                Text("No matched trigger words were recorded for this run.")
+                Text("No optional review terms matched. The run was decided by classifier score.")
                     .font(.callout)
                     .foregroundStyle(.secondary)
             } else {
-                ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 8) {
-                        ForEach(run.matched, id: \.self) { word in
-                            TriggerWordPill(word: word)
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Optional review terms")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(IntrospectTheme.inkTertiary)
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: 8) {
+                            ForEach(run.matched, id: \.self) { word in
+                                TriggerWordPill(word: word)
+                            }
                         }
+                        .padding(.bottom, 1)
                     }
-                    .padding(.bottom, 1)
+                    .accessibilityLabel("Review terms: \(run.triggerWordsText)")
                 }
-                .accessibilityLabel("Trigger words: \(run.triggerWordsText)")
             }
 
             if !run.events.isEmpty {
@@ -1455,21 +2174,45 @@ struct RunTriggerCauseBlock: View {
                     ForEach(run.events.prefix(5)) { event in
                         VStack(alignment: .leading, spacing: 4) {
                             HStack(spacing: 6) {
+                                Text(event.decisionLabel)
+                                    .font(.caption.weight(.semibold))
+                                    .foregroundStyle(event.decisionColor)
                                 Label(event.sourceLabel, systemImage: event.sourceSystemImage)
                                 Text(event.timestampText)
+                                Text(event.version)
+                                    .font(.system(.caption, design: .monospaced))
+                                Text(event.classifierScoreText)
+                                    .font(.caption.monospacedDigit().weight(.semibold))
+                                    .foregroundStyle(IntrospectTheme.ink)
+                                Text(event.classifierThresholdText)
+                                    .font(.caption.monospacedDigit())
+                                Text(event.classifierReviewThresholdText)
+                                    .font(.caption.monospacedDigit())
+                                Text(event.wakeReasonLabel)
+                                    .font(.caption)
                                 if !event.matched.isEmpty {
                                     Text(event.matched.joined(separator: ", "))
                                         .foregroundStyle(.primary)
                                 }
+                                SentimentBadge(score: event.sentimentScore)
                             }
                             .font(.caption)
                             .foregroundStyle(.secondary)
+                            .lineLimit(1)
 
                             Text(event.snippet.isEmpty ? "No snippet recorded." : event.snippet)
                                 .font(.system(.caption, design: .monospaced))
                                 .lineLimit(3)
                                 .fixedSize(horizontal: false, vertical: true)
                                 .textSelection(.enabled)
+                            if !event.messageLocator.isEmpty || !event.eventID.isEmpty {
+                                Text(event.messageLocator.isEmpty ? event.eventID : event.messageLocator)
+                                    .font(.system(.caption2, design: .monospaced))
+                                    .foregroundStyle(.tertiary)
+                                    .lineLimit(1)
+                                    .truncationMode(.middle)
+                                    .textSelection(.enabled)
+                            }
                         }
                         .padding(.vertical, 2)
                     }
@@ -1478,11 +2221,11 @@ struct RunTriggerCauseBlock: View {
         }
         .padding(14)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color(nsColor: .windowBackgroundColor))
+        .background(IntrospectTheme.canvas)
         .clipShape(RoundedRectangle(cornerRadius: 8))
         .overlay(
             RoundedRectangle(cornerRadius: 8)
-                .stroke(Color(nsColor: .separatorColor).opacity(0.45))
+                .stroke(IntrospectTheme.border)
         )
     }
 }
@@ -1520,6 +2263,14 @@ struct RunDetailHeader: View {
                             if let exit = run.reflectorSummary?.exitCode {
                                 ScopePill(text: "exit \(exit)")
                             }
+                            if run.highestClassifierScore != nil {
+                                ScopePill(text: run.highestClassifierScoreText)
+                            }
+                            if run.reviewOnlyEventCount > 0 {
+                                ScopePill(text: "\(run.reviewOnlyEventCount) review-only")
+                            }
+                            ScopePill(text: "\(run.surfaceDiffs.count) files")
+                            ScopePill(text: run.lineDeltaText)
                             ScopePill(text: "\(run.eventCount) prompt events")
                             ScopePill(text: "\(run.sessionIDs.count) sessions")
                             if run.dryRun {
@@ -1574,7 +2325,7 @@ struct RunDetailHeader: View {
         }
         .padding(.horizontal, 18)
         .padding(.vertical, 16)
-        .background(Color(nsColor: .windowBackgroundColor))
+        .background(IntrospectTheme.canvas)
     }
 }
 
@@ -1632,11 +2383,11 @@ struct ProjectsSection: View {
             }
             .padding(.horizontal, 10)
             .padding(.vertical, 7)
-            .background(Color(nsColor: .controlBackgroundColor))
+            .background(IntrospectTheme.surface)
             .clipShape(RoundedRectangle(cornerRadius: 8))
             .overlay(
                 RoundedRectangle(cornerRadius: 8)
-                    .stroke(Color(nsColor: .separatorColor).opacity(0.6))
+                    .stroke(IntrospectTheme.border)
             )
 
             HStack(spacing: 0) {
@@ -1653,11 +2404,11 @@ struct ProjectsSection: View {
                     .frame(minWidth: 420, maxWidth: .infinity, alignment: .topLeading)
             }
             .frame(maxHeight: .infinity)
-            .background(Color(nsColor: .controlBackgroundColor))
+            .background(IntrospectTheme.surface)
             .clipShape(RoundedRectangle(cornerRadius: IntrospectTheme.cardCorner))
             .overlay(
                 RoundedRectangle(cornerRadius: IntrospectTheme.cardCorner)
-                    .stroke(Color(nsColor: .separatorColor).opacity(0.6))
+                    .stroke(IntrospectTheme.border)
             )
         }
         .confirmationDialog(
@@ -1747,7 +2498,7 @@ struct ProjectHierarchyPane: View {
                 }
             }
         }
-        .background(Color(nsColor: .windowBackgroundColor))
+        .background(IntrospectTheme.canvas)
     }
 }
 
@@ -1847,7 +2598,7 @@ struct SurfaceTreeRow: View {
                 Spacer(minLength: 8)
                 Text("\(item.lineCount)")
                     .font(.caption.monospacedDigit())
-                    .foregroundStyle(isSelected ? Color.white.opacity(0.85) : Color(nsColor: .tertiaryLabelColor))
+                    .foregroundStyle(isSelected ? Color.white.opacity(0.85) : IntrospectTheme.inkTertiary)
                     .accessibilityLabel("\(item.lineCount) lines")
             }
             .padding(.horizontal, 8)
@@ -1979,7 +2730,7 @@ struct SurfaceDetailHeader: View {
             }
         }
         .padding(18)
-        .background(Color(nsColor: .windowBackgroundColor))
+        .background(IntrospectTheme.canvas)
     }
 }
 
@@ -1996,7 +2747,7 @@ struct SurfaceEditor: View {
                 .font(.system(.callout, design: .monospaced))
                 .scrollContentBackground(.hidden)
                 .padding(10)
-                .background(Color(nsColor: .textBackgroundColor))
+                .background(IntrospectTheme.surface)
 
             Divider()
 
@@ -2004,7 +2755,7 @@ struct SurfaceEditor: View {
                 if isDirty {
                     Label("Unsaved changes", systemImage: "circle.fill")
                         .font(.caption)
-                        .foregroundStyle(.orange)
+                        .foregroundStyle(IntrospectTheme.accent)
                         .imageScale(.small)
                 }
                 Spacer()
@@ -2019,7 +2770,7 @@ struct SurfaceEditor: View {
                 .disabled(!isDirty)
             }
             .padding(12)
-            .background(Color(nsColor: .windowBackgroundColor))
+            .background(IntrospectTheme.canvas)
         }
     }
 }
@@ -2150,11 +2901,11 @@ struct SurfaceContentBlock: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(12)
             }
-            .background(Color(nsColor: .textBackgroundColor))
+            .background(IntrospectTheme.surface)
             .clipShape(RoundedRectangle(cornerRadius: 8))
             .overlay(
                 RoundedRectangle(cornerRadius: 8)
-                    .stroke(Color(nsColor: .separatorColor))
+                    .stroke(IntrospectTheme.border)
             )
         }
     }
@@ -2202,15 +2953,21 @@ struct IntrospectHomeSection: View {
     var body: some View {
         PageHeader(
             title: "Introspect Home",
-            subtitle: "A private git repo for your prompt variants, personal skills, trigger words, and reflector logs. It stays on this machine and out of the open-source app repo."
+            subtitle: "A private git repo for your prompt variants, personal skills, review terms, and reflector logs. It stays on this machine and out of the open-source app repo."
         )
 
         Card("State") {
             CheckRow("Git repo", detail: model.homeGitStatus, ok: model.homeGitOK)
             Divider()
-            CheckRow("Trigger words", detail: model.triggerWordsStatus, ok: model.triggerWordsOK)
+            CheckRow(
+                "Review terms",
+                detail: model.triggerWordsStatus,
+                state: model.triggerWordsOK ? .ok : .off
+            )
             Divider()
             InfoRow(label: "Last commit", value: model.homeLastCommit)
+            Divider()
+            InfoRow(label: "Working tree", value: model.homeWorkingTreeStatus)
         }
 
         HStack(spacing: 10) {
@@ -2230,6 +2987,76 @@ struct IntrospectHomeSection: View {
             }
             .buttonStyle(.bordered)
         }
+
+        Card("Version history") {
+            if model.homeCommits.isEmpty {
+                Text("No Introspect Home commits yet.")
+                    .foregroundStyle(.secondary)
+            } else {
+                HStack(spacing: 0) {
+                    ScrollView {
+                        LazyVStack(alignment: .leading, spacing: 6) {
+                            ForEach(model.homeCommits) { commit in
+                                HomeCommitRow(
+                                    commit: commit,
+                                    isSelected: commit.id == model.selectedHomeCommitID
+                                ) {
+                                    Task { await model.selectHomeCommit(commit) }
+                                }
+                            }
+                        }
+                        .padding(.trailing, 12)
+                    }
+                    .frame(width: 260)
+                    .frame(minHeight: 360, maxHeight: 520)
+
+                    Divider()
+
+                    ScrollView([.vertical, .horizontal]) {
+                        Text(model.selectedHomeCommitDiff.trimmedOr("No diff loaded."))
+                            .font(.system(.caption, design: .monospaced))
+                            .lineSpacing(2)
+                            .textSelection(.enabled)
+                            .fixedSize(horizontal: true, vertical: true)
+                            .padding(.leading, 14)
+                    }
+                    .frame(minHeight: 360, maxHeight: 520)
+                }
+            }
+        }
+    }
+}
+
+struct HomeCommitRow: View {
+    let commit: HomeCommitRecord
+    let isSelected: Bool
+    let onSelect: () -> Void
+
+    var body: some View {
+        Button(action: onSelect) {
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(spacing: 8) {
+                    Text(commit.shortHash)
+                        .font(.system(.caption, design: .monospaced).weight(.semibold))
+                    Spacer(minLength: 8)
+                    Text(commit.timestampText)
+                        .font(.caption2)
+                        .foregroundStyle(isSelected ? Color.white.opacity(0.85) : .secondary)
+                        .lineLimit(1)
+                }
+                Text(commit.subject)
+                    .font(.caption)
+                    .lineLimit(2)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .padding(.horizontal, 9)
+            .padding(.vertical, 8)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(isSelected ? IntrospectTheme.selection : Color.clear)
+            .clipShape(RoundedRectangle(cornerRadius: 8))
+            .contentShape(RoundedRectangle(cornerRadius: 8))
+        }
+        .buttonStyle(.plain)
     }
 }
 
@@ -2281,26 +3108,27 @@ struct CommandOutputView: View {
                     .padding(12)
             }
             .frame(maxHeight: 180)
-            .background(Color(nsColor: .textBackgroundColor))
+            .background(IntrospectTheme.surface)
             .clipShape(RoundedRectangle(cornerRadius: 8))
             .overlay(
                 RoundedRectangle(cornerRadius: 8)
-                    .stroke(Color(nsColor: .separatorColor).opacity(0.6))
+                    .stroke(IntrospectTheme.border)
             )
         }
         .padding(16)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color(nsColor: .controlBackgroundColor))
+        .background(IntrospectTheme.surface)
         .clipShape(RoundedRectangle(cornerRadius: IntrospectTheme.cardCorner))
         .overlay(
             RoundedRectangle(cornerRadius: IntrospectTheme.cardCorner)
-                .stroke(Color(nsColor: .separatorColor).opacity(0.6))
+                .stroke(IntrospectTheme.border)
         )
     }
 }
 
 enum IntrospectSection: Hashable {
     case status
+    case signals
     case hooks
     case notifications
     case runs
@@ -2318,7 +3146,7 @@ enum ReflectionMode: String, CaseIterable, Identifiable {
 
     var title: String {
         switch self {
-        case .immediate: "Right After Trigger"
+        case .immediate: "Right After Wake"
         case .nightly: "Nightly"
         case .off: "Disabled"
         }
@@ -2335,9 +3163,9 @@ enum ReflectionMode: String, CaseIterable, Identifiable {
     var helpText: String {
         switch self {
         case .immediate:
-            "Trigger prompts enqueue and kick one locked worker immediately. Debounce and cooldown still batch bursts."
+            "Wake prompts enqueue and kick one locked worker immediately. Debounce and cooldown still batch bursts."
         case .nightly:
-            "Trigger prompts enqueue only; a LaunchAgent reviews the batch at the selected time."
+            "Wake prompts enqueue only; a LaunchAgent reviews the batch at the selected time."
         case .off:
             "Prompt links stay available, but Claude and Codex hooks are removed."
         }
@@ -2444,9 +3272,15 @@ struct ProjectTreeRecord: Identifiable {
 
 struct TriggerEventRecord: Identifiable, Hashable {
     let id: String
+    let eventID: String
+    let messageLocator: String
+    let dedupeKey: String
     let timestampValue: String
     let timestampText: String
+    let version: String
     let triggered: Bool
+    let reviewTriggered: Bool
+    let wakeReason: String
     let sessionID: String
     let cwd: String
     let transcriptPath: String
@@ -2454,6 +3288,11 @@ struct TriggerEventRecord: Identifiable, Hashable {
     let matched: [String]
     let snippet: String
     let source: String
+    let sentimentScore: Double?
+    let classifierScore: Double?
+    let classifierThreshold: Double?
+    let classifierReviewThreshold: Double?
+    let classifierModelType: String?
 
     var sourceLabel: String {
         switch source {
@@ -2473,6 +3312,44 @@ struct TriggerEventRecord: Identifiable, Hashable {
         default:
             return "bolt"
         }
+    }
+
+    var sentimentText: String {
+        guard let sentimentScore else { return "tone none" }
+        return "tone \(String(format: "%+.2f", sentimentScore))"
+    }
+
+    var classifierScoreText: String {
+        guard let classifierScore else { return "no score" }
+        return String(format: "%.3f", classifierScore)
+    }
+
+    var classifierThresholdText: String {
+        guard let classifierThreshold else { return "threshold unknown" }
+        return String(format: "wake %.2f", classifierThreshold)
+    }
+
+    var classifierReviewThresholdText: String {
+        guard let classifierReviewThreshold else { return "review unknown" }
+        return String(format: "review %.2f", classifierReviewThreshold)
+    }
+
+    var decisionLabel: String {
+        if triggered { return "Woke reflector" }
+        if reviewTriggered { return "Review only" }
+        return "Logged"
+    }
+
+    var decisionColor: Color {
+        if triggered { return IntrospectTheme.danger }
+        if reviewTriggered { return IntrospectTheme.warning }
+        return IntrospectTheme.inkSecondary
+    }
+
+    var wakeReasonLabel: String {
+        let value = wakeReason.trimmingCharacters(in: .whitespacesAndNewlines)
+        if value.isEmpty { return "reason unknown" }
+        return value.replacingOccurrences(of: "_", with: " ")
     }
 }
 
@@ -2557,6 +3434,33 @@ struct TriggerRunRecord: Identifiable {
         let value = fallbackModel?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         return value.isEmpty ? nil : "fallback: \(value)"
     }
+
+    var lineDelta: Int {
+        surfaceDiffs.reduce(0) { $0 + ($1.afterLineCount - $1.beforeLineCount) }
+    }
+
+    var lineDeltaText: String {
+        if lineDelta > 0 { return "+\(lineDelta) lines" }
+        if lineDelta < 0 { return "\(lineDelta) lines" }
+        return "0 line delta"
+    }
+
+    var highestClassifierScore: Double? {
+        events.compactMap(\.classifierScore).max()
+    }
+
+    var highestClassifierScoreText: String {
+        guard let highestClassifierScore else { return "score none" }
+        return String(format: "score %.3f", highestClassifierScore)
+    }
+
+    var reviewOnlyEventCount: Int {
+        events.filter { $0.reviewTriggered && !$0.triggered }.count
+    }
+
+    var wakeEventCount: Int {
+        events.filter(\.triggered).count
+    }
 }
 
 struct AgentSurfaceDiffRecord: Identifiable, Hashable {
@@ -2592,6 +3496,138 @@ struct AgentSurfaceDiffRecord: Identifiable, Hashable {
     }
 }
 
+struct TriggerWordAnalyticsRecord: Identifiable {
+    let word: String
+    let eventCount: Int
+    let runCount: Int
+    let changedRunCount: Int
+    let lastSeenValue: String
+    let lastSeenText: String
+    let averageSentiment: Double?
+
+    var id: String { word }
+}
+
+struct ClassifierScoreBandRecord: Identifiable {
+    let lowerBound: Double
+    let upperBound: Double
+    let promptCount: Int
+    let wakeCount: Int
+    let reviewOnlyCount: Int
+
+    var id: String { label }
+    var loggedOnlyCount: Int { max(promptCount - wakeCount - reviewOnlyCount, 0) }
+    var label: String { String(format: "%.1f-%.1f", lowerBound, upperBound) }
+}
+
+struct TriggerVersionAnalyticsRecord: Identifiable {
+    let version: String
+    let promptCount: Int
+    let triggerCount: Int
+    let runCount: Int
+    let changedRunCount: Int
+    let firstSeenValue: String
+    let lastSeenValue: String
+    let lastSeenText: String
+    let subject: String
+    let previousTriggerRateDelta: Double?
+
+    var id: String { version }
+
+    var shortVersion: String {
+        String(version.prefix(7))
+    }
+
+    var triggerRate: Double {
+        guard promptCount > 0 else { return 0 }
+        return Double(triggerCount) / Double(promptCount)
+    }
+
+    var triggerRateText: String {
+        Self.percentFormatter.string(from: NSNumber(value: triggerRate)) ?? "0%"
+    }
+
+    var deltaText: String {
+        guard let previousTriggerRateDelta else { return "first" }
+        let value = Self.percentFormatter.string(from: NSNumber(value: abs(previousTriggerRateDelta))) ?? "0%"
+        if previousTriggerRateDelta > 0 {
+            return "+\(value)"
+        }
+        if previousTriggerRateDelta < 0 {
+            return "-\(value)"
+        }
+        return "0%"
+    }
+
+    var deltaColor: Color {
+        guard let previousTriggerRateDelta else { return IntrospectTheme.inkTertiary }
+        if previousTriggerRateDelta > 0 { return IntrospectTheme.warning }
+        if previousTriggerRateDelta < 0 { return IntrospectTheme.success }
+        return IntrospectTheme.inkSecondary
+    }
+
+    private static let percentFormatter: NumberFormatter = {
+        let formatter = NumberFormatter()
+        formatter.numberStyle = .percent
+        formatter.maximumFractionDigits = 1
+        formatter.minimumFractionDigits = 0
+        return formatter
+    }()
+}
+
+struct ClassifierThresholdRecord: Identifiable {
+    let threshold: Double
+    let precision: Double
+    let recall: Double
+    let wakeRate: Double
+    let truePositiveCount: Int
+    let falsePositiveCount: Int
+    let falseNegativeCount: Int
+    let trueNegativeCount: Int
+
+    var id: String { thresholdText }
+    var thresholdText: String { String(format: "%.2f", threshold) }
+    var precisionText: String { Self.percentText(precision) }
+    var recallText: String { Self.percentText(recall) }
+    var wakeRateText: String { Self.percentText(wakeRate) }
+
+    private static func percentText(_ value: Double) -> String {
+        String(format: "%.0f%%", value * 100)
+    }
+}
+
+struct ClassifierPromptVariantRecord: Identifiable {
+    let variant: String
+    let precision: Double
+    let recall: Double
+    let accuracy: Double
+    let wakeRate: Double
+    let truePositiveCount: Int
+    let falsePositiveCount: Int
+    let falseNegativeCount: Int
+    let trueNegativeCount: Int
+
+    var id: String { variant }
+    var displayName: String { variant.replacingOccurrences(of: "_", with: " ") }
+    var precisionText: String { Self.percentText(precision) }
+    var recallText: String { Self.percentText(recall) }
+    var wakeRateText: String { Self.percentText(wakeRate) }
+
+    private static func percentText(_ value: Double) -> String {
+        String(format: "%.0f%%", value * 100)
+    }
+}
+
+struct HomeCommitRecord: Identifiable, Hashable {
+    let hash: String
+    let shortHash: String
+    let timestampValue: String
+    let timestampText: String
+    let subject: String
+
+    var id: String { hash }
+}
+
 private struct TriggerBatchRecord {
     let id: String
     let timestampValue: String
@@ -2622,7 +3658,7 @@ private struct ReflectorRunBuilder {
 
 @MainActor
 final class IntrospectModel: ObservableObject {
-    @Published var selectedSection: IntrospectSection? = .runs
+    @Published var selectedSection: IntrospectSection? = .signals
     @Published var mode: ReflectionMode = .immediate
     @Published var reflectorRunner: ReflectorRunner = .defaultRunner
     @Published var reflectorClaudeModel = ""
@@ -2655,6 +3691,24 @@ final class IntrospectModel: ObservableObject {
     @Published var selectedRunID: String?
     @Published var selectedTranscriptPath: String?
     @Published var reflectorPromptText = ""
+    @Published var signalPromptCount = 0
+    @Published var signalTriggeredCount = 0
+    @Published var signalReviewOnlyCount = 0
+    @Published var signalChangedRunCount = 0
+    @Published var signalVersionCount = 0
+    @Published var signalAverageSentiment: Double?
+    @Published var signalAverageClassifierScore: Double?
+    @Published var signalClassifierScoredCount = 0
+    @Published var wordStats: [TriggerWordAnalyticsRecord] = []
+    @Published var classifierScoreBands: [ClassifierScoreBandRecord] = []
+    @Published var recentClassifierEvents: [TriggerEventRecord] = []
+    @Published var versionStats: [TriggerVersionAnalyticsRecord] = []
+    @Published var classifierThresholdStats: [ClassifierThresholdRecord] = []
+    @Published var classifierPromptVariantStats: [ClassifierPromptVariantRecord] = []
+    @Published var homeCommits: [HomeCommitRecord] = []
+    @Published var selectedHomeCommitID: String?
+    @Published var selectedHomeCommitDiff = ""
+    @Published var homeWorkingTreeStatus = ""
     @Published var isEditingSurface = false
     @Published var surfaceDraftContent = ""
     @Published var isScanningSurfaces = false
@@ -2668,14 +3722,8 @@ final class IntrospectModel: ObservableObject {
     private let repoURL: URL
     private let introspectHomeURL: URL
     private let homeURL: URL
-    private let defaultTriggerWords = [
-        "arse", "ass", "asshole", "bastard", "bitch", "bullshit", "crap", "cunt",
-        "damn", "dipshit", "dumb", "dumbass", "dumbfuck", "fag", "faggot", "ffs",
-        "fuck", "fucked", "fucker", "fuckin", "fucking", "goddamn", "hell", "idiot",
-        "mf", "moron", "motherfucker", "motherfucking", "nigga", "nigger", "retard",
-        "retarded", "shitty", "stupid", "wtf"
-    ]
     private var savedTriggerWords: [String] = []
+    private var appCommitSubjects: [String: String] = [:]
     private let skippedScanDirectories = Set([
         ".build", ".cache", ".git", ".next", ".swiftpm", "DerivedData", "__pycache__",
         "build", "cache", "dist", "node_modules", "plugins"
@@ -2761,6 +3809,37 @@ final class IntrospectModel: ObservableObject {
         return "\(mode.statusLabel) · \(events) · last run \(lastRunText)"
     }
 
+    var signalTriggerRateText: String {
+        guard signalPromptCount > 0 else { return "0%" }
+        return Self.percentFormatter.string(
+            from: NSNumber(value: Double(signalTriggeredCount) / Double(signalPromptCount))
+        ) ?? "0%"
+    }
+
+    var signalReviewOnlyRateText: String {
+        guard signalPromptCount > 0 else { return "0%" }
+        return Self.percentFormatter.string(
+            from: NSNumber(value: Double(signalReviewOnlyCount) / Double(signalPromptCount))
+        ) ?? "0%"
+    }
+
+    var signalAverageClassifierScoreText: String {
+        guard let signalAverageClassifierScore else { return "none" }
+        return String(format: "%.3f", signalAverageClassifierScore)
+    }
+
+    var signalAverageSentimentText: String {
+        guard let signalAverageSentiment else { return "none" }
+        return String(format: "%+.2f", signalAverageSentiment)
+    }
+
+    var signalAverageSentimentLabel: String {
+        guard let score = signalAverageSentiment else { return "no scored snippets" }
+        if score < -0.25 { return "negative average" }
+        if score > 0.25 { return "positive average" }
+        return "neutral average"
+    }
+
     var activeTriggerWords: [String] {
         parseWords(triggerWordsText)
     }
@@ -2806,7 +3885,7 @@ final class IntrospectModel: ObservableObject {
     }
 
     var triggerWordsStatus: String {
-        triggerWordsOK ? displayPath(triggerWordsURL) : "missing"
+        triggerWordsOK ? displayPath(triggerWordsURL) : "optional file not created"
     }
 
     private var triggerWordsURL: URL {
@@ -2953,7 +4032,7 @@ final class IntrospectModel: ObservableObject {
         defer { isApplyingConfiguration = false }
 
         var repaired = false
-        if !homeGitOK || !triggerWordsOK || !fileManager.fileExists(atPath: homeSettingsURL.path) {
+        if !homeGitOK || !fileManager.fileExists(atPath: homeSettingsURL.path) {
             await initializeIntrospectHome(report: false, refreshAfter: false)
             repaired = true
         }
@@ -3002,13 +4081,16 @@ final class IntrospectModel: ObservableObject {
         }
         queuedEvents = lineCount(repoURL.appendingPathComponent("feedback/trigger-queue.jsonl"))
         lastRunText = readLastRun()
+        appCommitSubjects = await gitSubjectMap(in: repoURL)
         loadTriggerHistory()
+        loadClassifierReports()
         loadTriggerWords()
         homeGitOK = fileManager.fileExists(atPath: introspectHomeURL.appendingPathComponent(".git").path)
         triggerWordsOK = fileManager.fileExists(atPath: triggerWordsURL.path)
         homeLastCommit = homeGitOK
             ? await gitOutput(["-C", introspectHomeURL.path, "log", "-1", "--oneline"]).trimmedOr("none")
             : "none"
+        await loadHomeHistory()
 
         isScanningSurfaces = true
         applySurfaceScan(scanProjectSurfaces(roots: priorityScanRoots()))
@@ -3149,9 +4231,6 @@ final class IntrospectModel: ObservableObject {
                     "skills": []
                 ], to: skillsIndexURL)
             }
-            if !fileManager.fileExists(atPath: triggerWordsURL.path) {
-                try (defaultTriggerWords.joined(separator: "\n") + "\n").write(to: triggerWordsURL, atomically: true, encoding: .utf8)
-            }
             if !fileManager.fileExists(atPath: homeSettingsURL.path) {
                 try writeJSON([
                     "notifications_enabled": notificationsEnabled,
@@ -3172,7 +4251,7 @@ final class IntrospectModel: ObservableObject {
                 This repository is private local state for Introspect:
 
                 - `AGENTS.md`: the canonical user-wide prompt linked into Claude and Codex.
-                - `trigger-words.txt`: exact trigger words, one lowercase word per line.
+                - `trigger-words.txt`: optional review terms, one lowercase word per line. Introspect does not install defaults.
                 - `settings.json`: local app preferences such as notification delivery.
                 - `skills/`: private user skills.
                 - `memory/`: durable user and machine facts.
@@ -3204,11 +4283,11 @@ final class IntrospectModel: ObservableObject {
             try fileManager.createDirectory(at: introspectHomeURL, withIntermediateDirectories: true)
             try (words.joined(separator: "\n") + "\n").write(to: triggerWordsURL, atomically: true, encoding: .utf8)
             savedTriggerWords = words
-            lastCommandOutput = "Saved \(words.count) trigger word(s)."
+            lastCommandOutput = "Saved \(words.count) review term(s)."
         } catch {
-            lastCommandOutput = "Failed to save trigger words: \(error)"
+            lastCommandOutput = "Failed to save review terms: \(error)"
         }
-        await commitHomeChanges(message: "Update trigger words")
+        await commitHomeChanges(message: "Update review terms")
         await refresh()
     }
 
@@ -3236,6 +4315,11 @@ final class IntrospectModel: ObservableObject {
 
     func openIntrospectHomeFolder() async {
         NSWorkspace.shared.open(introspectHomeURL)
+    }
+
+    func selectHomeCommit(_ commit: HomeCommitRecord) async {
+        selectedHomeCommitID = commit.id
+        selectedHomeCommitDiff = await homeCommitDiff(commit.hash)
     }
 
     func openRepoFolder() async {
@@ -3845,12 +4929,12 @@ final class IntrospectModel: ObservableObject {
     private func loadTriggerWords() {
         triggerWordsOK = fileManager.fileExists(atPath: triggerWordsURL.path)
         guard let text = try? String(contentsOf: triggerWordsURL, encoding: .utf8) else {
-            savedTriggerWords = defaultTriggerWords
+            savedTriggerWords = []
             resetWordDraft()
             return
         }
         let words = parseWords(text)
-        savedTriggerWords = words.isEmpty ? defaultTriggerWords : words
+        savedTriggerWords = words
         resetWordDraft()
     }
 
@@ -3956,6 +5040,81 @@ final class IntrospectModel: ObservableObject {
         return friendlyTimestamp(value)
     }
 
+    private func loadHomeHistory() async {
+        guard homeGitOK else {
+            homeCommits = []
+            selectedHomeCommitID = nil
+            selectedHomeCommitDiff = ""
+            homeWorkingTreeStatus = "not initialized"
+            return
+        }
+
+        homeWorkingTreeStatus = await gitOutput([
+            "-C", introspectHomeURL.path,
+            "status", "--short"
+        ]).trimmedOr("clean")
+
+        let output = await gitOutput([
+            "-C", introspectHomeURL.path,
+            "log", "-30",
+            "--date=iso-strict",
+            "--pretty=format:%H\u{1f}%h\u{1f}%ad\u{1f}%s"
+        ])
+
+        let commits = output
+            .split(separator: "\n", omittingEmptySubsequences: true)
+            .compactMap { line -> HomeCommitRecord? in
+                let parts = String(line).split(separator: "\u{1f}", omittingEmptySubsequences: false).map(String.init)
+                guard parts.count >= 4 else { return nil }
+                return HomeCommitRecord(
+                    hash: parts[0],
+                    shortHash: parts[1],
+                    timestampValue: parts[2],
+                    timestampText: friendlyTimestamp(parts[2]),
+                    subject: parts[3]
+                )
+            }
+
+        homeCommits = commits
+        if selectedHomeCommitID == nil || !commits.contains(where: { $0.id == selectedHomeCommitID }) {
+            selectedHomeCommitID = commits.first?.id
+        }
+        if let selected = commits.first(where: { $0.id == selectedHomeCommitID }) {
+            selectedHomeCommitDiff = await homeCommitDiff(selected.hash)
+        } else {
+            selectedHomeCommitDiff = ""
+        }
+    }
+
+    private func homeCommitDiff(_ hash: String) async -> String {
+        guard !hash.isEmpty else { return "" }
+        return await gitOutput([
+            "-C", introspectHomeURL.path,
+            "show",
+            "--format=medium",
+            "--stat",
+            "--patch",
+            "--find-renames",
+            hash
+        ]).trimmedOr("No diff for \(hash).")
+    }
+
+    private func gitSubjectMap(in repo: URL) async -> [String: String] {
+        let output = await gitOutput([
+            "-C", repo.path,
+            "log", "--all", "-300",
+            "--pretty=format:%H\u{1f}%h\u{1f}%s"
+        ])
+        var subjects: [String: String] = [:]
+        for line in output.split(separator: "\n", omittingEmptySubsequences: true) {
+            let parts = String(line).split(separator: "\u{1f}", omittingEmptySubsequences: false).map(String.init)
+            guard parts.count >= 3 else { continue }
+            subjects[parts[0]] = parts[2]
+            subjects[parts[1]] = parts[2]
+        }
+        return subjects
+    }
+
     private func loadTriggerHistory() {
         let events = readTriggerEvents()
             .sorted { compareTimestamps($0.timestampValue, $1.timestampValue) == .orderedDescending }
@@ -4044,7 +5203,273 @@ final class IntrospectModel: ObservableObject {
         } else {
             selectedTranscriptPath = nil
         }
+        applySignalAnalytics(events: events, runs: runs)
         loadSelectedReflectorPrompt()
+    }
+
+    private func applySignalAnalytics(events: [TriggerEventRecord], runs: [TriggerRunRecord]) {
+        signalPromptCount = events.count
+        signalTriggeredCount = events.filter(\.triggered).count
+        signalReviewOnlyCount = events.filter { $0.reviewTriggered && !$0.triggered }.count
+        signalChangedRunCount = runs.filter(runDidChange).count
+        let scoredSentiments = events.compactMap(\.sentimentScore)
+        signalAverageSentiment = scoredSentiments.isEmpty
+            ? nil
+            : scoredSentiments.reduce(0, +) / Double(scoredSentiments.count)
+        let classifierScores = events.compactMap(\.classifierScore)
+        signalClassifierScoredCount = classifierScores.count
+        signalAverageClassifierScore = classifierScores.isEmpty
+            ? nil
+            : classifierScores.reduce(0, +) / Double(classifierScores.count)
+        classifierScoreBands = buildClassifierScoreBands(events: events)
+        recentClassifierEvents = Array(events.filter { $0.classifierScore != nil }.prefix(30))
+
+        var wordEvents: [String: [TriggerEventRecord]] = [:]
+        for event in events where !event.matched.isEmpty {
+            for word in unique(event.matched) {
+                wordEvents[word, default: []].append(event)
+            }
+        }
+
+        var runCounts: [String: Int] = [:]
+        var changedRunCounts: [String: Int] = [:]
+        for run in runs {
+            for word in unique(run.matched) {
+                runCounts[word, default: 0] += 1
+                if runDidChange(run) {
+                    changedRunCounts[word, default: 0] += 1
+                }
+            }
+        }
+
+        wordStats = wordEvents.map { word, wordEvents in
+            let ordered = wordEvents.sorted {
+                compareTimestamps($0.timestampValue, $1.timestampValue) == .orderedDescending
+            }
+            let sentiments = ordered.compactMap(\.sentimentScore)
+            let averageSentiment = sentiments.isEmpty ? nil : sentiments.reduce(0, +) / Double(sentiments.count)
+            return TriggerWordAnalyticsRecord(
+                word: word,
+                eventCount: wordEvents.count,
+                runCount: runCounts[word] ?? 0,
+                changedRunCount: changedRunCounts[word] ?? 0,
+                lastSeenValue: ordered.first?.timestampValue ?? "",
+                lastSeenText: ordered.first?.timestampText ?? "unknown",
+                averageSentiment: averageSentiment
+            )
+        }
+        .sorted {
+            if $0.eventCount != $1.eventCount {
+                return $0.eventCount > $1.eventCount
+            }
+            return $0.word.localizedStandardCompare($1.word) == .orderedAscending
+        }
+
+        buildVersionStats(events: events, runs: runs)
+    }
+
+    private func buildVersionStats(events: [TriggerEventRecord], runs: [TriggerRunRecord]) {
+        let chronological = events.sorted {
+            compareTimestamps($0.timestampValue, $1.timestampValue) == .orderedAscending
+        }
+        var versionOrder: [String] = []
+        var seenVersions: Set<String> = []
+        var eventsByVersion: [String: [TriggerEventRecord]] = [:]
+        for event in chronological {
+            let version = event.version.isEmpty ? "unknown" : event.version
+            if seenVersions.insert(version).inserted {
+                versionOrder.append(version)
+            }
+            eventsByVersion[version, default: []].append(event)
+        }
+        signalVersionCount = versionOrder.count
+
+        let runsByVersion = runs.reduce(into: [String: [TriggerRunRecord]]()) { result, run in
+            let versions = Set(run.events.map { $0.version.isEmpty ? "unknown" : $0.version })
+            for version in versions {
+                result[version, default: []].append(run)
+            }
+        }
+
+        var previousRate: Double?
+        var records: [TriggerVersionAnalyticsRecord] = []
+        for version in versionOrder {
+            let versionEvents = eventsByVersion[version] ?? []
+            let triggerCount = versionEvents.filter(\.triggered).count
+            let promptCount = versionEvents.count
+            let rate = promptCount > 0 ? Double(triggerCount) / Double(promptCount) : 0
+            let versionRuns = runsByVersion[version] ?? []
+            let ordered = versionEvents.sorted {
+                compareTimestamps($0.timestampValue, $1.timestampValue) == .orderedAscending
+            }
+            records.append(
+                TriggerVersionAnalyticsRecord(
+                    version: version,
+                    promptCount: promptCount,
+                    triggerCount: triggerCount,
+                    runCount: versionRuns.count,
+                    changedRunCount: versionRuns.filter(runDidChange).count,
+                    firstSeenValue: ordered.first?.timestampValue ?? "",
+                    lastSeenValue: ordered.last?.timestampValue ?? "",
+                    lastSeenText: ordered.last?.timestampText ?? "unknown",
+                    subject: appCommitSubjects[version] ?? appCommitSubjects[String(version.prefix(7))] ?? "",
+                    previousTriggerRateDelta: previousRate.map { rate - $0 }
+                )
+            )
+            previousRate = rate
+        }
+        versionStats = records
+    }
+
+    private func buildClassifierScoreBands(events: [TriggerEventRecord]) -> [ClassifierScoreBandRecord] {
+        struct Counts {
+            var prompt = 0
+            var wake = 0
+            var reviewOnly = 0
+        }
+
+        var bands = Array(repeating: Counts(), count: 10)
+        for event in events {
+            guard let score = event.classifierScore else { continue }
+            let clamped = min(max(score, 0), 0.999_999)
+            let index = min(Int(clamped * 10), 9)
+            bands[index].prompt += 1
+            if event.triggered {
+                bands[index].wake += 1
+            } else if event.reviewTriggered {
+                bands[index].reviewOnly += 1
+            }
+        }
+
+        return bands.enumerated().map { index, counts in
+            let lower = Double(index) / 10
+            return ClassifierScoreBandRecord(
+                lowerBound: lower,
+                upperBound: lower + 0.1,
+                promptCount: counts.prompt,
+                wakeCount: counts.wake,
+                reviewOnlyCount: counts.reviewOnly
+            )
+        }
+    }
+
+    private func loadClassifierReports() {
+        let reportDir = repoURL.appendingPathComponent("feedback/intent-classifier")
+        let selectedStats = readClassifierThresholds(
+            reportDir.appendingPathComponent("intent-v2-round4-split-grid-report.md")
+        )
+        let curveStats = readClassifierThresholds(
+            reportDir.appendingPathComponent("group-holdout-logreg-round4-split-fixed-report.md")
+        )
+        let fallbackReports = [
+            reportDir.appendingPathComponent("group-holdout-logreg-round4-split-fixed-report.md"),
+            reportDir.appendingPathComponent("wake-logreg-exportable-report.md"),
+            reportDir.appendingPathComponent("tfidf-audit-overrides-report.md")
+        ]
+        if selectedStats.isEmpty && curveStats.isEmpty {
+            classifierThresholdStats = fallbackReports
+                .map(readClassifierThresholds)
+                .first { !$0.isEmpty } ?? []
+        } else {
+            classifierThresholdStats = (selectedStats + curveStats).sorted { lhs, rhs in
+                lhs.threshold < rhs.threshold
+            }
+        }
+        classifierPromptVariantStats = readClassifierPromptVariants(
+            reportDir.appendingPathComponent("prompt-variant-audit-report.md")
+        )
+    }
+
+    private func readClassifierThresholds(_ url: URL) -> [ClassifierThresholdRecord] {
+        let text = (try? String(contentsOf: url, encoding: .utf8)) ?? ""
+        var tableKind: String?
+        var selectedThreshold: Double?
+        var records: [ClassifierThresholdRecord] = []
+        for rawLine in text.components(separatedBy: .newlines) {
+            if rawLine.hasPrefix("Selected threshold:") {
+                selectedThreshold = Double(rawLine.replacingOccurrences(of: "Selected threshold:", with: "").trimmingCharacters(in: .whitespaces))
+                continue
+            }
+            if rawLine.hasPrefix("## ") {
+                if rawLine.contains("Selected Group-Holdout Metrics") {
+                    tableKind = "selected"
+                } else if rawLine.contains("Thresholds On Subagent Audit Labels") ||
+                    rawLine.contains("5-Fold CV Thresholds") ||
+                    rawLine.contains("Overall Thresholds") {
+                    tableKind = "thresholds"
+                } else {
+                    tableKind = nil
+                }
+                continue
+            }
+            guard let tableKind else { continue }
+            let cells = markdownTableCells(rawLine)
+            if tableKind == "selected" {
+                guard cells.count >= 7, let threshold = selectedThreshold, let precision = Double(cells[0]) else { continue }
+                records.append(
+                    ClassifierThresholdRecord(
+                        threshold: threshold,
+                        precision: precision,
+                        recall: Double(cells[1]) ?? 0,
+                        wakeRate: Double(cells[2]) ?? 0,
+                        truePositiveCount: Int(cells[3]) ?? 0,
+                        falsePositiveCount: Int(cells[4]) ?? 0,
+                        falseNegativeCount: Int(cells[5]) ?? 0,
+                        trueNegativeCount: Int(cells[6]) ?? 0
+                    )
+                )
+            } else {
+                guard cells.count >= 8, let threshold = Double(cells[0]) else { continue }
+                records.append(
+                    ClassifierThresholdRecord(
+                        threshold: threshold,
+                        precision: Double(cells[1]) ?? 0,
+                        recall: Double(cells[2]) ?? 0,
+                        wakeRate: Double(cells[3]) ?? 0,
+                        truePositiveCount: Int(cells[4]) ?? 0,
+                        falsePositiveCount: Int(cells[5]) ?? 0,
+                        falseNegativeCount: Int(cells[6]) ?? 0,
+                        trueNegativeCount: Int(cells[7]) ?? 0
+                    )
+                )
+            }
+        }
+        return records
+    }
+
+    private func readClassifierPromptVariants(_ url: URL) -> [ClassifierPromptVariantRecord] {
+        let text = (try? String(contentsOf: url, encoding: .utf8)) ?? ""
+        return text.components(separatedBy: .newlines).compactMap { rawLine in
+            let cells = markdownTableCells(rawLine)
+            guard cells.count >= 9, cells[0] != "variant" else { return nil }
+            return ClassifierPromptVariantRecord(
+                variant: cells[0],
+                precision: Double(cells[1]) ?? 0,
+                recall: Double(cells[2]) ?? 0,
+                accuracy: Double(cells[3]) ?? 0,
+                wakeRate: Double(cells[4]) ?? 0,
+                truePositiveCount: Int(cells[5]) ?? 0,
+                falsePositiveCount: Int(cells[6]) ?? 0,
+                falseNegativeCount: Int(cells[7]) ?? 0,
+                trueNegativeCount: Int(cells[8]) ?? 0
+            )
+        }
+    }
+
+    private func markdownTableCells(_ rawLine: String) -> [String] {
+        let trimmed = rawLine.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.hasPrefix("|"), trimmed.hasSuffix("|") else { return [] }
+        let cells = trimmed
+            .split(separator: "|", omittingEmptySubsequences: false)
+            .dropFirst()
+            .dropLast()
+            .map { String($0).trimmingCharacters(in: .whitespacesAndNewlines) }
+        if cells.contains(where: { $0.contains("---") }) { return [] }
+        return cells
+    }
+
+    private func runDidChange(_ run: TriggerRunRecord) -> Bool {
+        !run.surfaceDiffs.isEmpty || run.reflectorSummary?.didChange == true
     }
 
     private func readTriggerEvents() -> [TriggerEventRecord] {
@@ -4053,20 +5478,32 @@ final class IntrospectModel: ObservableObject {
             let timestamp = object["ts"] as? String ?? ""
             let sessionID = object["session_id"] as? String ?? "unknown"
             let transcriptLine = intValue(object["transcript_line"])
+            let classifier = object["classifier"] as? [String: Any] ?? [:]
             let id = object["dedupe_key"] as? String
                 ?? "\(timestamp)-\(sessionID)-\(transcriptLine ?? index)"
             return TriggerEventRecord(
                 id: id,
+                eventID: object["event_id"] as? String ?? id,
+                messageLocator: object["message_locator"] as? String ?? "",
+                dedupeKey: object["dedupe_key"] as? String ?? "",
                 timestampValue: timestamp,
                 timestampText: friendlyTimestamp(timestamp),
+                version: object["version"] as? String ?? "unknown",
                 triggered: object["triggered"] as? Bool ?? false,
+                reviewTriggered: object["review_triggered"] as? Bool ?? false,
+                wakeReason: object["wake_reason"] as? String ?? "",
                 sessionID: sessionID,
                 cwd: object["cwd"] as? String ?? "",
                 transcriptPath: object["transcript_path"] as? String ?? "",
                 transcriptLine: transcriptLine,
                 matched: object["matched"] as? [String] ?? [],
                 snippet: object["snippet"] as? String ?? "",
-                source: object["source"] as? String ?? "hook"
+                source: object["source"] as? String ?? "hook",
+                sentimentScore: sentimentScore(for: object["snippet"] as? String ?? ""),
+                classifierScore: doubleValue(classifier["score"]),
+                classifierThreshold: doubleValue(classifier["threshold"]),
+                classifierReviewThreshold: doubleValue(classifier["review_threshold"]),
+                classifierModelType: classifier["model_type"] as? String
             )
         }
     }
@@ -4435,6 +5872,21 @@ final class IntrospectModel: ObservableObject {
         reflectorPromptText = (try? String(contentsOf: URL(fileURLWithPath: path), encoding: .utf8)) ?? ""
     }
 
+    private static let sentimentTagger = NLTagger(tagSchemes: [.sentimentScore])
+    private var sentimentCache: [String: Double?] = [:]
+
+    private func sentimentScore(for text: String) -> Double? {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        if let cached = sentimentCache[trimmed] { return cached }
+        let tagger = Self.sentimentTagger
+        tagger.string = trimmed
+        let (tag, _) = tagger.tag(at: trimmed.startIndex, unit: .paragraph, scheme: .sentimentScore)
+        let score = tag.flatMap { Double($0.rawValue) }
+        sentimentCache[trimmed] = score
+        return score
+    }
+
     private func readJSONLines(_ url: URL) -> [[String: Any]] {
         guard let text = try? String(contentsOf: url, encoding: .utf8) else {
             return []
@@ -4474,6 +5926,19 @@ final class IntrospectModel: ObservableObject {
         return nil
     }
 
+    private func doubleValue(_ value: Any?) -> Double? {
+        if let value = value as? Double {
+            return value
+        }
+        if let value = value as? NSNumber {
+            return value.doubleValue
+        }
+        if let value = value as? String {
+            return Double(value)
+        }
+        return nil
+    }
+
     private func unique(_ values: [String]) -> [String] {
         var seen: Set<String> = []
         return values.filter { value in
@@ -4495,6 +5960,14 @@ final class IntrospectModel: ObservableObject {
         formatter.doesRelativeDateFormatting = true
         formatter.dateStyle = .medium
         formatter.timeStyle = .short
+        return formatter
+    }()
+
+    private static let percentFormatter: NumberFormatter = {
+        let formatter = NumberFormatter()
+        formatter.numberStyle = .percent
+        formatter.maximumFractionDigits = 1
+        formatter.minimumFractionDigits = 0
         return formatter
     }()
 

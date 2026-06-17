@@ -39,7 +39,7 @@ Claude/Codex user prompt
 - Hooks and scanner capture signals only. They should not decide what to change.
 - Worker/curator owns batching, evidence gathering, classification, and proposal generation.
 - App/UI owns visibility, review, approval, and rollback.
-- Introspect home owns private user state, trigger words, pending proposals, and personal skills.
+- Introspect home owns private user state, optional review terms, pending proposals, and personal skills.
 - Project repos own project prompts and project skills.
 
 ## Storage, Config, Secrets
@@ -54,7 +54,7 @@ Claude/Codex user prompt
 
 ### Capture
 
-Foreground hooks log prompt metadata and exact trigger-word matches. Codex transcript scanner catches prompts missed by Desktop hooks. Sources: `hooks/trigger-reflect.sh:146-181`, `README.md:79`.
+Foreground hooks log prompt metadata, local classifier scores, optional review-term matches, and stable message locators. Codex transcript scanner catches prompts missed by Desktop hooks. Sources: `hooks/trigger-reflect.sh:146-181`, `README.md:80-88`.
 
 Required change: add a canonical event id across hook and scanner paths.
 
@@ -147,7 +147,7 @@ Source: `docs/skill-manager-reference-review.md:14-30`.
 
 - Duplicate event paths make one prompt look like many failures.
 - Global cooldown causes unrelated project triggers to requeue and run later during another task.
-- Broad trigger words capture casual register or external-system pain.
+- Broad word gates capture casual register or external-system pain.
 - Skill creation without routing creates noisy duplicates.
 - Global prompt edits overfit one project and make other work worse.
 - Auto-apply without staging makes the curator itself another source of anxiety.

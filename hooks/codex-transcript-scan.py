@@ -10,7 +10,6 @@ same trigger queue handled by trigger-worker.py.
 from __future__ import annotations
 
 import argparse
-import ast
 import datetime as dt
 import hashlib
 import json
@@ -22,6 +21,11 @@ import time
 from pathlib import Path
 from typing import Any
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+try:
+    from intent_classifier import score_prompt
+except Exception:
+    score_prompt = None
 
 REPO = Path(os.path.expanduser(os.environ.get("INTROSPECT_REPO", "~/Companion/Code/introspect")))
 FEEDBACK_DIR = Path(
@@ -94,48 +98,11 @@ def normalize_words(values: object) -> set[str]:
     return words
 
 
-def load_default_trigger_words() -> set[str]:
-    try:
-        text = HOOK.read_text()
-        match = re.search(r"DEFAULT_TRIGGER_WORDS = (\{.*?\})", text, flags=re.S)
-        if match:
-            parsed = ast.literal_eval(match.group(1))
-            if isinstance(parsed, set):
-                return {word for word in parsed if isinstance(word, str)}
-    except Exception:
-        pass
-    return {
-        "ass",
-        "bitch",
-        "bullshit",
-        "damn",
-        "dumb",
-        "fuck",
-        "fucked",
-        "fucker",
-        "fuckin",
-        "fucking",
-        "hell",
-        "idiot",
-        "motherfucker",
-        "nigga",
-        "nigger",
-        "retard",
-        "retarded",
-        "shitty",
-        "stupid",
-        "wtf",
-    }
-
-
 def active_trigger_words() -> set[str]:
-    words = load_default_trigger_words()
     try:
-        home_words = normalize_words(TRIGGER_WORDS_FILE.read_text().splitlines())
+        return normalize_words(TRIGGER_WORDS_FILE.read_text().splitlines())
     except Exception:
-        return words
-
-    return home_words or words
+        return set()
 
 
 def git_version() -> str:
@@ -272,22 +239,50 @@ def scan_file(
         if key in processed:
             continue
 
-        matches = [word for word in re.findall(r"[a-z]+", prompt.lower()) if word in words]
+        matches = sorted({word for word in re.findall(r"[a-z]+", prompt.lower()) if word in words})
+        classifier = None
+        classifier_enabled = os.environ.get("INTROSPECT_WAKE_CLASSIFIER", "1") != "0"
+        if classifier_enabled and score_prompt is not None:
+            try:
+                classifier = score_prompt(
+                    prompt,
+                    source="codex",
+                    old_trigger=bool(matches),
+                    matched_words=matches,
+                )
+            except Exception as exc:
+                classifier = {"error": f"{type(exc).__name__}: {str(exc)[:160]}"}
+        classifier_available = bool(classifier and "score" in classifier)
+        word_fallback_enabled = os.environ.get("INTROSPECT_TRIGGER_WORD_FALLBACK", "0") == "1"
+        triggered = bool(classifier.get("triggered")) if classifier_available else (
+            bool(matches) and word_fallback_enabled
+        )
+        wake_reason = "classifier" if classifier_available else (
+            "trigger_word_fallback" if word_fallback_enabled else "classifier_unavailable"
+        )
         event = {
+            "event_id": key,
             "ts": parsed_ts.isoformat(timespec="seconds"),
             "observed_at": iso_now(),
             "source": "codex_transcript_scan",
             "version": version,
-            "triggered": bool(matches),
+            "triggered": triggered,
+            "wake_reason": wake_reason,
+            "review_triggered": bool(matches) or bool(classifier and classifier.get("review")),
             "session_id": session_id,
             "cwd": cwd,
             "transcript_path": str(path),
             "transcript_line": line_no,
+            "message_locator": f"{path}:{line_no}",
             "dedupe_key": key,
         }
+        if classifier:
+            event["classifier"] = classifier
         if matches:
-            event["matched"] = sorted({match.lower() for match in matches})
+            event["matched"] = matches
+        if matches or triggered or event.get("review_triggered"):
             event["snippet"] = prompt[:300]
+        if triggered:
             queued_event = dict(event)
             queued_event["prompt"] = prompt[:4000]
             queued.append(queued_event)

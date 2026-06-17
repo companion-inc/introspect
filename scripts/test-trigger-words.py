@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Regression tests for foreground trigger-word detection."""
+"""Regression tests for foreground wake-intent detection."""
 
 from __future__ import annotations
 
@@ -49,6 +49,7 @@ def run_case(
     prompt: str,
     should_trigger: bool,
     expected_match: str | None = None,
+    expected_review: bool | None = None,
     reflect_mode: str = "immediate",
 ) -> None:
     with tempfile.TemporaryDirectory(prefix="agent-loop-trigger-") as tmp_raw:
@@ -71,6 +72,7 @@ def run_case(
             env.pop("INTROSPECT_REFLECT_MODE", None)
         payload = {
             "prompt": prompt,
+            "source": "codex",
             "session_id": "trigger-test",
             "cwd": str(REPO),
             "transcript_path": "",
@@ -94,6 +96,10 @@ def run_case(
 
         if expected_match and expected_match not in event.get("matched", []):
             raise AssertionError(f"{prompt!r}: missing expected match {expected_match!r} in {event.get('matched')}")
+        if expected_review is not None and bool(event.get("review_triggered")) != expected_review:
+            raise AssertionError(
+                f"{prompt!r}: review_triggered={event.get('review_triggered')} expected {expected_review}"
+            )
 
         deadline = time.time() + 10
         batches: list[dict] = []
@@ -150,7 +156,8 @@ def run_mode_case(reflect_mode: str, expected_queue: int, expected_batches: int)
             [sys.executable, str(HOOK)],
             input=json.dumps(
                 {
-                    "prompt": "what the fuck is going on",
+                    "prompt": "you did not test this after I told you to test it, what is going on",
+                    "source": "codex",
                     "session_id": "trigger-queue-only-test",
                     "cwd": str(REPO),
                     "transcript_path": "",
@@ -193,7 +200,7 @@ def run_home_case() -> None:
                 "TRIGGER_DISABLE_SCHEDULE": "1",
             }
         )
-        for prompt in ("bruh fix this", "why the hell"):
+        for prompt in ("bruh fix this", "plain status check"):
             subprocess.run(
                 [sys.executable, str(HOOK)],
                 input=json.dumps({"prompt": prompt, "session_id": "home-test", "cwd": str(REPO)}),
@@ -206,10 +213,10 @@ def run_home_case() -> None:
         events = read_jsonl(tmp / "feedback" / "events.jsonl")
         if len(events) != 2:
             raise AssertionError(f"home case expected 2 events, got {len(events)}")
-        if not events[0].get("triggered") or "bruh" not in events[0].get("matched", []):
-            raise AssertionError("home words did not trigger bruh")
-        if events[1].get("triggered"):
-            raise AssertionError("home words should replace defaults")
+        if events[0].get("triggered") or "bruh" not in events[0].get("matched", []):
+            raise AssertionError("home word bruh should match as review-only, not auto-trigger")
+        if events[1].get("triggered") or events[1].get("matched"):
+            raise AssertionError("plain prompt should have no default review-term matches")
 
 
 def run_codex_scanner_case() -> None:
@@ -253,7 +260,12 @@ def run_codex_scanner_case() -> None:
                 "payload": {
                     "type": "message",
                     "role": "user",
-                    "content": [{"type": "input_text", "text": "what the hell is happening"}],
+                    "content": [
+                        {
+                            "type": "input_text",
+                            "text": "you did not test this after I told you to test it, what is going on",
+                        }
+                    ],
                 },
             },
             {
@@ -265,7 +277,7 @@ def run_codex_scanner_case() -> None:
                     "content": [
                         {
                             "type": "input_text",
-                            "text": "You are the Introspect trigger reflector.\n\nQueued events:\n{\"matched\": [\"fuck\"]}",
+                            "text": "You are the Introspect trigger reflector.\n\nQueued events:\n{\"matched\": [\"alpha\"]}",
                         }
                     ],
                 },
@@ -300,8 +312,8 @@ def run_codex_scanner_case() -> None:
             raise AssertionError(f"scanner expected 2 real prompt events, got {len(events)}")
         if events[0].get("triggered"):
             raise AssertionError("scanner should not mark plain prompt triggered")
-        if not events[1].get("triggered") or "hell" not in events[1].get("matched", []):
-            raise AssertionError(f"scanner did not detect exact trigger word: {events[1]}")
+        if not events[1].get("triggered") or events[1].get("matched"):
+            raise AssertionError(f"scanner did not detect classifier-triggered failure without default words: {events[1]}")
         if len(queue) != 1:
             raise AssertionError(f"scanner expected one queued event, got {len(queue)}")
 
@@ -310,13 +322,13 @@ def run_worker_notification_summary_case() -> None:
     worker = load_worker_module("trigger_worker_summary")
 
     events = [
-        {"matched": ["fuck", "retard", "fuck"]},
-        {"matched": ["hell"]},
+        {"matched": ["alpha", "beta", "alpha"]},
+        {"matched": ["gamma"]},
         {"matched": []},
     ]
-    if worker.matched_words(events) != ["fuck", "hell", "retard"]:
+    if worker.matched_words(events) != ["alpha", "beta", "gamma"]:
         raise AssertionError(f"worker matched_words returned {worker.matched_words(events)!r}")
-    if worker.trigger_words_text(events) != "fuck, hell, retard":
+    if worker.trigger_words_text(events) != "alpha, beta, gamma":
         raise AssertionError(f"worker trigger_words_text returned {worker.trigger_words_text(events)!r}")
 
 
@@ -346,17 +358,17 @@ def run_worker_command_model_case() -> None:
 
 def main() -> int:
     cases = [
-        ("same with shit locally in companion and stuff", False, None),
-        ("holy shit can you open this file", False, None),
-        ("this shitshow should not match a prefix", False, None),
-        ("you idiots should not trigger a plural match", False, None),
-        ("why the hell would it do that", True, "hell"),
-        ("what the fuck is going on", True, "fuck"),
-        ("this is bullshit", True, "bullshit"),
-        ("that behavior is shitty", True, "shitty"),
+        ("same with this locally in companion and stuff", False, None, False),
+        ("can you open this file", False, None, False),
+        ("this compoundword should not match a prefix", False, None, False),
+        ("you helpers should not trigger a plural match", False, None, False),
+        ("this wording should not matter", False, None, False),
+        ("that behavior is poor", False, None, False),
+        ("you did not test this after I asked you to test it", True, None, True),
+        ("you used the wrong tool and ignored the DGX instructions, keep going and fix it", False, None, True),
     ]
-    for prompt, should_trigger, expected_match in cases:
-        run_case(prompt, should_trigger, expected_match)
+    for prompt, should_trigger, expected_match, expected_review in cases:
+        run_case(prompt, should_trigger, expected_match, expected_review)
     run_mode_case("nightly", expected_queue=1, expected_batches=0)
     run_mode_case("off", expected_queue=0, expected_batches=0)
     run_home_case()

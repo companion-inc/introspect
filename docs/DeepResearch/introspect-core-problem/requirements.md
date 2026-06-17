@@ -18,7 +18,7 @@ Sources: `README.md:87-110`, `skills/skill-creator/references/source-map.md:174-
 Introspect is a local curator, not a chatbot and not a raw profanity detector.
 
 - Input: user prompts and transcript context from Claude, Codex, and eventually other agent tools.
-- Signal: exact trigger-word events plus non-trigger usage stats, project/cwd, session id, transcript path, and prior surface diffs.
+- Signal: local classifier wake events plus non-trigger usage stats, optional review-term metadata, project/cwd, session id, transcript path, and prior surface diffs.
 - Classifier: reads the triggering conversation and source evidence, then chooses one target operation.
 - Output: either `no_change` or a staged, source-backed proposal to update prompt/project/memory/skill/hook state.
 - UI: shows event clusters, source transcript, classification, proposed diff, verification result, and whether the change was applied.
@@ -29,7 +29,7 @@ Sources: `README.md:72-83`, `docs/skill-manager-reference-review.md:14-30`.
 
 - Do not append every emotional phrase to `AGENTS.md`.
 - Do not create one narrow skill per outburst.
-- Do not treat a trigger word as proof of an agent failure.
+- Do not treat a review term as proof of an agent failure.
 - Do not silently mutate shared/global skills for project-specific failures.
 - Do not train adapters in v1.
 - Do not rely on raw transcript record counts without deduping canonical user turns.
@@ -38,7 +38,7 @@ Sources: `docs/hermes-self-evolution-review.md:31-38`, `docs/hermes-self-evoluti
 
 ## Naming Constraints
 
-- Use current repo vocabulary: trigger, trigger-word event, Runs, reflector run.
+- Use current repo vocabulary: trigger, classifier wake event, optional review terms, Runs, reflector run.
 - Do not reintroduce old "frustration" product labels in new surfaces.
 - Use `activation_signals` for skill routing metadata.
 
