@@ -22,6 +22,8 @@ REFLECTOR_RUNNER="default"
 REFLECTOR_CLAUDE_MODEL=""
 REFLECTOR_CLAUDE_FALLBACK_MODEL=""
 REFLECTOR_CODEX_MODEL=""
+WAKE_SHADOW_MODELS="${INTROSPECT_WAKE_SHADOW_MODELS:-}"
+LAUNCHD_PATH="$HOME/.npm-global/bin:$HOME/.local/bin:$HOME/.bun/bin:/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin"
 LAUNCH_LABEL="ai.companion.introspect.reflector"
 LAUNCH_PLIST="$HOME/Library/LaunchAgents/$LAUNCH_LABEL.plist"
 SCAN_LABEL="ai.companion.introspect.codex-scanner"
@@ -137,6 +139,24 @@ quote() {
   printf "%q" "$1"
 }
 
+prepend_tool_dir_to_launchd_path() {
+  local tool="$1"
+  local tool_path
+  tool_path="$(command -v "$tool" 2>/dev/null || true)"
+  if [[ -z "$tool_path" ]]; then
+    return
+  fi
+  local tool_dir
+  tool_dir="$(dirname "$tool_path")"
+  case ":$LAUNCHD_PATH:" in
+    *":$tool_dir:"*) ;;
+    *) LAUNCHD_PATH="$tool_dir:$LAUNCHD_PATH" ;;
+  esac
+}
+
+prepend_tool_dir_to_launchd_path codex
+prepend_tool_dir_to_launchd_path claude
+
 INTROSPECT_HOME_DIR="$(expand_path "$INTROSPECT_HOME_DIR")"
 
 ensure_home_files() {
@@ -210,6 +230,29 @@ if [[ -z "$FEEDBACK_DIR" ]]; then
   FEEDBACK_DIR="$REPO/feedback"
 fi
 FEEDBACK_DIR="$(expand_path "$FEEDBACK_DIR")"
+
+discover_shadow_models() {
+  if [[ -n "$WAKE_SHADOW_MODELS" ]]; then
+    return
+  fi
+  local specs=()
+  local r8="$REPO/feedback/intent-classifier/wake-logreg-v2-round8-holdout-selected.json"
+  local r9="$REPO/feedback/intent-classifier/wake-logreg-v2-round9-holdout-selected.json"
+  local r8r9="$REPO/feedback/intent-classifier/wake-logreg-v2-round8-after-round9-selected.json"
+  if [[ -f "$r8" ]]; then
+    specs+=("r8-retrain=$r8")
+  fi
+  if [[ -f "$r9" ]]; then
+    specs+=("r9-retrain=$r9")
+  fi
+  if [[ -f "$r8r9" ]]; then
+    specs+=("r8-r9=$r8r9")
+  fi
+  local IFS=,
+  WAKE_SHADOW_MODELS="${specs[*]}"
+}
+
+discover_shadow_models
 
 if [[ ! -f "$PROMPT" ]]; then
   echo "missing prompt: $PROMPT" >&2
@@ -289,7 +332,7 @@ else
   uninstall_link "$PROMPT" "$HOME/.codex/AGENTS.md"
 fi
 
-HOOK_COMMAND="env INTROSPECT_REFLECT_MODE=$(quote "$REFLECT_MODE") INTROSPECT_REPO=$(quote "$REPO") INTROSPECT_PROMPT=$(quote "$PROMPT") INTROSPECT_SKILLS_DIR=$(quote "$SKILLS_DIR") INTROSPECT_USER_SKILLS_DIR=$(quote "$USER_SKILLS_DIR") INTROSPECT_FEEDBACK_DIR=$(quote "$FEEDBACK_DIR") INTROSPECT_HOME=$(quote "$INTROSPECT_HOME_DIR") $(quote "$HOOK")"
+HOOK_COMMAND="env INTROSPECT_REFLECT_MODE=$(quote "$REFLECT_MODE") INTROSPECT_REPO=$(quote "$REPO") INTROSPECT_PROMPT=$(quote "$PROMPT") INTROSPECT_SKILLS_DIR=$(quote "$SKILLS_DIR") INTROSPECT_USER_SKILLS_DIR=$(quote "$USER_SKILLS_DIR") INTROSPECT_FEEDBACK_DIR=$(quote "$FEEDBACK_DIR") INTROSPECT_HOME=$(quote "$INTROSPECT_HOME_DIR") INTROSPECT_WAKE_SHADOW_MODELS=$(quote "$WAKE_SHADOW_MODELS") $(quote "$HOOK")"
 HOOK_MODE="$MODE"
 if [[ "$MODE" == "install" && "$REFLECT_MODE" == "off" ]]; then
   HOOK_MODE="uninstall"
@@ -413,12 +456,12 @@ PY
 
 install_launch_agent() {
   mkdir -p "$HOME/Library/LaunchAgents" "$FEEDBACK_DIR"
-  python3 - "$LAUNCH_LABEL" "$REPO" "$WORKER" "$PROMPT" "$SKILLS_DIR" "$USER_SKILLS_DIR" "$FEEDBACK_DIR" "$INTROSPECT_HOME_DIR" "$NIGHTLY_HOUR" "$NIGHTLY_MINUTE" "$REFLECTOR_RUNNER" "$REFLECTOR_CLAUDE_MODEL" "$REFLECTOR_CLAUDE_FALLBACK_MODEL" "$REFLECTOR_CODEX_MODEL" "$LAUNCH_PLIST" <<'PY'
+  python3 - "$LAUNCH_LABEL" "$REPO" "$WORKER" "$PROMPT" "$SKILLS_DIR" "$USER_SKILLS_DIR" "$FEEDBACK_DIR" "$INTROSPECT_HOME_DIR" "$NIGHTLY_HOUR" "$NIGHTLY_MINUTE" "$REFLECTOR_RUNNER" "$REFLECTOR_CLAUDE_MODEL" "$REFLECTOR_CLAUDE_FALLBACK_MODEL" "$REFLECTOR_CODEX_MODEL" "$LAUNCHD_PATH" "$LAUNCH_PLIST" <<'PY'
 import plistlib
 import sys
 from pathlib import Path
 
-label, repo, worker, prompt, skills_dir, user_skills_dir, feedback_dir, home_dir, hour, minute, runner, claude_model, claude_fallback_model, codex_model, plist_path = sys.argv[1:]
+label, repo, worker, prompt, skills_dir, user_skills_dir, feedback_dir, home_dir, hour, minute, runner, claude_model, claude_fallback_model, codex_model, launchd_path, plist_path = sys.argv[1:]
 data = {
     "Label": label,
     "ProgramArguments": ["/usr/bin/env", "python3", worker, "--nightly"],
@@ -435,7 +478,7 @@ data = {
         "INTROSPECT_REFLECTOR_CLAUDE_MODEL": claude_model,
         "INTROSPECT_REFLECTOR_CLAUDE_FALLBACK_MODEL": claude_fallback_model,
         "INTROSPECT_REFLECTOR_CODEX_MODEL": codex_model,
-        "PATH": "/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin",
+        "PATH": launchd_path,
     },
     "StartCalendarInterval": {
         "Hour": int(hour),
@@ -465,12 +508,12 @@ uninstall_launch_agent() {
 
 install_scan_agent() {
   mkdir -p "$HOME/Library/LaunchAgents" "$FEEDBACK_DIR"
-  python3 - "$SCAN_LABEL" "$REPO" "$SCANNER" "$PROMPT" "$SKILLS_DIR" "$USER_SKILLS_DIR" "$FEEDBACK_DIR" "$INTROSPECT_HOME_DIR" "$REFLECT_MODE" "$REFLECTOR_RUNNER" "$REFLECTOR_CLAUDE_MODEL" "$REFLECTOR_CLAUDE_FALLBACK_MODEL" "$REFLECTOR_CODEX_MODEL" "$SCAN_PLIST" <<'PY'
+  python3 - "$SCAN_LABEL" "$REPO" "$SCANNER" "$PROMPT" "$SKILLS_DIR" "$USER_SKILLS_DIR" "$FEEDBACK_DIR" "$INTROSPECT_HOME_DIR" "$REFLECT_MODE" "$REFLECTOR_RUNNER" "$REFLECTOR_CLAUDE_MODEL" "$REFLECTOR_CLAUDE_FALLBACK_MODEL" "$REFLECTOR_CODEX_MODEL" "$WAKE_SHADOW_MODELS" "$LAUNCHD_PATH" "$SCAN_PLIST" <<'PY'
 import plistlib
 import sys
 from pathlib import Path
 
-label, repo, scanner, prompt, skills_dir, user_skills_dir, feedback_dir, home_dir, reflect_mode, runner, claude_model, claude_fallback_model, codex_model, plist_path = sys.argv[1:]
+label, repo, scanner, prompt, skills_dir, user_skills_dir, feedback_dir, home_dir, reflect_mode, runner, claude_model, claude_fallback_model, codex_model, wake_shadow_models, launchd_path, plist_path = sys.argv[1:]
 data = {
     "Label": label,
     "ProgramArguments": ["/usr/bin/env", "python3", scanner],
@@ -487,8 +530,9 @@ data = {
         "INTROSPECT_REFLECTOR_CLAUDE_MODEL": claude_model,
         "INTROSPECT_REFLECTOR_CLAUDE_FALLBACK_MODEL": claude_fallback_model,
         "INTROSPECT_REFLECTOR_CODEX_MODEL": codex_model,
+        "INTROSPECT_WAKE_SHADOW_MODELS": wake_shadow_models,
         "INTROSPECT_CODEX_SCAN_MINUTES": "20",
-        "PATH": "/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin",
+        "PATH": launchd_path,
     },
     # Event-driven, not polled: launchd wakes the scanner only when Codex
     # actually writes (a new prompt appends to history.jsonl; a new session
@@ -508,6 +552,9 @@ PY
   launchctl bootstrap "gui/$(id -u)" "$SCAN_PLIST"
   launchctl enable "gui/$(id -u)/$SCAN_LABEL" >/dev/null 2>&1 || true
   echo "installed Codex transcript scanner: $SCAN_PLIST (event-driven on Codex writes; no polling)"
+  if [[ -n "$WAKE_SHADOW_MODELS" ]]; then
+    echo "shadow candidate models: $WAKE_SHADOW_MODELS"
+  fi
   echo "reflector models: claude=${REFLECTOR_CLAUDE_MODEL:-default} fallback=${REFLECTOR_CLAUDE_FALLBACK_MODEL:-none} codex=${REFLECTOR_CODEX_MODEL:-default}"
 }
 
@@ -527,12 +574,12 @@ install_monitor_agent() {
     return
   fi
   mkdir -p "$HOME/Library/LaunchAgents" "$FEEDBACK_DIR"
-  python3 - "$MONITOR_LABEL" "$REPO" "$MONITOR" "$FEEDBACK_DIR" "$INTROSPECT_HOME_DIR" "$MONITOR_PLIST" <<'PY'
+  python3 - "$MONITOR_LABEL" "$REPO" "$MONITOR" "$FEEDBACK_DIR" "$INTROSPECT_HOME_DIR" "$LAUNCHD_PATH" "$MONITOR_PLIST" <<'PY'
 import plistlib
 import sys
 from pathlib import Path
 
-label, repo, monitor, feedback_dir, home_dir, plist_path = sys.argv[1:]
+label, repo, monitor, feedback_dir, home_dir, launchd_path, plist_path = sys.argv[1:]
 data = {
     "Label": label,
     "ProgramArguments": ["/bin/bash", monitor],
@@ -541,7 +588,7 @@ data = {
         "INTROSPECT_REPO": repo,
         "INTROSPECT_FEEDBACK_DIR": feedback_dir,
         "INTROSPECT_HOME": home_dir,
-        "PATH": "/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin",
+        "PATH": launchd_path,
     },
     # Runs once at login to repair setup drift, then stays idle. No polling
     # timer — the app also self-repairs whenever you open it.

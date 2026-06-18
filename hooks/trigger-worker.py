@@ -430,6 +430,18 @@ def available_reflector_runners() -> dict[str, str]:
     runners = {}
     for name in ("claude", "codex"):
         path = shutil.which(name)
+        if not path:
+            for directory in (
+                Path.home() / ".npm-global" / "bin",
+                Path.home() / ".local" / "bin",
+                Path.home() / ".bun" / "bin",
+                Path("/opt/homebrew/bin"),
+                Path("/usr/local/bin"),
+            ):
+                candidate = directory / name
+                if candidate.is_file() and os.access(candidate, os.X_OK):
+                    path = str(candidate)
+                    break
         if path:
             runners[name] = path
     return runners
