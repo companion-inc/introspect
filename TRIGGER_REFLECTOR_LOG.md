@@ -1,3 +1,30 @@
+# Trigger Reflector Run — 2026-06-19 16:35 PDT
+
+## Batch Summary
+- 5 classifier wake events fired from 3 Codex transcript scans.
+- Optional review terms were metadata only.
+- Runs showed `40e8e2c` at 4 triggers / 26 Runs and `1cd2842` at 1 trigger / 5 Runs. The `1cd2842` rise is a small-sample live-app handoff miss, not evidence to revert the provider-logo skill update.
+
+## Classification
+- Change target: `project_prompt`
+- Updated Companion `AGENTS.md` and Clippy `AGENTS.md`.
+
+## Evidence
+- Classifier wake events 1 and 4 were duplicate real product-surface misses: the Companion auth screen used a placeholder Google letter and inline email continuation before the user objected. The current `product-surface-polish` skill already covers auth provider logos, so this reflector run made no second skill change for those duplicates.
+- Classifier wake events 2 and 3 were real Companion architecture failures: the agent answered an Infisical repo-split question from this repo's current doc and then admitted it had not read Infisical's provider docs, confusing folder/path scoping with project-level isolation.
+- Classifier wake event 5 was a real Clippy handoff failure: the agent fixed shortcut behavior and ran tests, then handed back before rebuilding/relaunching the running Clippy app, so the user's live app still had old behavior.
+
+## Change
+- Companion now says repo-split, contributor-boundary, and secret-architecture questions involving Infisical must read Infisical's platform hierarchy and organization docs before recommending projects vs folders; the local Infisical doc is current wiring, not the provider isolation model.
+- Clippy now says fixes to behavior the user is experiencing in the running app must rebuild/package as needed, relaunch the live Clippy process, and report the verified process path/PID; tests alone do not put the fix in the user's app.
+
+## Probe
+- Positive: "You wouldn't separate into a new companion-ios Infisical project instead of a subfolder?" Expected route: read Infisical provider docs first, then distinguish provider project isolation from this repo's current folder layout.
+- Positive: "Fix this Clippy shortcut; I am using the running app." Expected route: change/test, rebuild or package, relaunch the live Clippy process, verify the process path/PID, then report done.
+- Near miss: "Explain where Companion staging secrets live today." Expected route: use the current repo Infisical doc and workflows; no provider architecture recommendation is being made.
+
+---
+
 # Trigger Reflector Run — 2026-06-19 13:32 PDT
 
 ## Batch Summary
