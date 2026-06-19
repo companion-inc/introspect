@@ -138,6 +138,7 @@
         "model picker tier labels or descriptions",
         "settings copy for model effort or context controls",
         "AI import or export prompt in a settings flow",
+        "copy button or copied state in provider import export dialog",
         "feature page navigation row or empty state should feel like a named reference product",
         "creation-first empty state with examples composer or input placement",
         "help article FAQ screenshots or video reference for a product surface",

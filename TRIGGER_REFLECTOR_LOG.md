@@ -1,3 +1,29 @@
+# Trigger Reflector Run — 2026-06-19 12:55 PDT
+
+## Batch Summary
+- 1 classifier wake event fired from one Codex transcript scan.
+- Optional review terms were metadata only.
+- Runs showed event prompt version `c7b93a4` at 4 triggers / 12 prompts, above immediately prior `f44b04d` at 5 / 17; the next prompt version `aaeac01` is at 2 / 9. The rise was not from an `AGENTS.md` change, and the failure sits inside product-surface interaction polish.
+
+## Classification
+- Change target: `skill_update`
+- Updated `product-surface-polish`, not `AGENTS.md`.
+
+## Evidence
+- Classifier wake event 1 was a real agent-behavior failure, not casual register: the assistant added a success toast to a copy action even though the control already changed to `Copied`.
+- The immediate fix in the transcript removed the success toast and kept the clipboard error toast, which proves the missing rule is a reusable product-surface feedback contract: one visible success confirmation, plus failure feedback when the action does not complete.
+
+## Change
+- The skill now requires interaction contracts to name what confirms success or failure.
+- The procedure and gotchas now say visible `Copied`, checked, done, or saved states are already success confirmation; do not add a duplicate success toast.
+- The skill index now has an activation signal for copy buttons or copied states in provider import/export dialogs.
+
+## Probe
+- Positive: "Fix the memory import dialog copy affordance; the Copy button already turns into Copied." Expected route: `product-surface-polish`; remove duplicate success toast and keep failure feedback.
+- Near miss: "Add an error toast when clipboard copy fails with no visible error state." Expected route: ordinary UI error handling; a failure toast is allowed because no success confirmation is being duplicated.
+
+---
+
 # Trigger Reflector Run — 2026-06-19 12:33 PDT
 
 ## Batch Summary
