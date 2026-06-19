@@ -78,11 +78,14 @@
       "path": "skills/agent-control-channels/SKILL.md",
       "status": "active",
       "tier": "domain-workflow",
-      "description": "How an LLM agent should emit a structured decision (mode flag, control action, state change) to its host — tool call, not a typed marker that leaks into the transcript.",
+      "description": "How an LLM agent should emit a structured decision or host-consumed payload to its host — tool call or strict response schema, not prompt-only JSON or a typed marker that leaks into the transcript.",
       "activation_signals": [
         "model signaling a mode or action",
         "quiet run or silent run feature",
         "marker or tag leaking into transcript",
+        "Return only JSON for host-consumed data",
+        "JSON envelope parsed from assistant text",
+        "structured response schema for UI payload",
         "regex parsing the model output",
         "registering or naming an agent tool"
       ]
