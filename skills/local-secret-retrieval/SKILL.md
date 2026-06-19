@@ -1,6 +1,6 @@
 ---
 name: local-secret-retrieval
-description: Retrieve an API token, secret, or credential from the machine's own stores before asking the user to paste it. Use when a task is blocked on a missing or invalid token — a CLI errors on auth, an env var like SENTRY_AUTH_TOKEN is unset, a deploy or API call needs a key. Not for a secret that exists nowhere and must be freshly minted through a human-only step (hardware MFA, a one-time email/SMS code) — drive that flow per AGENTS.md instead.
+description: Retrieve an API token, secret, GitHub credential, or remote-session auth path from the machine's own stores before asking the user to paste it or working around auth with file transfer. Use when a CLI errors on auth, an env var like SENTRY_AUTH_TOKEN is unset, a deploy/API call needs a key, or a remote SSH shell cannot access credentials that exist in the GUI/session. Not for a secret that exists nowhere and must be freshly minted through a human-only step (hardware MFA, a one-time email/SMS code) — drive that flow per AGENTS.md instead.
 ---
 
 # Local secret retrieval
@@ -8,6 +8,8 @@ description: Retrieve an API token, secret, or credential from the machine's own
 ## When this fires
 
 You need a token / secret / credential to make progress and you are about to ask the user for it: a CLI fails with a missing-or-invalid token, an env var the code reads (`SENTRY_AUTH_TOKEN`, `SUPABASE_*`, a deploy key) is unset, or an auth step wants a key. Walk the retrieval ladder first.
+
+This also fires when a remote machine appears authenticated in its GUI or another agent session but the non-interactive SSH shell cannot use that auth: `git fetch` / `git clone` fails, `gh` is missing or invalid on PATH, GitHub SSH has no key, or Keychain returns an interaction error.
 
 Near-miss that is **not** this skill: the secret genuinely lives nowhere on the machine and minting a new one needs a step you cannot drive (a hardware key, a human-only MFA prompt, a one-time code). Drive that login/OAuth flow yourself per AGENTS.md; don't dump the ladder.
 
@@ -27,6 +29,17 @@ When the blocked step is *calling a service's API* (read Sentry issues, query Su
 
 **Never extract or decrypt browser session cookies to authenticate an API.** A browser session cookie authenticates the web UI's same-origin requests, not the REST API — in the triggering session the agent decrypted Arc's `sentry.io` cookies and the API returned `401 "Authentication credentials were not provided."` on every host it tried. It is a brittle dead-end *and* the wrong mechanism. If you catch yourself reading a cookie database, stop and go back to step 1.
 
+## Remote Mac Git and GUI-session auth
+
+When operating on another Mac through SSH, treat the SSH shell, GUI login session, and Mac-side agent session as separate credential surfaces. A GUI-authenticated Mac can still fail every non-interactive SSH Git command.
+
+Before moving repository data around to avoid auth, identify the auth boundary:
+
+1. Check the exact remote execution surface: `PATH`, `which gh`, absolute Homebrew `gh`, `gh auth status`, `git config --show-origin --get-all credential.helper`, `ssh -T git@github.com`, and the failing `git fetch` / `git push` command.
+2. Check Keychain from that same SSH shell. `security` returning `-25308` or "User interaction is not allowed" means the credential exists behind the GUI login session and is not usable from this SSH process.
+3. Use an auth path that matches the surface: drive the authenticated Mac-side agent/Claude/GUI session to fetch, build, install, or push; or supply a short-lived token only to the one Git command; or fix the remote `gh` / SSH-key credential path.
+4. Keep code movement Git-native after the credential path is chosen: fetch an already-pushed branch, create a remote worktree from the existing checkout, or apply a small patch onto the existing repo base. Do not start rsync, archive streams, empty-bare-repo pushes, or large object transfers as an auth workaround.
+
 ## Retrieval ladder (stop at the first hit)
 
 1. **Process env and project secret files** — `printenv NAME`; the repo's `.env`, `.env.local`, `.dev.vars` (Cloudflare Workers), `[vars]` in `wrangler.toml`/`wrangler.jsonc`, `.envrc`. Most tokens a task needs are already here.
@@ -41,11 +54,12 @@ When the blocked step is *calling a service's API* (read Sentry issues, query Su
 
 - **GitHub Actions and Cloudflare Worker secrets are write-only.** `gh secret list` / `wrangler secret list` show names, never values — they confirm the token exists and its name, but the *value* comes from 1Password / keychain / a secret file.
 - **`op whoami` failing ("no account found") means 1Password isn't wired into this session, not "the secret is unavailable."** Keep walking the ladder.
+- **Remote Git auth failures are surface-specific.** A teammate's Mac can have working GitHub auth in Chrome, Terminal, or Claude while the SSH shell sees a minimal PATH, an invalid `gh` token, no SSH key, or a locked Keychain. Prove which surface works before inventing a transfer path.
 - **Only escalate to the user** when the value is in none of these stores *and* a new one needs a step you genuinely cannot drive. Name that exact step ("this needs a fresh OAuth with your hardware key"); never ask for a paste of something already on disk.
 
 ## Verification
 
-Prove the token works the way the failing step uses it — re-run the command, hit the API, redeploy. A token that exists but is expired or wrong-scope is the same blocker. Report the task fixed off the command now succeeding, not off "I found a token." (In the triggering session the agent claimed the fix done *and* asked for a Sentry token whose value was already in the keychain — both were wrong.)
+Prove the token works the way the failing step uses it — re-run the command, hit the API, redeploy. For remote Mac Git work, prove the same surface can fetch/push the branch or have the Mac-side agent report the fetched commit and build/install result. A token that exists but is expired, wrong-scope, or unavailable to the execution surface is the same blocker. Report the task fixed off the command now succeeding, not off "I found a token." (In the triggering session the agent claimed the fix done *and* asked for a Sentry token whose value was already in the keychain — both were wrong.)
 
 ## Sources
 
@@ -59,3 +73,4 @@ Prove the token works the way the failing step uses it — re-run the command, h
 - Infisical CLI (Companion staging/prod secrets — PostHog, Vercel AI Gateway, Cloudflare keys): https://infisical.com/docs/cli/commands/secrets , https://infisical.com/docs/cli/commands/run . Confirmed installed at `/opt/homebrew/bin/infisical` v0.43.84.
 - Transcript `019ebd9f` (Companion, 2026-06-12): user asked the agent to query PostHog / Vercel AI Gateway / Cloudflare logs to debug a Streamdown parsing leak; user said "YOU HAVE INFISICAL ACCESS FIGURE IT OUT" and "WE LITERALLY ARE ON STAGING THERE IS ONLY ONE PAIR ON STAGING INFISICAL"; agent never reached for the `infisical` CLI and kept guessing at the symptom in code instead of pulling the API key and querying the logs the user named.
 - Transcript `019ec171` (Companion, 2026-06-13): building the iOS Google sign-in, the agent treated the OAuth client credentials as "missing" and was set to escalate; the user named two human-handoff sources twice — "read discord conversation with timeo" and "Maccy clipboard history." The agent acknowledged "I missed an obvious local-evidence path," then checked the pasteboard, Discord's local cache, and Maccy's storage. The values were sitting in a chat thread and clipboard history, not in any keychain/env store — hence step 7.
+- Classifier wake event transcript: `/Users/advaitpaliwal/.codex/sessions/2026/06/19/rollout-2026-06-19T08-57-14-019ee099-c668-7c00-91d9-adaf660ce6c1.jsonl` lines 4268-4362 — agent tried empty-bare branch transfer after the Mac mini SSH shell could not use GitHub credentials, then had to switch to the Mac-side Claude/agent path because the GUI/session auth boundary was the real blocker.

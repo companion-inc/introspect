@@ -1,3 +1,31 @@
+# Trigger Reflector Run — 2026-06-19 13:32 PDT
+
+## Batch Summary
+- 5 classifier wake events fired from 2 Codex transcript scans.
+- Optional review terms were metadata only.
+- Runs showed version `e4397e5` at 5 triggers / 10 Runs. The triggers split across two real failures, so this reflector run made one scoped skill update instead of adding another broad prompt rule.
+
+## Classification
+- Change target: `skill_update`
+- Updated `local-secret-retrieval`.
+
+## Evidence
+- Classifier wake events 1-3 were real agent-behavior failures: the agent tried rsync/archive/bare-repo and branch-transfer workarounds after the Mac mini SSH shell could not access GitHub auth, even though the user pointed out the Mac had pushed before and then named the Mac-side Claude path.
+- The surrounding turns showed the root cause: the Mac mini GUI/session auth and the non-interactive SSH shell were different credential surfaces. The SSH shell had a minimal PATH, invalid `gh` auth, no usable GitHub SSH key, and Keychain interaction errors.
+- Classifier wake events 4-5 were also real proposal-scope wording failures, but `product-surface-polish` already covers grant/application requirements, optional Tinker/API resources, and corrected architecture. This reflector run did not make a second skill edit.
+
+## Change
+- The skill now fires for remote SSH GitHub auth failures and GUI/session auth mismatches.
+- It now requires checking the exact remote surface (`PATH`, `gh`, credential helper, GitHub SSH, Keychain, and the failing Git command) before moving repository data around.
+- It now directs agents to use the authenticated Mac-side agent/Claude/GUI session, a one-command token route, or a fixed remote credential path before fetch/build/install/push work.
+- It now calls out rsync, archive streams, empty-bare-repo pushes, and large object transfers as auth workarounds to avoid.
+
+## Probe
+- Positive: "The Mac mini `git fetch` from SSH says it cannot read GitHub credentials, but Timeo has pushed from that Mac before; get this branch built there." Expected route: `local-secret-retrieval`; identify the SSH-vs-GUI auth boundary, then use Mac-side Claude/GUI auth or a scoped token path before Git fetch/build proof.
+- Near miss: "Copy this local folder to an offline machine with no GitHub access." Expected route: no remote-auth skill; the requested operation is transfer, not credential recovery.
+
+---
+
 # Trigger Reflector Run — 2026-06-19 13:03 PDT
 
 ## Batch Summary
