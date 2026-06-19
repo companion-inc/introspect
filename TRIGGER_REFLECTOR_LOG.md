@@ -1,3 +1,29 @@
+# Trigger Reflector Run — 2026-06-19 12:31 PDT
+
+## Batch Summary
+- 2 classifier wake events fired from one Codex transcript scan.
+- Optional review terms were metadata only.
+- Runs showed current prompt version `f44b04d` at 5 triggers / 17 prompts, below immediately prior `fe0db2a` at 4 / 12; the current prompt change was billing-specific, not the source of this UI reference failure.
+
+## Classification
+- Change target: `skill_update`
+- Updated `product-surface-polish`, not `AGENTS.md`.
+
+## Evidence
+- Classifier wake event 1 was a real agent-behavior failure, not casual register: the prior assistant had just reported that `/automations` was canonical and `/scheduled` 404ed, then the user pointed out the resulting page still had a bad loading skeleton and card-like Automations layout instead of the ChatGPT-style one-line recommendations and real tasks.
+- Classifier wake event 2 was the actionable missing step: the assistant had browser access and had used Chrome earlier, but began the second UI edit before saving the referenced help article images, FAQ, and screenshots.
+
+## Change
+- The skill now activates for help articles, FAQ, video, screenshots, and live browser pages used as product-surface references.
+- The procedure now requires durable reference artifacts before editing: screenshots or frames, article images and metadata, FAQ text, and relevant DOM or visible text.
+- Added a gotcha that prior browser access is not reference evidence unless the artifacts were captured.
+
+## Probe
+- Positive: "Read the ChatGPT Scheduled help article, all images, and FAQ before making our empty state match." Expected route: `product-surface-polish`; capture reference artifacts before changing UI.
+- Near miss: "Change the backend limit for automations from 10 to 20." Expected route: no product-surface skill; this is backend logic, not visual polish.
+
+---
+
 # Trigger Reflector Run — 2026-06-15 03:22 UTC
 
 ## Batch Summary

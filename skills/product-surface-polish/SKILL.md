@@ -11,6 +11,7 @@ description: Polish user-facing product surfaces such as pricing pages, plan car
 - A product/settings surface names third-party providers or tools and needs their logos, brand marks, icons, or provider-choice affordances.
 - A product/settings surface uses another AI's import/export prompt, dialog, or onboarding flow as a reference for the product's own prompt or flow.
 - The user points at reference products and asks for the surface to feel similar, bigger, cleaner, more premium, simpler, or less awkward.
+- The reference arrives through a help article, FAQ, video, screenshot, or live browser page, and the product surface depends on its layout, copy, or interaction pattern.
 - Copy includes internal terms, vague feature claims, filler benefits, or numbers that may drift from enforced plan limits.
 
 Near miss: do not load this for backend-only billing logic unless a user-visible product surface is being changed.
@@ -18,7 +19,7 @@ Near miss: do not load this for backend-only billing logic unless a user-visible
 ## Procedure
 
 1. Name the exact surface and audience: store listing, home-screen app identity, pricing page, locked paywall, onboarding, model picker, or in-app settings.
-2. Read the real references the user named, plus the closest direct competitors when the user asks "how do others do it." Extract the pattern in concrete terms: naming formula, navigation placement, icon choice, subtitle placement, empty versus populated state, primary creation affordance, example prompts or rows, card/list hierarchy, feature taxonomy, spacing, and responsive behavior.
+2. Read the real references the user named, plus the closest direct competitors when the user asks "how do others do it." For browser, help-article, FAQ, video, or screenshot references, save and read durable artifacts before editing: full-page screenshots or frames, article images and metadata, FAQ text, and the relevant DOM or visible text. Extract the pattern in concrete terms: naming formula, navigation placement, icon choice, subtitle placement, empty versus populated state, primary creation affordance, example prompts or rows, card/list hierarchy, feature taxonomy, spacing, and responsive behavior.
 3. Classify each reference's role before implementing: verbatim source to copy, inspiration to synthesize from, or interaction/component behavior to match. For behavior to match, write the interaction contract before changing code: what the empty state invites, where input lives, which examples appear, and how the layout changes once data exists. Copy provider prompt text verbatim only when the user asks for copying; when provider prompts are examples of how another app extracts/imports data, write one product-owned prompt shaped by the pattern instead.
 4. Read the product source of truth before writing copy: plan constants, enforced quotas, billing config, app metadata, bundle settings, feature gates, and current screenshots. A pricing claim must trace to code or config; store metadata must trace to App Store Connect or bundle settings.
 5. For subscription or paywall work, prove the in-app purchase path before store-review artifacts: inspect the paywall code/config, product IDs, selected-plan params, StoreKit/Superwall wiring, and a real simulator/device screenshot or flow. Do not upload App Store review screenshots or polish subscription metadata while the app only has static cards or an unproven trigger.
@@ -32,6 +33,7 @@ Near miss: do not load this for backend-only billing logic unless a user-visible
 ## Gotchas
 
 - A reference list is not proof you read references. Summarize the pattern you observed before changing the product.
+- Prior browser access is not durable reference evidence. If the UI decision depends on screenshots, FAQ text, article images, or a live page, capture those artifacts before the first edit.
 - Copying a reference's labels, icon, or route is not enough. For feature pages, the creation path, empty-state examples, placement of the input, and transition to the populated state are part of the product pattern.
 - Public names, subtitles, category labels, and pricing bullets are user psychology surfaces. They should not expose internal architecture, debugging shorthand, or implementation limits unless that is the sellable benefit.
 - Model/tier picker labels and descriptions are product positioning copy. Read peer pickers first, then map internal model capability into short task-language; do not ship backend/provider metadata or vague filler like "needs more care."
@@ -50,6 +52,7 @@ Near miss: do not load this for backend-only billing logic unless a user-visible
 - Positive trigger: "The settings import row needs ChatGPT, Claude, Gemini, and Grok logos instead of placeholder text."
 - Positive trigger: "Use Claude and Gemini's import prompts as inspiration for our memory import dialog."
 - Positive trigger: "Before uploading App Store subscription screenshots, check that the iOS paywall actually opens the selected plan."
+- Positive trigger: "Read the ChatGPT Scheduled help article, all images, and FAQ before making our empty state match."
 - Near miss: "Change the backend limit for automations from 10 to 20" with no UI/store/pricing surface.
 
 ## Sources
@@ -61,4 +64,5 @@ Near miss: do not load this for backend-only billing logic unless a user-visible
 - Classifier wake event transcript: `/Users/advaitpaliwal/.codex/sessions/2026/06/18/rollout-2026-06-18T09-49-03-019edba2-d988-7132-92c5-e48959f87980.jsonl` lines 3767-3783 — agent overfit and underfit the Claude/Gemini prompt references before the user clarified that they were inspirations for a Companion-owned import prompt.
 - Classifier wake event transcript: `/Users/advaitpaliwal/.codex/sessions/2026/06/18/rollout-2026-06-18T18-31-09-019edd80-d9c6-71d1-a99a-557fa117e0ee.jsonl` lines 4768-4857 — agent prepared App Store subscription review screenshots before proving the iOS paywall had a selected-plan purchase path.
 - Classifier wake event transcript: `/Users/advaitpaliwal/.codex/sessions/2026/06/18/rollout-2026-06-18T23-29-19-019ede91-d20b-7ed3-a87a-76cd0f6178fa.jsonl` lines 424-425 and 3053-3072 — agent extracted and browser-tested ChatGPT Scheduled, then copied naming/routing while missing the empty-state composer, examples, and creation-first interaction model.
+- Classifier wake event transcript: `/Users/advaitpaliwal/.codex/sessions/2026/06/18/rollout-2026-06-18T23-29-19-019ede91-d20b-7ed3-a87a-76cd0f6178fa.jsonl` lines 6363-6441 — agent shipped `/automations` and a card/list mismatch after prior ChatGPT Scheduled research, then began a second UI edit before saving the referenced help article images, FAQ, and Chrome screenshots.
 - Skill format and routing rules: `skills/skill-creator/references/source-map.md`.

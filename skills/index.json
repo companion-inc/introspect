@@ -140,6 +140,8 @@
         "AI import or export prompt in a settings flow",
         "feature page navigation row or empty state should feel like a named reference product",
         "creation-first empty state with examples composer or input placement",
+        "help article FAQ screenshots or video reference for a product surface",
+        "read all images in a reference product before UI polish",
         "Claude Gemini ChatGPT or Grok prompt used as inspiration",
         "provider import dialog should use a default app dialog",
         "third-party provider logo or brand mark in a settings picker",
