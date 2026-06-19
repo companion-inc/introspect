@@ -12,17 +12,19 @@ description: Polish user-facing product surfaces such as pricing pages, plan car
 - A product/settings surface uses another AI's import/export prompt, dialog, or onboarding flow as a reference for the product's own prompt or flow.
 - The user points at reference products and asks for the surface to feel similar, bigger, cleaner, more premium, simpler, or less awkward.
 - The reference arrives through a help article, FAQ, video, screenshot, or live browser page, and the product surface depends on its layout, copy, or interaction pattern.
+- The user names a real app, device, screen, or artifact contract for a product surface, such as an existing app Upgrade screen or a specific simulator.
+- Product or proposal copy/visuals need to preserve a user-corrected architecture, runtime split, or reference shape.
 - Copy includes internal terms, vague feature claims, filler benefits, or numbers that may drift from enforced plan limits.
 
 Near miss: do not load this for backend-only billing logic unless a user-visible product surface is being changed.
 
 ## Procedure
 
-1. Name the exact surface and audience: store listing, home-screen app identity, pricing page, locked paywall, onboarding, model picker, or in-app settings.
+1. Name the exact surface and audience: store listing, home-screen app identity, pricing page, locked paywall, onboarding, model picker, or in-app settings. If the user named a real app path, device, screen, or artifact contract, include that in the surface contract before acting.
 2. Read the real references the user named, plus the closest direct competitors when the user asks "how do others do it." For browser, help-article, FAQ, video, or screenshot references, save and read durable artifacts before editing: full-page screenshots or frames, article images and metadata, FAQ text, and the relevant DOM or visible text. Extract the pattern in concrete terms: naming formula, navigation placement, icon choice, subtitle placement, empty versus populated state, primary creation affordance, example prompts or rows, card/list hierarchy, feature taxonomy, spacing, and responsive behavior.
-3. Classify each reference's role before implementing: verbatim source to copy, inspiration to synthesize from, or interaction/component behavior to match. For behavior to match, write the interaction contract before changing code: what the empty state invites, where input lives, which examples appear, and how the layout changes once data exists. Copy provider prompt text verbatim only when the user asks for copying; when provider prompts are examples of how another app extracts/imports data, write one product-owned prompt shaped by the pattern instead.
+3. Classify each reference's role before implementing: verbatim source to copy, inspiration to synthesize from, or interaction/component behavior to match. For behavior to match, write the interaction contract before changing code: what the empty state invites, where input lives, which examples appear, and how the layout changes once data exists. Copy provider prompt text verbatim only when the user asks for copying; when provider prompts are examples of how another app extracts/imports data, write one product-owned prompt shaped by the pattern instead. When the user corrects the product architecture, runtime location, or reference object, propagate that correction through headings, captions, image prompts, diagrams, and verification steps before generating more artifacts.
 4. Read the product source of truth before writing copy: plan constants, enforced quotas, billing config, app metadata, bundle settings, feature gates, and current screenshots. A pricing claim must trace to code or config; store metadata must trace to App Store Connect or bundle settings.
-5. For subscription or paywall work, prove the in-app purchase path before store-review artifacts: inspect the paywall code/config, product IDs, selected-plan params, StoreKit/Superwall wiring, and a real simulator/device screenshot or flow. Do not upload App Store review screenshots or polish subscription metadata while the app only has static cards or an unproven trigger.
+5. For subscription or paywall work, prove the in-app purchase path before store-review artifacts: inspect the paywall code/config, product IDs, selected-plan params, StoreKit/Superwall wiring, and a real simulator/device screenshot or flow. If the user named an existing app, simulator, or screen, install/launch that exact target and navigate the normal app path; a preview flag, standalone fixture, or different booted device is a proxy unless the user explicitly asked for it. Do not upload App Store review screenshots or polish subscription metadata while the app only has static cards or an unproven trigger.
 6. Translate internal capability into user language. Remove engineering phrases and filler such as "tool-heavy," "model context window," "standard usage," "switch anytime," or "add more credits anytime" unless the reference products and product truth make them genuinely meaningful.
 7. For tiered pricing, make progression visible from low to high: more quota, broader capability, clearer support/access. Keep duplicated roll-up lines short, avoid unlimited claims unless the runtime actually enforces no limit, and align cards across desktop and medium-width layouts.
 8. For provider import/export dialogs, use the app's existing standard dialog and controls first. Custom sizing, typography, or cloned competitor chrome needs a concrete reason from the reference pattern and the local design system.
@@ -39,10 +41,12 @@ Near miss: do not load this for backend-only billing logic unless a user-visible
 - Model/tier picker labels and descriptions are product positioning copy. Read peer pickers first, then map internal model capability into short task-language; do not ship backend/provider metadata or vague filler like "needs more care."
 - If the product has plan constants, copy should be generated from or checked against them so the page cannot promise more or less than the runtime enforces.
 - Store review metadata is downstream of the in-app purchase path. A screenshot that matches pricing is not proof the app can select or buy that plan.
+- Preview flags, generated concept renders, and proposal shorthand are proxies. Replace them with the named real surface or corrected architecture before claiming the product artifact is fixed.
 - Provider-choice rows are brand-recognition surfaces. A `GPT` label, single letter, or hand-drawn approximation reads as unfinished next to real Claude, Gemini, ChatGPT, or Grok marks.
 - Prompt references can be examples, not requested copy. When the user says another app's prompt is inspiration, preserve the product's own voice and data contract instead of either inventing an unrelated prompt or pasting the provider's exact wording.
 - A provider import dialog is still an app dialog. Start from the repo's default dialog component; a custom wide modal or cloned competitor layout is scope creep unless the user asked for that surface.
 - A generated visual can be worse than a clean existing glyph if the prompt is not grounded in the app identity and peer icon language.
+- Labels such as "AI headset" can silently reintroduce the wrong architecture after a correction to off-head, phone, pocket, edge, cloud, or API runtime. Scrub titles and captions, not only body paragraphs.
 
 ## Verification
 
@@ -52,7 +56,9 @@ Near miss: do not load this for backend-only billing logic unless a user-visible
 - Positive trigger: "The settings import row needs ChatGPT, Claude, Gemini, and Grok logos instead of placeholder text."
 - Positive trigger: "Use Claude and Gemini's import prompts as inspiration for our memory import dialog."
 - Positive trigger: "Before uploading App Store subscription screenshots, check that the iOS paywall actually opens the selected plan."
+- Positive trigger: "Put the iOS paywall into Companion Staging iPhone 17 Pro and open Upgrade in the existing app."
 - Positive trigger: "Read the ChatGPT Scheduled help article, all images, and FAQ before making our empty state match."
+- Positive trigger: "Update this grant packet so the headset is only capture/output and the AI runtime is off-head/API."
 - Near miss: "Change the backend limit for automations from 10 to 20" with no UI/store/pricing surface.
 
 ## Sources
@@ -65,4 +71,6 @@ Near miss: do not load this for backend-only billing logic unless a user-visible
 - Classifier wake event transcript: `/Users/advaitpaliwal/.codex/sessions/2026/06/18/rollout-2026-06-18T18-31-09-019edd80-d9c6-71d1-a99a-557fa117e0ee.jsonl` lines 4768-4857 — agent prepared App Store subscription review screenshots before proving the iOS paywall had a selected-plan purchase path.
 - Classifier wake event transcript: `/Users/advaitpaliwal/.codex/sessions/2026/06/18/rollout-2026-06-18T23-29-19-019ede91-d20b-7ed3-a87a-76cd0f6178fa.jsonl` lines 424-425 and 3053-3072 — agent extracted and browser-tested ChatGPT Scheduled, then copied naming/routing while missing the empty-state composer, examples, and creation-first interaction model.
 - Classifier wake event transcript: `/Users/advaitpaliwal/.codex/sessions/2026/06/18/rollout-2026-06-18T23-29-19-019ede91-d20b-7ed3-a87a-76cd0f6178fa.jsonl` lines 6363-6441 — agent shipped `/automations` and a card/list mismatch after prior ChatGPT Scheduled research, then began a second UI edit before saving the referenced help article images, FAQ, and Chrome screenshots.
+- Classifier wake event transcript: `/Users/advaitpaliwal/.codex/sessions/2026/06/19/rollout-2026-06-19T08-57-14-019ee099-c668-7c00-91d9-adaf660ce6c1.jsonl` lines 3163-3214 — agent launched a paywall preview on the wrong booted simulator after the user expected the existing app Upgrade screen.
+- Classifier wake event transcript: `/Users/advaitpaliwal/.codex/sessions/2026/06/19/rollout-2026-06-19T09-25-23-019ee0b3-8c6d-7df0-93c2-285ff22aacfe.jsonl` lines 1254-1298 — agent kept "AI headset" wording in proposal artifacts after the user corrected the architecture to off-head compute.
 - Skill format and routing rules: `skills/skill-creator/references/source-map.md`.

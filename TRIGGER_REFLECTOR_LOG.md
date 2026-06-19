@@ -1,3 +1,30 @@
+# Trigger Reflector Run — 2026-06-19 12:33 PDT
+
+## Batch Summary
+- 2 classifier wake events fired from one reflector run.
+- Optional review terms were metadata only.
+- Runs showed prompt version `f44b04d` at 5 triggers / 17 prompts and `c7b93a4` at 4 triggers / 9 prompts. The current prompt changes were skill-specific, so this reflector run updated the close product-surface skill instead of adding a global prompt rule.
+
+## Classification
+- Change target: `skill_update`
+- Updated `product-surface-polish`.
+
+## Evidence
+- Classifier wake event 1 was a real agent-behavior failure: the assistant launched `UI_PAYWALL_PREVIEW` on `Iris Test iPhone 16` after the user expected the existing app Upgrade screen on the named Companion staging simulator.
+- Classifier wake event 2 was a real agent-behavior failure: the assistant had accepted the referee-style off-head compute architecture, but proposal wording still read like the AI lived in the headset.
+
+## Change
+- The skill now treats a user-named app, simulator, screen, or artifact contract as part of the product surface contract.
+- Paywall verification now says to install/launch the exact named target and navigate the normal app path; preview flags and alternate devices are proxies unless explicitly requested.
+- Product/proposal copy and visuals now have to propagate a corrected architecture through headings, captions, image prompts, diagrams, and verification steps.
+
+## Probe
+- Positive: "Put the iOS paywall into Companion Staging iPhone 17 Pro and open Upgrade in the existing app." Expected route: `product-surface-polish`; no preview flag or alternate booted device.
+- Positive: "Update this grant packet so the headset is only capture/output and the AI runtime is off-head/API." Expected route: `product-surface-polish`; scrub "AI headset" shorthand from copy and visual prompts.
+- Near miss: "Change the backend limit for automations from 10 to 20." Expected route: no product-surface skill; this is backend logic.
+
+---
+
 # Trigger Reflector Run — 2026-06-19 12:31 PDT
 
 ## Batch Summary
