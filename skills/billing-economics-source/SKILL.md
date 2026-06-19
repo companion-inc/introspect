@@ -65,6 +65,11 @@ Near-misses:
      truth is provider-specific: Autumn/Stripe for web, App Store Connect for
      Apple subscriptions, and RevenueCat for product, entitlement, package, and
      webhook mapping.
+   - Apply provider limits at the smallest plan/period scope the evidence
+     proves. An App Store price-point or product-status limit on Max annual
+     disables or changes Max annual only; do not remove annual choices from
+     Plus/Pro or rewrite other rails unless their own records fail the same
+     check.
    - For RevenueCat-backed mobile billing, Autumn receives RevenueCat updates;
      Autumn prices do not decide the mobile charge.
    - Worker billing code imports economics helpers and writes already-marked-up
@@ -139,7 +144,9 @@ rg -n "CREDIT_MARKUP|estimateRawDollars|formatRawDollars|costMicroCents|microCen
   calculated ledger values.
 - Transcript `019ee099` (2026-06-19): user corrected a "fix all pricing" run
   because the agent narrowed to Autumn and failed to include Apple/App Store
-  pricing in the named truth layer.
+  pricing in the named truth layer; later in the same run, the user corrected
+  the agent for turning a Max annual Apple limit into a global no-annual iOS
+  rule.
 - Autumn RevenueCat docs: mobile billing is handled through RevenueCat; Autumn
   receives webhook updates and ignores Autumn prices for RevenueCat purchases.
 - Apple App Store Connect docs: auto-renewable subscriptions are priced by
