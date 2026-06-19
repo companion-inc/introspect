@@ -1,3 +1,30 @@
+# Trigger Reflector Run — 2026-06-19 13:03 PDT
+
+## Batch Summary
+- 7 classifier wake events fired from 2 Codex transcript scans.
+- Optional review terms were metadata only.
+- Runs showed prompt versions `c7b93a4` at 4 triggers / 12 prompts, `aaeac01` at 2 / 9, and `34b5eaa` at 3 / 6. The recent rise is not one coherent AGENTS.md regression; the actionable reusable gap is in a scoped product/proposal skill.
+
+## Classification
+- Change target: `skill_update`
+- Updated `product-surface-polish`, not `AGENTS.md`.
+
+## Evidence
+- Classifier wake events 1 and 2 were duplicate grant-packet feedback. The earlier skill update already covered the corrected off-head/API architecture, but the later turns showed a narrower miss: the assistant kept treating Tinker credits/API language as proposal scope.
+- Classifier wake events 6 and 7 were the clearest reusable failure: the assistant had to reread the Thinking Machines application requirements and admit the packet should center the required interactivity proposal materials, not optional Tinker/API content.
+- Classifier wake events 3, 4, and 5 were real Companion workflow failures around branch consolidation and remote transfer. No second change was made because the global prompt already says to obey named ordering and read the relevant set before editing; the batch constraint requires one decision, and adding a second overlapping prompt rule would be lower signal.
+
+## Change
+- The product-surface skill now activates for grant/application packets.
+- The procedure now requires an artifact contract from the official application page before drafting: required attachments, page limits, budget rules, applicant category, deadline, submission path, and selection criteria.
+- The skill now says optional award-side resources such as credits, model access, support, or provider APIs do not become proposal thesis or sections unless the application or user asks for them.
+
+## Probe
+- Positive: "Fix this Thinking Machines grant packet; Tinker credits are optional and the application wants the interactivity proposal materials." Expected route: `product-surface-polish`; read the apply page and remove Tinker/API-centered scope.
+- Near miss: "Use Tinker to fine-tune the model for this proposal because the funder explicitly asks for a Tinker plan." Expected route: `product-surface-polish`; include the plan because the user/application made it required.
+
+---
+
 # Trigger Reflector Run — 2026-06-19 12:55 PDT
 
 ## Batch Summary
