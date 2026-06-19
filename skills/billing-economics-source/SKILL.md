@@ -29,7 +29,8 @@ Load when changing any of these:
   item values.
 - Plan subscription prices, monthly/annual plan amount changes, RevenueCat
   product/package/entitlement mapping, App Store Connect subscription price
-  schedules, or paywall/store product price displays.
+  schedules, or paywall/store product price displays, including annual savings
+  badges.
 - Usage UI, chat credit footer, billing usage tables, or any display that shows
   credits consumed from `usage_events.costMicroCents`.
 
@@ -78,15 +79,23 @@ Near-misses:
    - UI money helpers format ledger values; they must not define markup or
      estimate raw provider cost unless the surface is explicitly internal and
      labeled as raw provider cost.
-4. Resolve provider contradictions before mutating. Do not push a catalog or
+4. For annual price or savings-badge changes, write the arithmetic table before
+   editing: monthly price x 12 baseline, live provider candidate annual prices,
+   exact savings percentage, displayed badge, and the user's rounding rule.
+   "Round percentage" means integer percentage unless the user names another
+   increment; do not invent 5% steps, "conservative" labels, or a lower savings
+   badge when the stated goal is to show the best deal. If no exact common
+   candidate exists across plans, say that before recommending a business
+   fallback.
+5. Resolve provider contradictions before mutating. Do not push a catalog or
    patch code from a summary table when detailed JSON, dashboard UI, or the
    charge provider disagrees.
-5. Delete duplicate economics constants instead of syncing them by comment.
+6. Delete duplicate economics constants instead of syncing them by comment.
    Prefer imports from `src/lib/billing/economics.ts` across server, scripts,
    Autumn config, tests, and UI.
-6. If a raw-cost reporting surface is genuinely needed, name it as raw provider
+7. If a raw-cost reporting surface is genuinely needed, name it as raw provider
    cost and keep it separate from user credit consumption.
-7. Add focused guards for the drift you changed:
+8. Add focused guards for the drift you changed:
    - rate tests for markup and raw-dollar conversion;
    - money tests for ledger credit formatting;
    - usage tests for `costMicroCents` to Autumn credit value;
@@ -109,6 +118,9 @@ Near-misses:
 - App Store subscription prices are configured per country/region in App Store
   Connect. Check the storefront current price and product status, not only the
   product ID or RevenueCat offering label.
+- Annual savings badges are display claims over a billing value. Compute them
+  from the named monthly baseline and live annual price candidates; do not
+  treat a prettier marketing label as true until the arithmetic is written down.
 - RevenueCat entitlements decide access mapping after a purchase; offerings and
   packages decide what the SDK presents; App Store Connect still owns the Apple
   subscription price.
@@ -146,7 +158,8 @@ rg -n "CREDIT_MARKUP|estimateRawDollars|formatRawDollars|costMicroCents|microCen
   because the agent narrowed to Autumn and failed to include Apple/App Store
   pricing in the named truth layer; later in the same run, the user corrected
   the agent for turning a Max annual Apple limit into a global no-annual iOS
-  rule.
+  rule, then for choosing annual savings badges without first enumerating the
+  Apple-valid annual price and percent-intersection math.
 - Autumn RevenueCat docs: mobile billing is handled through RevenueCat; Autumn
   receives webhook updates and ignores Autumn prices for RevenueCat purchases.
 - Apple App Store Connect docs: auto-renewable subscriptions are priced by

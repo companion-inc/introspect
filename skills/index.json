@@ -117,6 +117,7 @@
         "fix all pricing across web and Apple",
         "RevenueCat App Store product price or entitlement mapping",
         "App Store Connect subscription price schedule",
+        "paywall annual savings badge or discount percentage",
         "provider cost to credits conversion",
         "editing billing economics money helpers or rate math",
         "usage_events costMicroCents or Autumn credits tracking",
