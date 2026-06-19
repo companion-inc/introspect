@@ -146,6 +146,7 @@
         "Claude Gemini ChatGPT or Grok prompt used as inspiration",
         "provider import dialog should use a default app dialog",
         "third-party provider logo or brand mark in a settings picker",
+        "auth or sign-in provider buttons with Google Apple or other provider logos",
         "ChatGPT Claude Gemini Grok or other tool logo assets",
         "upgrade or paywall screen",
         "named simulator existing app or Upgrade screen for paywall verification",

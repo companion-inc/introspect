@@ -7,8 +7,8 @@ description: Polish user-facing product surfaces such as pricing pages, plan car
 
 ## Use When
 
-- Editing pricing pages, plan cards, upgrade/paywall screens, feature lists, in-app feature pages, navigation rows, empty states, model pickers, settings copy, App Store metadata, TestFlight metadata, app icons, product categories, onboarding, or marketing UI.
-- A product/settings surface names third-party providers or tools and needs their logos, brand marks, icons, or provider-choice affordances.
+- Editing pricing pages, plan cards, upgrade/paywall screens, feature lists, in-app feature pages, navigation rows, empty states, model pickers, auth/sign-in provider buttons, settings copy, App Store metadata, TestFlight metadata, app icons, product categories, onboarding, or marketing UI.
+- A product/settings/auth surface names third-party providers or tools and needs their logos, brand marks, icons, or provider-choice affordances.
 - A product/settings surface uses another AI's import/export prompt, dialog, or onboarding flow as a reference for the product's own prompt or flow.
 - The user points at reference products and asks for the surface to feel similar, bigger, cleaner, more premium, simpler, or less awkward.
 - Editing a grant, application, or submission packet where the funder's required materials, page limits, applicant type, budget rules, or optional award resources define the artifact.
@@ -30,7 +30,7 @@ Near miss: do not load this for backend-only billing logic unless a user-visible
 7. Translate internal capability into user language. Remove engineering phrases and filler such as "tool-heavy," "model context window," "standard usage," "switch anytime," or "add more credits anytime" unless the reference products and product truth make them genuinely meaningful.
 8. For tiered pricing, make progression visible from low to high: more quota, broader capability, clearer support/access. Keep duplicated roll-up lines short, avoid unlimited claims unless the runtime actually enforces no limit, and align cards across desktop and medium-width layouts.
 9. For provider import/export dialogs, use the app's existing standard dialog and controls first. Custom sizing, typography, or cloned competitor chrome needs a concrete reason from the reference pattern and the local design system.
-10. For third-party provider logos, search current web, vendor, and public icon sources before inventing a mark. Prefer official brand kits or established public SVG icon packages; keep the resulting asset local in the app with its source recorded. Text initials or generated marks are temporary implementation scaffolds, not the final product surface, unless no real mark exists after search.
+10. For third-party provider logos, including auth buttons, search local repo assets first, then current web, vendor, and public icon sources before inventing a mark. Prefer official brand kits or established public SVG icon packages; keep the resulting asset local in the app with its source recorded. Text initials or generated marks are temporary implementation scaffolds, not the final product surface, unless no real mark exists after search.
 11. For app-owned icons and store metadata, choose the model/tool intentionally after checking available local/API options. Generate or edit the asset only after the reference pattern is clear, then verify the built app bundle uses the asset and the public metadata changed.
 12. Verify on the actual surface, not a proxy: screenshot or inspect the live page, run typecheck/lint/build, verify responsive wrapping, and for referenced interaction models verify the relevant states that define the pattern, not only that the route renders. For App Store/TestFlight work confirm the processed uploaded build or current App Store Connect fields.
 
@@ -45,7 +45,7 @@ Near miss: do not load this for backend-only billing logic unless a user-visible
 - Store review metadata is downstream of the in-app purchase path. A screenshot that matches pricing is not proof the app can select or buy that plan.
 - Preview flags, generated concept renders, and proposal shorthand are proxies. Replace them with the named real surface or corrected architecture before claiming the product artifact is fixed.
 - Award-side resources are not automatic proposal sections. A funder mentioning credits, model access, support, or an API in the award announcement does not mean the application asks for a credits plan, API plan, or provider-centered thesis.
-- Provider-choice rows are brand-recognition surfaces. A `GPT` label, single letter, or hand-drawn approximation reads as unfinished next to real Claude, Gemini, ChatGPT, or Grok marks.
+- Provider-choice rows and sign-in buttons are brand-recognition surfaces. A `GPT` label, single letter, or hand-drawn approximation reads as unfinished next to real Claude, Gemini, ChatGPT, Google, Apple, or Grok marks.
 - Prompt references can be examples, not requested copy. When the user says another app's prompt is inspiration, preserve the product's own voice and data contract instead of either inventing an unrelated prompt or pasting the provider's exact wording.
 - A provider import dialog is still an app dialog. Start from the repo's default dialog component; a custom wide modal or cloned competitor layout is scope creep unless the user asked for that surface.
 - Success toasts are not free polish. If the control itself flips to `Copied`, checked, done, or saved, that is the confirmation; keep toast/banner feedback for errors or background outcomes that otherwise have no visible state.
@@ -58,6 +58,7 @@ Near miss: do not load this for backend-only billing logic unless a user-visible
 - Positive trigger: "Read Plaud/Granola/Pocket and fix our TestFlight name, category, and icon."
 - Positive trigger: "Fix the model picker wording; how do Claude or ChatGPT describe these tiers?"
 - Positive trigger: "The settings import row needs ChatGPT, Claude, Gemini, and Grok logos instead of placeholder text."
+- Positive trigger: "The Continue with Google sign-in button needs the real Google logo, not a letter."
 - Positive trigger: "Use Claude and Gemini's import prompts as inspiration for our memory import dialog."
 - Positive trigger: "Fix the memory import dialog copy affordance; the Copy button already turns into Copied."
 - Positive trigger: "Before uploading App Store subscription screenshots, check that the iOS paywall actually opens the selected plan."
@@ -81,4 +82,5 @@ Near miss: do not load this for backend-only billing logic unless a user-visible
 - Classifier wake event transcript: `/Users/advaitpaliwal/.codex/sessions/2026/06/19/rollout-2026-06-19T09-25-23-019ee0b3-8c6d-7df0-93c2-285ff22aacfe.jsonl` lines 1254-1298 — agent kept "AI headset" wording in proposal artifacts after the user corrected the architecture to off-head compute.
 - Classifier wake event transcript: `/Users/advaitpaliwal/.codex/sessions/2026/06/19/rollout-2026-06-19T09-25-23-019ee0b3-8c6d-7df0-93c2-285ff22aacfe.jsonl` lines 1474-1508 — agent turned optional Tinker credits/API language into proposal scope before rereading the application requirements.
 - Classifier wake event transcript: `/Users/advaitpaliwal/.codex/sessions/2026/06/19/rollout-2026-06-19T11-55-38-019ee13d-1a47-7fc3-9c7a-b6fae2e6b994.jsonl` lines 357-374 — agent added a success toast to a copy action even though the button already changed to `Copied`; the fix removed the redundant success toast and kept the clipboard error toast.
+- Classifier wake event transcript: `/Users/advaitpaliwal/.codex/sessions/2026/06/19/rollout-2026-06-19T08-57-14-019ee099-c668-7c00-91d9-adaf660ce6c1.jsonl` lines 6525-6533 — agent used a placeholder Google letter and inline email continuation on the auth surface; the user objected, and the fix used the repo's Google SVG plus an email sheet.
 - Skill format and routing rules: `skills/skill-creator/references/source-map.md`.
