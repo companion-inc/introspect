@@ -131,7 +131,7 @@
       "path": "skills/product-surface-polish/SKILL.md",
       "status": "active",
       "tier": "domain-workflow",
-      "description": "Polish pricing pages, plan cards, feature pages, grant/application packets, navigation rows, empty states, model/settings pickers, provider import/export prompts, provider logos, App Store/TestFlight metadata, icons, categories, onboarding, and marketing UI by grounding copy, visuals, and interaction structure in real reference products plus the product's enforced source of truth.",
+      "description": "Polish pricing pages, plan cards, feature pages, grant/application packets, navigation rows, empty states, model/settings pickers, provider import/export prompts, provider logos, App Store/TestFlight metadata, icons, categories, onboarding, and marketing UI by grounding copy, visuals, and interaction structure in real reference products plus the product's enforced source of truth. For research grant packets, keep research intent distinct from product/prototype framing.",
       "activation_signals": [
         "pricing page copy or layout",
         "plan card features",
@@ -155,6 +155,7 @@
         "app icon category name or subtitle",
         "product proposal copy or visuals must preserve corrected hardware API architecture",
         "grant or application packet must follow required materials instead of optional award credits",
+        "research grant packet sounds like product or prototype instead of study evaluation apparatus or technical report",
         "Tinker credits model access or provider API should not become proposal scope unless required",
         "read competitor product pages before polishing",
         "remove internal jargon from product copy",
