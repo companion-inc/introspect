@@ -83,10 +83,36 @@ runner="$(setting reflector_runner default)"
 claude_model="$(setting reflector_claude_model "")"
 claude_fallback_model="$(setting reflector_claude_fallback_model "")"
 codex_model="$(setting reflector_codex_model "")"
+wake_sensitivity="$(setting wake_sensitivity balanced)"
+wake_threshold="$(setting wake_custom_threshold 0.64)"
 hour="$(setting nightly_hour 3)"
 minute="$(setting nightly_minute 0)"
+shadow_models="${INTROSPECT_WAKE_SHADOW_MODELS:-}"
 needs_repair=0
 reasons=()
+
+discover_shadow_models() {
+  if [[ -n "$shadow_models" ]]; then
+    return
+  fi
+  local specs=()
+  local r8="$REPO/feedback/intent-classifier/wake-logreg-v2-round8-holdout-selected.json"
+  local r9="$REPO/feedback/intent-classifier/wake-logreg-v2-round9-holdout-selected.json"
+  local r8r9="$REPO/feedback/intent-classifier/wake-logreg-v2-round8-after-round9-selected.json"
+  if [[ -f "$r8" ]]; then
+    specs+=("r8-retrain=$r8")
+  fi
+  if [[ -f "$r9" ]]; then
+    specs+=("r9-retrain=$r9")
+  fi
+  if [[ -f "$r8r9" ]]; then
+    specs+=("r8-r9=$r8r9")
+  fi
+  local IFS=,
+  shadow_models="${specs[*]}"
+}
+
+discover_shadow_models
 
 echo "$(timestamp) healthcheck start mode=$mode runner=$runner"
 
@@ -127,6 +153,9 @@ else
   check_plist_env "$scan_plist" "INTROSPECT_REFLECTOR_CLAUDE_MODEL" "$claude_model" "scanner Claude model"
   check_plist_env "$scan_plist" "INTROSPECT_REFLECTOR_CLAUDE_FALLBACK_MODEL" "$claude_fallback_model" "scanner Claude fallback model"
   check_plist_env "$scan_plist" "INTROSPECT_REFLECTOR_CODEX_MODEL" "$codex_model" "scanner Codex model"
+  check_plist_env "$scan_plist" "INTROSPECT_WAKE_SHADOW_MODELS" "$shadow_models" "scanner shadow models"
+  check_plist_env "$scan_plist" "INTROSPECT_WAKE_SENSITIVITY" "$wake_sensitivity" "scanner wake sensitivity"
+  check_plist_env "$scan_plist" "INTROSPECT_WAKE_THRESHOLD" "$wake_threshold" "scanner wake threshold"
 fi
 
 if [[ "$mode" == "nightly" ]]; then
@@ -138,6 +167,8 @@ if [[ "$mode" == "nightly" ]]; then
     check_plist_env "$reflector_plist" "INTROSPECT_REFLECTOR_CLAUDE_MODEL" "$claude_model" "nightly Claude model"
     check_plist_env "$reflector_plist" "INTROSPECT_REFLECTOR_CLAUDE_FALLBACK_MODEL" "$claude_fallback_model" "nightly Claude fallback model"
     check_plist_env "$reflector_plist" "INTROSPECT_REFLECTOR_CODEX_MODEL" "$codex_model" "nightly Codex model"
+    check_plist_env "$reflector_plist" "INTROSPECT_WAKE_SENSITIVITY" "$wake_sensitivity" "nightly wake sensitivity"
+    check_plist_env "$reflector_plist" "INTROSPECT_WAKE_THRESHOLD" "$wake_threshold" "nightly wake threshold"
   fi
 elif [[ -f "$reflector_plist" ]]; then
   needs_repair=1
@@ -146,7 +177,7 @@ fi
 
 if [[ "$needs_repair" == "1" ]]; then
   echo "$(timestamp) repair: ${reasons[*]}"
-  INTROSPECT_SKIP_MONITOR_BOOTSTRAP=1 "$REPO/scripts/install-hooks.sh" \
+  INTROSPECT_SKIP_MONITOR_BOOTSTRAP=1 INTROSPECT_WAKE_SHADOW_MODELS="$shadow_models" "$REPO/scripts/install-hooks.sh" \
     --reflect-mode "$mode" \
     --nightly-hour "$hour" \
     --nightly-minute "$minute" \
@@ -154,6 +185,8 @@ if [[ "$needs_repair" == "1" ]]; then
     --claude-model "$claude_model" \
     --claude-fallback-model "$claude_fallback_model" \
     --codex-model "$codex_model" \
+    --wake-sensitivity "$wake_sensitivity" \
+    --wake-threshold "$wake_threshold" \
     --home "$INTROSPECT_HOME_DIR" \
     --feedback-dir "$FEEDBACK_DIR"
 else

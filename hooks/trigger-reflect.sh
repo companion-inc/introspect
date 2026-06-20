@@ -3,9 +3,7 @@
 # stdin).
 #
 # Design: the local classifier decides whether a prompt is a foreground wake.
-# Optional review terms are metadata only unless an explicit emergency fallback
-# flag is set. The foreground model never gets a spawned-agent instruction from
-# this hook.
+# Optional review terms are metadata only. They never wake the reflector.
 #
 # Two jobs:
 # 1. Log EVERY prompt to feedback/events.jsonl tagged with the AGENTS.md commit
@@ -91,11 +89,8 @@ if classifier_enabled and score_prompt is not None:
         classifier = {"error": f"{type(exc).__name__}: {str(exc)[:160]}"}
 classifier_triggered = bool(classifier and classifier.get("triggered"))
 classifier_available = bool(classifier and "score" in classifier)
-word_fallback_enabled = os.environ.get("INTROSPECT_TRIGGER_WORD_FALLBACK", "0") == "1"
-triggered = classifier_triggered if classifier_available else (bool(matches) and word_fallback_enabled)
-wake_reason = "classifier" if classifier_available else (
-    "trigger_word_fallback" if word_fallback_enabled else "classifier_unavailable"
-)
+triggered = classifier_triggered if classifier_available else False
+wake_reason = "classifier" if classifier_available else "classifier_unavailable"
 
 try:
     version = subprocess.run(

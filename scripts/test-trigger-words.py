@@ -17,6 +17,7 @@ REPO = Path(__file__).resolve().parents[1]
 HOOK = REPO / "hooks" / "trigger-reflect.sh"
 SCANNER = REPO / "hooks" / "codex-transcript-scan.py"
 WORKER = REPO / "hooks" / "trigger-worker.py"
+INTENT_CLASSIFIER = REPO / "hooks" / "intent_classifier.py"
 
 
 def load_worker_module(name: str, env_updates: dict[str, str] | None = None):
@@ -33,6 +34,15 @@ def load_worker_module(name: str, env_updates: dict[str, str] | None = None):
     finally:
         os.environ.clear()
         os.environ.update(old_env)
+
+
+def load_intent_module(name: str = "intent_classifier_test"):
+    spec = importlib.util.spec_from_file_location(name, INTENT_CLASSIFIER)
+    if spec is None or spec.loader is None:
+        raise AssertionError("could not load intent_classifier.py")
+    classifier = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(classifier)
+    return classifier
 
 
 def read_jsonl(path: Path) -> list[dict]:
@@ -219,6 +229,86 @@ def run_home_case() -> None:
             raise AssertionError("plain prompt should have no default review-term matches")
 
 
+def run_shadow_model_case() -> None:
+    with tempfile.TemporaryDirectory(prefix="agent-loop-shadow-") as tmp_raw:
+        tmp = Path(tmp_raw)
+        env = os.environ.copy()
+        env.update(
+            {
+                "INTROSPECT_REPO": str(REPO),
+                "INTROSPECT_PROMPT": str(REPO / "AGENTS.md"),
+                "INTROSPECT_SKILLS_DIR": str(REPO / "skills"),
+                "INTROSPECT_FEEDBACK_DIR": str(tmp),
+                "INTROSPECT_REFLECT_MODE": "off",
+                "INTROSPECT_WAKE_SHADOW_MODELS": f"prod-shadow={Path.home() / '.introspect/models/wake-logreg-v2-round4.json'}",
+                "TRIGGER_REFLECTOR_DRY_RUN": "1",
+                "TRIGGER_DEBOUNCE_SECONDS": "0",
+                "TRIGGER_DISABLE_SCHEDULE": "1",
+            }
+        )
+        subprocess.run(
+            [sys.executable, str(HOOK)],
+            input=json.dumps(
+                {
+                    "prompt": "please add charts to the app showing classifier counts",
+                    "source": "codex",
+                    "session_id": "shadow-test",
+                    "cwd": str(REPO),
+                }
+            ),
+            text=True,
+            env=env,
+            cwd=REPO,
+            check=True,
+            timeout=10,
+        )
+        events = read_jsonl(tmp / "events.jsonl")
+        if len(events) != 1:
+            raise AssertionError(f"shadow case expected 1 event, got {len(events)}")
+        event = events[0]
+        if event.get("triggered"):
+            raise AssertionError("shadow model must not change the foreground trigger decision")
+        alternates = event.get("classifier", {}).get("alternates", [])
+        if len(alternates) != 1:
+            raise AssertionError(f"shadow case expected one alternate score, got {alternates}")
+        alternate = alternates[0]
+        if alternate.get("name") != "prod-shadow" or "score" not in alternate:
+            raise AssertionError(f"shadow alternate payload is incomplete: {alternate}")
+
+
+def run_sensitivity_case() -> None:
+    classifier = load_intent_module()
+    prompt = "you are not listening, keep going and fix it"
+    old_env = os.environ.copy()
+    try:
+        os.environ.pop("INTROSPECT_WAKE_THRESHOLD", None)
+
+        os.environ["INTROSPECT_WAKE_SENSITIVITY"] = "balanced"
+        balanced = classifier.score_prompt(prompt, source="codex")
+
+        os.environ["INTROSPECT_WAKE_SENSITIVITY"] = "sensitive"
+        sensitive = classifier.score_prompt(prompt, source="codex")
+
+        os.environ["INTROSPECT_WAKE_SENSITIVITY"] = "quiet"
+        quiet = classifier.score_prompt(prompt, source="codex")
+
+        os.environ["INTROSPECT_WAKE_SENSITIVITY"] = "custom"
+        os.environ["INTROSPECT_WAKE_THRESHOLD"] = "0.30"
+        custom = classifier.score_prompt(prompt, source="codex")
+    finally:
+        os.environ.clear()
+        os.environ.update(old_env)
+
+    if balanced.get("triggered"):
+        raise AssertionError(f"balanced sensitivity should preserve the model threshold: {balanced}")
+    if not sensitive.get("triggered") or sensitive.get("threshold") != 0.50:
+        raise AssertionError(f"sensitive threshold did not wake the borderline prompt: {sensitive}")
+    if quiet.get("triggered") or quiet.get("threshold") != 0.80:
+        raise AssertionError(f"quiet threshold should suppress the borderline prompt: {quiet}")
+    if not custom.get("triggered") or custom.get("threshold") != 0.30:
+        raise AssertionError(f"custom threshold did not apply: {custom}")
+
+
 def run_codex_scanner_case() -> None:
     with tempfile.TemporaryDirectory(prefix="agent-loop-codex-scan-") as tmp_raw:
         tmp = Path(tmp_raw)
@@ -361,7 +451,7 @@ def main() -> int:
         ("same with this locally in companion and stuff", False, None, False),
         ("can you open this file", False, None, False),
         ("this compoundword should not match a prefix", False, None, False),
-        ("you helpers should not trigger a plural match", False, None, False),
+        ("helpers should not trigger a plural match", False, None, False),
         ("this wording should not matter", False, None, False),
         ("that behavior is poor", False, None, False),
         ("you did not test this after I asked you to test it", True, None, True),
@@ -372,10 +462,12 @@ def main() -> int:
     run_mode_case("nightly", expected_queue=1, expected_batches=0)
     run_mode_case("off", expected_queue=0, expected_batches=0)
     run_home_case()
+    run_shadow_model_case()
+    run_sensitivity_case()
     run_codex_scanner_case()
     run_worker_notification_summary_case()
     run_worker_command_model_case()
-    print(f"test-trigger-words: ok ({len(cases) + 6} cases)")
+    print(f"test-trigger-words: ok ({len(cases) + 8} cases)")
     return 0
 
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Batch-label Introspect intent examples with the local DGX Qwen endpoint."""
+"""Batch-label Introspect intent examples with an OpenAI-compatible teacher endpoint."""
 
 from __future__ import annotations
 
@@ -17,8 +17,8 @@ REPO = Path(__file__).resolve().parents[2]
 DEFAULT_INPUT = REPO / "feedback" / "intent-classifier" / "chat-corpus.jsonl"
 DEFAULT_OUTPUT = REPO / "feedback" / "intent-classifier" / "qwen-labels-full.jsonl"
 
-ENDPOINT = "http://127.0.0.1:8000/v1/chat/completions"
-MODEL = "qwen"
+DEFAULT_ENDPOINT = "http://127.0.0.1:8000/v1/chat/completions"
+DEFAULT_MODEL = "introspect-teacher"
 
 SYSTEM_PROMPT = """You label user messages for Introspect, a local agent self-improvement system.
 
@@ -28,6 +28,7 @@ For each input record return exactly one object:
 {
   "record_id": "...",
   "should_wake": boolean,
+  "wake_probability": 0.0-1.0,
   "wake_label": "...",
   "route_label": "...",
   "confidence": 0.0-1.0,
@@ -78,6 +79,8 @@ def existing_ids(path: Path) -> set[str]:
                 row = json.loads(raw)
             except Exception:
                 continue
+            if row.get("error"):
+                continue
             record_id = row.get("record_id")
             if record_id:
                 ids.add(str(record_id))
@@ -99,11 +102,39 @@ def parse_json(content: str) -> dict[str, Any]:
     return json.loads(content)
 
 
+def labels_from_parsed(parsed: Any) -> list[dict[str, Any]]:
+    if isinstance(parsed, dict) and isinstance(parsed.get("labels"), list):
+        return [label for label in parsed["labels"] if isinstance(label, dict)]
+    if isinstance(parsed, dict) and parsed.get("record_id"):
+        return [parsed]
+    if isinstance(parsed, list):
+        return [label for label in parsed if isinstance(label, dict)]
+    return []
+
+
+def bounded_probability(value: Any, fallback: float) -> float:
+    try:
+        probability = float(value)
+    except (TypeError, ValueError):
+        probability = fallback
+    if probability != probability:
+        probability = fallback
+    return min(max(probability, 0.0), 1.0)
+
+
 def batch_rows(rows: list[dict[str, Any]], size: int) -> list[list[dict[str, Any]]]:
     return [rows[i:i + size] for i in range(0, len(rows), size)]
 
 
-def label_batch(rows: list[dict[str, Any]], timeout: int, retries: int, max_chars: int) -> list[dict[str, Any]]:
+def label_batch(
+    rows: list[dict[str, Any]],
+    timeout: int,
+    retries: int,
+    max_chars: int,
+    endpoint: str,
+    model: str,
+    system_prompt: str,
+) -> list[dict[str, Any]]:
     records = [
         {
             "record_id": row["id"],
@@ -117,12 +148,12 @@ def label_batch(rows: list[dict[str, Any]], timeout: int, retries: int, max_char
         for row in rows
     ]
     payload = {
-        "model": MODEL,
+        "model": model,
         "temperature": 0,
         "max_tokens": max(400, 150 * len(records)),
         "response_format": {"type": "json_object"},
         "messages": [
-            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "system", "content": system_prompt},
             {"role": "user", "content": json.dumps({"records": records}, ensure_ascii=False)},
         ],
     }
@@ -130,7 +161,7 @@ def label_batch(rows: list[dict[str, Any]], timeout: int, retries: int, max_char
     for attempt in range(retries + 1):
         try:
             request = urllib.request.Request(
-                ENDPOINT,
+                endpoint,
                 data=data,
                 headers={"Content-Type": "application/json"},
             )
@@ -138,15 +169,27 @@ def label_batch(rows: list[dict[str, Any]], timeout: int, retries: int, max_char
             body = json.loads(response.read().decode())
             content = body["choices"][0]["message"]["content"]
             parsed = parse_json(content)
-            labels = parsed.get("labels")
-            if not isinstance(labels, list):
-                raise ValueError("missing labels array")
+            labels = labels_from_parsed(parsed)
+            if not labels:
+                raise ValueError("missing labels")
             by_id = {str(label.get("record_id")): label for label in labels if isinstance(label, dict)}
             results: list[dict[str, Any]] = []
             for row in rows:
                 label = by_id.get(str(row["id"]))
+                if label is None and len(rows) == 1 and len(labels) == 1:
+                    label = labels[0]
                 if not label:
                     raise ValueError(f"missing label for {row['id']}")
+                raw_should_wake = label.get("should_wake")
+                raw_probability = label.get("wake_probability")
+                if isinstance(raw_should_wake, bool):
+                    should_wake = raw_should_wake
+                    fallback_probability = 0.85 if should_wake else 0.15
+                else:
+                    fallback_probability = bounded_probability(raw_probability, 0.5)
+                    should_wake = fallback_probability >= 0.5
+                wake_probability = bounded_probability(raw_probability, fallback_probability)
+                confidence = bounded_probability(label.get("confidence"), max(wake_probability, 1.0 - wake_probability))
                 results.append(
                     {
                         "record_id": row["id"],
@@ -156,8 +199,9 @@ def label_batch(rows: list[dict[str, Any]], timeout: int, retries: int, max_char
                         "weak_label": row.get("weak_label"),
                         "wake_label": label.get("wake_label"),
                         "route_label": label.get("route_label"),
-                        "should_wake": bool(label.get("should_wake")),
-                        "confidence": float(label.get("confidence") or 0),
+                        "should_wake": should_wake,
+                        "wake_probability": wake_probability,
+                        "confidence": confidence,
                         "reason": str(label.get("reason") or "")[:240],
                     }
                 )
@@ -190,7 +234,14 @@ def main() -> None:
     parser.add_argument("--retries", type=int, default=2)
     parser.add_argument("--max-chars", type=int, default=1200)
     parser.add_argument("--progress-every", type=int, default=1000)
+    parser.add_argument("--endpoint", default=DEFAULT_ENDPOINT)
+    parser.add_argument("--model", default=DEFAULT_MODEL)
+    parser.add_argument("--system-prompt-file", type=Path)
     args = parser.parse_args()
+
+    system_prompt = SYSTEM_PROMPT
+    if args.system_prompt_file:
+        system_prompt = args.system_prompt_file.read_text()
 
     done = existing_ids(args.output)
     rows = [row for row in read_jsonl(args.input) if row["id"] not in done]
@@ -204,7 +255,16 @@ def main() -> None:
     with args.output.open("a") as out:
         with futures.ThreadPoolExecutor(max_workers=args.workers) as executor:
             future_map = {
-                executor.submit(label_batch, batch, args.timeout, args.retries, args.max_chars): batch
+                executor.submit(
+                    label_batch,
+                    batch,
+                    args.timeout,
+                    args.retries,
+                    args.max_chars,
+                    args.endpoint,
+                    args.model,
+                    system_prompt,
+                ): batch
                 for batch in batches
             }
             for future in futures.as_completed(future_map):

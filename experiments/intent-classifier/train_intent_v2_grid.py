@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import fnmatch
 import json
 import math
 from collections import Counter
@@ -98,6 +99,8 @@ def aux_examples(
         for label in read_jsonl(path):
             record_id = str(label.get("record_id") or "")
             if not record_id or record_id in exclude_ids or record_id in seen or label.get("error"):
+                continue
+            if not isinstance(label.get("should_wake"), bool):
                 continue
             confidence = float(label.get("confidence") or 0.0)
             if confidence < min_confidence:
@@ -260,6 +263,12 @@ def config_name(config: dict[str, Any]) -> str:
     )
 
 
+def result_sort_key(result: dict[str, Any], precision_floor: float) -> tuple[float, float, float, float]:
+    if float(result["precision"]) >= precision_floor:
+        return (1.0, float(result["recall"]), float(result["precision"]), -float(result["wake_rate"]))
+    return (0.0, float(result["precision"]), float(result["recall"]), -float(result["wake_rate"]))
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--corpus", type=Path, default=DEFAULT_CORPUS)
@@ -275,6 +284,8 @@ def main() -> None:
     parser.add_argument("--feature-sizes", default="30000,60000,90000")
     parser.add_argument("--c-values", default="0.25,0.5,1.0,2.0,4.0")
     parser.add_argument("--class-weights", default="balanced,none")
+    parser.add_argument("--holdout-pattern", action="append", default=[])
+    parser.add_argument("--export-all-labels", action="store_true")
     parser.add_argument("--json-output", type=Path, default=DEFAULT_JSON)
     parser.add_argument("--report", type=Path, default=DEFAULT_REPORT)
     args = parser.parse_args()
@@ -316,13 +327,36 @@ def main() -> None:
 
     evaluated: list[dict[str, Any]] = []
     best: dict[str, Any] | None = None
+    holdout_labels: list[dict[str, Any]] = []
+    holdout_ids: set[str] = set()
+    if args.holdout_pattern:
+        holdout_labels = [
+            row
+            for row in labels
+            if any(fnmatch.fnmatch(str(row["label_file"]), pattern) for pattern in args.holdout_pattern)
+        ]
+        holdout_ids = {str(row["record_id"]) for row in holdout_labels}
+        groups = [",".join(args.holdout_pattern)]
+
     for config in configs:
         all_scores: list[float] = []
         all_truth: list[int] = []
-        for group in groups:
-            test_labels = [row for row in labels if row["label_file"] == group]
-            test_ids = {str(row["record_id"]) for row in test_labels}
-            train_labels = [row for row in labels if str(row["record_id"]) not in test_ids]
+        eval_groups = groups if not args.holdout_pattern else [",".join(args.holdout_pattern)]
+        for group in eval_groups:
+            if args.holdout_pattern:
+                test_labels = holdout_labels
+                test_ids = holdout_ids
+                train_labels = [
+                    row
+                    for row in labels
+                    if str(row["record_id"]) not in holdout_ids
+                    and not any(fnmatch.fnmatch(str(row["label_file"]), pattern) for pattern in args.holdout_pattern)
+                ]
+            else:
+                test_labels = [row for row in labels if row["label_file"] == group]
+                test_ids = {str(row["record_id"]) for row in test_labels}
+                train_labels = [row for row in labels if str(row["record_id"]) not in test_ids]
+
             train_resolved = resolved_labels(train_labels)
 
             train_rows: list[dict[str, Any]] = []
@@ -354,6 +388,8 @@ def main() -> None:
             all_scores.extend(map(float, scores))
             all_truth.extend(test_y)
 
+        if not all_truth:
+            continue
         y_all = np.array(all_truth, dtype=np.int64)
         scores_all = np.array(all_scores, dtype=np.float64)
         selected = best_at_precision(y_all, scores_all, args.precision_floor)
@@ -372,19 +408,7 @@ def main() -> None:
             "positive_labels": int(y_all.sum()),
         }
         evaluated.append(result)
-        if best is None or (
-            float(result["precision"]) >= args.precision_floor
-            and (
-                float(result["recall"]),
-                float(result["precision"]),
-                -float(result["wake_rate"]),
-            )
-            > (
-                float(best["recall"]),
-                float(best["precision"]),
-                -float(best["wake_rate"]),
-            )
-        ):
+        if best is None or result_sort_key(result, args.precision_floor) > result_sort_key(best, args.precision_floor):
             best = result
         print(json.dumps({"candidate": result["name"], "precision": result["precision"], "recall": result["recall"], "threshold": result["threshold"]}, sort_keys=True), flush=True)
 
@@ -392,7 +416,18 @@ def main() -> None:
         raise SystemExit("No candidate evaluated")
 
     final_config = best["config"]
-    final_labels = resolved_labels(labels)
+    if args.holdout_pattern and not args.export_all_labels:
+        export_label_rows = [
+            row
+            for row in labels
+            if str(row["record_id"]) not in holdout_ids
+            and not any(fnmatch.fnmatch(str(row["label_file"]), pattern) for pattern in args.holdout_pattern)
+        ]
+        export_includes_holdout = False
+    else:
+        export_label_rows = labels
+        export_includes_holdout = True
+    final_labels = resolved_labels(export_label_rows)
     final_rows: list[dict[str, Any]] = []
     final_y: list[int] = []
     for record_id, should_wake in final_labels.items():
@@ -417,6 +452,8 @@ def main() -> None:
         "fn": best["fn"],
         "tn": best["tn"],
         "gold_train_rows": len(final_rows) - len(aux_rows_all),
+        "export_includes_holdout": export_includes_holdout,
+        "export_holdout_patterns": args.holdout_pattern,
         "aux_train_rows": len(aux_rows_all),
         "aux_weight": args.aux_weight,
         "min_aux_confidence": args.min_aux_confidence,
@@ -426,15 +463,12 @@ def main() -> None:
 
     ranked = sorted(
         evaluated,
-        key=lambda row: (
-            float(row["precision"]) >= args.precision_floor,
-            float(row["recall"]),
-            float(row["precision"]),
-            -float(row["wake_rate"]),
-        ),
+        key=lambda row: result_sort_key(row, args.precision_floor),
         reverse=True,
     )
     lines = ["# Intent Classifier V2 Grid Report", ""]
+    if args.holdout_pattern:
+        lines.append(f"Holdout patterns: {', '.join(args.holdout_pattern)}")
     lines.append(f"Gold label rows: {len(labels)}")
     lines.append(f"Gold unique ids: {len(gold_ids)}")
     lines.append(f"Auxiliary train rows: {len(aux_rows_all)}")

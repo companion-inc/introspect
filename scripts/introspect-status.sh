@@ -63,7 +63,16 @@ runner = value("INTROSPECT_REFLECTOR_RUNNER", "default")
 claude = model(value("INTROSPECT_REFLECTOR_CLAUDE_MODEL"))
 fallback = model(value("INTROSPECT_REFLECTOR_CLAUDE_FALLBACK_MODEL"))
 codex = model(value("INTROSPECT_REFLECTOR_CODEX_MODEL"))
-print(f"runner={runner} claude_model={claude} claude_fallback={fallback} codex_model={codex}")
+shadow = value("INTROSPECT_WAKE_SHADOW_MODELS")
+shadow_count = len([item for item in shadow.split(",") if item.strip()])
+sensitivity = value("INTROSPECT_WAKE_SENSITIVITY", "balanced")
+threshold = value("INTROSPECT_WAKE_THRESHOLD")
+threshold_text = threshold.strip() if threshold.strip() else "model"
+print(
+    f"runner={runner} claude_model={claude} claude_fallback={fallback} "
+    f"codex_model={codex} sensitivity={sensitivity} threshold={threshold_text} "
+    f"shadow_models={shadow_count}"
+)
 PY
 }
 
@@ -239,6 +248,40 @@ for line in (feedback / "events.jsonl").read_text().splitlines():
 
 triggered = [event for event in events if event.get("triggered")]
 print(f"events: {len(events)} total, {len(triggered)} triggered")
+classifier_events = [
+    event
+    for event in events
+    if isinstance(event.get("classifier"), dict) and "score" in event["classifier"]
+]
+sensitivities = sorted(
+    {
+        str(event["classifier"].get("wake_sensitivity"))
+        for event in classifier_events
+        if event["classifier"].get("wake_sensitivity")
+    }
+)
+shadow_events = [
+    event
+    for event in classifier_events
+    if event["classifier"].get("alternates")
+]
+shadow_models = sorted(
+    {
+        str(alternate.get("name"))
+        for event in shadow_events
+        for alternate in event["classifier"].get("alternates", [])
+        if alternate.get("name")
+    }
+)
+shadow_backfilled = sum(1 for event in shadow_events if event["classifier"].get("alternates_backfilled_at"))
+print(
+    "classifier: "
+    f"{len(classifier_events)} scored, "
+    f"{len(shadow_events)} shadow-scored, "
+    f"{shadow_backfilled} backfilled, "
+    f"{len(shadow_models)} candidate model(s), "
+    f"sensitivities={','.join(sensitivities) if sensitivities else 'unknown'}"
+)
 if events:
     print(f"latest event: {events[-1].get('ts')} triggered={events[-1].get('triggered')}")
 if triggered:

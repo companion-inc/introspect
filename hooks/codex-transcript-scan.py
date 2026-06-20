@@ -253,13 +253,8 @@ def scan_file(
             except Exception as exc:
                 classifier = {"error": f"{type(exc).__name__}: {str(exc)[:160]}"}
         classifier_available = bool(classifier and "score" in classifier)
-        word_fallback_enabled = os.environ.get("INTROSPECT_TRIGGER_WORD_FALLBACK", "0") == "1"
-        triggered = bool(classifier.get("triggered")) if classifier_available else (
-            bool(matches) and word_fallback_enabled
-        )
-        wake_reason = "classifier" if classifier_available else (
-            "trigger_word_fallback" if word_fallback_enabled else "classifier_unavailable"
-        )
+        triggered = bool(classifier.get("triggered")) if classifier_available else False
+        wake_reason = "classifier" if classifier_available else "classifier_unavailable"
         event = {
             "event_id": key,
             "ts": parsed_ts.isoformat(timespec="seconds"),
