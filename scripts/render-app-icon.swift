@@ -1,26 +1,26 @@
 #!/usr/bin/env swift
 // Renders the Introspect app icon master PNG (1024x1024).
-// Usage: swift scripts/render-app-icon.swift <output.png>
+// Abstract mark: two concentric arcs spiralling inward to a focal dot —
+// "introspection": reflection turning inward, signals distilled to a point.
+// Usage: swiftc -O render-app-icon.swift && ./render-app-icon <output.png>
 
 import AppKit
 
 let outputPath = CommandLine.arguments.count > 1 ? CommandLine.arguments[1] : "AppIcon-1024.png"
 let canvas: CGFloat = 1024
+let cx: CGFloat = 512, cy: CGFloat = 512
+
+func hex(_ h: Int, _ a: CGFloat = 1) -> NSColor {
+    NSColor(srgbRed: CGFloat((h >> 16) & 0xFF) / 255,
+            green: CGFloat((h >> 8) & 0xFF) / 255,
+            blue: CGFloat(h & 0xFF) / 255, alpha: a)
+}
 
 guard let rep = NSBitmapImageRep(
-    bitmapDataPlanes: nil,
-    pixelsWide: Int(canvas),
-    pixelsHigh: Int(canvas),
-    bitsPerSample: 8,
-    samplesPerPixel: 4,
-    hasAlpha: true,
-    isPlanar: false,
-    colorSpaceName: .deviceRGB,
-    bytesPerRow: 0,
-    bitsPerPixel: 0
-) else {
-    fatalError("Could not create bitmap")
-}
+    bitmapDataPlanes: nil, pixelsWide: Int(canvas), pixelsHigh: Int(canvas),
+    bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
+    colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0
+) else { fatalError("Could not create bitmap") }
 
 NSGraphicsContext.saveGraphicsState()
 NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: rep)
@@ -29,61 +29,50 @@ NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: rep)
 let inset: CGFloat = 100
 let squircle = NSBezierPath(
     roundedRect: NSRect(x: inset, y: inset, width: canvas - 2 * inset, height: canvas - 2 * inset),
-    xRadius: 185,
-    yRadius: 185
+    xRadius: 185, yRadius: 185
 )
 
-// Background: the app's teal accent as a vertical gradient, light at the top.
-let topColor = NSColor(calibratedRed: 0.30, green: 0.64, blue: 0.76, alpha: 1)
-let bottomColor = NSColor(calibratedRed: 0.10, green: 0.30, blue: 0.40, alpha: 1)
-NSGradient(starting: topColor, ending: bottomColor)?.draw(in: squircle, angle: -90)
+// Background: the app's indigo accent (#5E6AD2) as a vertical gradient, lighter at the top.
+NSGradient(starting: hex(0x7C86E8), ending: hex(0x434FB0))?.draw(in: squircle, angle: -90)
 
-// Subtle top inner highlight so the surface reads as glass, not flat paint.
+// Glassy top inner highlight so the surface reads as glass, not flat paint.
 squircle.addClip()
-let highlight = NSGradient(
-    starting: NSColor.white.withAlphaComponent(0.18),
+NSGradient(
+    starting: NSColor.white.withAlphaComponent(0.16),
     ending: NSColor.white.withAlphaComponent(0.0)
-)
-highlight?.draw(
-    in: NSRect(x: inset, y: canvas - inset - 260, width: canvas - 2 * inset, height: 260),
-    angle: -90
-)
+)?.draw(in: NSRect(x: inset, y: canvas - inset - 300, width: canvas - 2 * inset, height: 300), angle: -90)
 
-// Glyph: a simple brain mark in white.
-let symbolConfig = NSImage.SymbolConfiguration(pointSize: 430, weight: .medium)
-guard let symbol = NSImage(
-    systemSymbolName: "brain",
-    accessibilityDescription: nil
-)?.withSymbolConfiguration(symbolConfig) else {
-    fatalError("Could not load SF Symbol")
+// Mark drawn into its own layer so it casts a single clean shadow.
+let mark = NSImage(size: NSSize(width: canvas, height: canvas))
+mark.lockFocus()
+
+func arc(radius r: CGFloat, width lw: CGFloat, gapCenter: CGFloat, gapHalf: CGFloat, color: NSColor) {
+    let p = NSBezierPath()
+    p.lineWidth = lw
+    p.lineCapStyle = .round
+    p.appendArc(withCenter: NSPoint(x: cx, y: cy), radius: r,
+                startAngle: gapCenter + gapHalf,
+                endAngle: gapCenter - gapHalf + 360,
+                clockwise: false)
+    color.setStroke()
+    p.stroke()
 }
 
-let tinted = NSImage(size: symbol.size)
-tinted.lockFocus()
-symbol.draw(in: NSRect(origin: .zero, size: symbol.size))
-NSColor.white.set()
-NSRect(origin: .zero, size: symbol.size).fill(using: .sourceAtop)
-tinted.unlockFocus()
+// Two broken rings with offset gaps create an inward spiral; the inner ring is
+// brighter so the eye is pulled toward the focal dot at the centre.
+arc(radius: 244, width: 60, gapCenter: 72, gapHalf: 40, color: hex(0xEEF0FF, 0.58))
+arc(radius: 142, width: 60, gapCenter: 132, gapHalf: 50, color: hex(0xEEF0FF, 0.90))
+hex(0xFFFFFF).setFill()
+NSBezierPath(ovalIn: NSRect(x: cx - 48, y: cy - 48, width: 96, height: 96)).fill()
+
+mark.unlockFocus()
 
 let shadow = NSShadow()
-shadow.shadowColor = NSColor.black.withAlphaComponent(0.30)
-shadow.shadowBlurRadius = 18
-shadow.shadowOffset = NSSize(width: 0, height: -10)
+shadow.shadowColor = NSColor.black.withAlphaComponent(0.26)
+shadow.shadowBlurRadius = 22
+shadow.shadowOffset = NSSize(width: 0, height: -12)
 shadow.set()
-
-let glyphHeight: CGFloat = 470
-let glyphWidth = glyphHeight * tinted.size.width / tinted.size.height
-tinted.draw(
-    in: NSRect(
-        x: (canvas - glyphWidth) / 2,
-        y: (canvas - glyphHeight) / 2,
-        width: glyphWidth,
-        height: glyphHeight
-    ),
-    from: .zero,
-    operation: .sourceOver,
-    fraction: 1.0
-)
+mark.draw(in: NSRect(x: 0, y: 0, width: canvas, height: canvas), from: .zero, operation: .sourceOver, fraction: 1.0)
 
 NSGraphicsContext.restoreGraphicsState()
 

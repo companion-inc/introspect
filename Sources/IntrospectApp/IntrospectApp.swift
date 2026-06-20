@@ -723,6 +723,19 @@ struct SidebarHealthFooter: View {
 struct OverviewSection: View {
     @ObservedObject var model: IntrospectModel
 
+    private var previewEvents: [TriggerEventRecord] {
+        Array(model.recentClassifierEvents.prefix(6))
+    }
+
+    private var trendYMax: Double {
+        let maxScore = model.classifierScoreTrend.map(\.averageScore).max() ?? 0.3
+        return max(0.2, (maxScore * 1.3 * 10).rounded(.up) / 10)
+    }
+
+    private var trendDayStride: Int {
+        max(1, Int((Double(model.classifierScoreTrend.count) / 8).rounded(.up)))
+    }
+
     var body: some View {
         PageHeader(
             title: "Overview",
@@ -730,6 +743,99 @@ struct OverviewSection: View {
         )
 
         HealthBanner(model: model)
+
+        LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 12), count: 5), spacing: 12) {
+            SignalMetricCard(title: "Prompt events", value: "\(model.signalPromptCount)", detail: "\(model.signalClassifierScoredCount) scored")
+            SignalMetricCard(title: "Wake rate", value: model.signalTriggerRateText, detail: "\(model.signalTriggeredCount) woke")
+            SignalMetricCard(title: "Review-only", value: model.signalReviewOnlyRateText, detail: "\(model.signalReviewOnlyCount) held for audit")
+            SignalMetricCard(title: "Reflector runs", value: "\(model.triggerRuns.count)", detail: "\(model.signalChangedRunCount) changed")
+            SignalMetricCard(title: "Avg score", value: model.signalAverageClassifierScoreText, detail: "classifier mean")
+        }
+
+        Card("Average wake score per day") {
+            if model.classifierScoreTrend.count < 2 {
+                Text("Not enough history yet — a daily trend appears after two days of scored prompts.")
+                    .foregroundStyle(.secondary)
+            } else {
+                VStack(alignment: .leading, spacing: 14) {
+                    ScoreTrendBadge(delta: model.classifierScoreTrendDelta, days: model.classifierScoreTrend.count)
+
+                    Chart(model.classifierScoreTrend) { point in
+                        AreaMark(
+                            x: .value("Day", point.day),
+                            y: .value("Avg score", point.averageScore)
+                        )
+                        .interpolationMethod(.monotone)
+                        .foregroundStyle(
+                            .linearGradient(
+                                colors: [IntrospectTheme.accent.opacity(0.22), IntrospectTheme.accent.opacity(0.01)],
+                                startPoint: .top, endPoint: .bottom
+                            )
+                        )
+
+                        LineMark(
+                            x: .value("Day", point.day),
+                            y: .value("Avg score", point.averageScore)
+                        )
+                        .interpolationMethod(.monotone)
+                        .foregroundStyle(IntrospectTheme.accent)
+                        .lineStyle(StrokeStyle(lineWidth: 2.5))
+
+                        PointMark(
+                            x: .value("Day", point.day),
+                            y: .value("Avg score", point.averageScore)
+                        )
+                        .foregroundStyle(IntrospectTheme.accent)
+                        .symbolSize(34)
+                    }
+                    .chartYScale(domain: 0...trendYMax)
+                    .chartXAxis {
+                        AxisMarks(values: .stride(by: .day, count: trendDayStride)) { _ in
+                            AxisGridLine().foregroundStyle(IntrospectTheme.border)
+                            AxisValueLabel(format: .dateTime.month(.abbreviated).day())
+                                .font(.caption2).foregroundStyle(IntrospectTheme.inkTertiary)
+                        }
+                    }
+                    .chartYAxis {
+                        AxisMarks(position: .leading) {
+                            AxisGridLine().foregroundStyle(IntrospectTheme.border)
+                            AxisValueLabel(format: FloatingPointFormatStyle<Double>().precision(.fractionLength(2)))
+                                .font(.caption2).foregroundStyle(IntrospectTheme.inkTertiary)
+                        }
+                    }
+                    .frame(height: 220)
+                }
+            }
+        }
+
+        Card("Recent activity") {
+            if previewEvents.isEmpty {
+                Text("No scored messages to show yet.")
+                    .foregroundStyle(.secondary)
+            } else {
+                LazyVStack(alignment: .leading, spacing: 0) {
+                    SignalEventHeader()
+                    Divider().overlay(IntrospectTheme.border)
+                    ForEach(previewEvents) { event in
+                        SignalEventRow(event: event)
+                        Divider().overlay(IntrospectTheme.border)
+                    }
+                    Button {
+                        model.selectedSection = .signals
+                    } label: {
+                        HStack(spacing: 5) {
+                            Text("See all decisions in Signals")
+                            Image(systemName: "arrow.right")
+                                .font(.caption2.weight(.semibold))
+                        }
+                        .font(.caption.weight(.medium))
+                        .foregroundStyle(IntrospectTheme.accent)
+                    }
+                    .buttonStyle(.plain)
+                    .padding(.top, 10)
+                }
+            }
+        }
 
         Card("Prompt links") {
             HStack(spacing: 8) {
@@ -794,6 +900,51 @@ struct OverviewSection: View {
     private func detectionState(_ installed: Bool) -> HealthState {
         if model.mode == .off { return .off }
         return installed ? .ok : .warning
+    }
+}
+
+struct ScoreTrendBadge: View {
+    let delta: Double?
+    let days: Int
+
+    private var improving: Bool { (delta ?? 0) < -0.003 }
+    private var worsening: Bool { (delta ?? 0) > 0.003 }
+
+    private var color: Color {
+        improving ? IntrospectTheme.success : (worsening ? IntrospectTheme.warning : IntrospectTheme.inkSecondary)
+    }
+    private var symbol: String {
+        improving ? "arrow.down.right" : (worsening ? "arrow.up.right" : "arrow.right")
+    }
+    private var headline: String {
+        improving ? "Trending down" : (worsening ? "Trending up" : "Holding steady")
+    }
+    private var detail: String {
+        if improving { return "agent needs fewer corrections — instructions improving" }
+        if worsening { return "more corrections lately — worth a look" }
+        return "no clear change yet"
+    }
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Image(systemName: symbol)
+                .font(.caption.weight(.bold))
+                .foregroundStyle(color)
+            Text(headline)
+                .font(.callout.weight(.semibold))
+                .foregroundStyle(color)
+            Text(detail)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .minimumScaleFactor(0.8)
+            Spacer(minLength: 0)
+            if let delta {
+                Text(String(format: "%+.3f over %d days", delta, days))
+                    .font(.caption2.monospacedDigit())
+                    .foregroundStyle(.tertiary)
+            }
+        }
     }
 }
 
@@ -905,6 +1056,37 @@ struct HooksSection: View {
             }
         }
 
+        Card("Wake sensitivity") {
+            Picker("Wake sensitivity", selection: wakeSensitivity) {
+                ForEach(WakeSensitivity.allCases) { sensitivity in
+                    Text(sensitivity.title).tag(sensitivity)
+                }
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+
+            Text(model.wakeSensitivityDetail)
+                .font(.callout)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            if model.wakeSensitivity == .custom {
+                Divider()
+                HStack(spacing: 12) {
+                    Stepper(value: $model.wakeCustomThreshold, in: 0.05...0.95, step: 0.01) {
+                        Text("Threshold \(model.wakeCustomThresholdText)")
+                            .font(.system(.body, design: .monospaced))
+                    }
+
+                    Button("Apply", systemImage: "checkmark.circle") {
+                        Task { await model.saveWakeSensitivitySettings() }
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(model.isApplyingConfiguration)
+                }
+            }
+        }
+
         Card("Reflector agent") {
             Picker("Reflector agent", selection: reflectorRunner) {
                 ForEach(ReflectorRunner.allCases) { runner in
@@ -981,6 +1163,14 @@ struct HooksSection: View {
             model.reflectorRunner
         } set: { runner in
             Task { await model.setReflectorRunner(runner) }
+        }
+    }
+
+    private var wakeSensitivity: Binding<WakeSensitivity> {
+        Binding {
+            model.wakeSensitivity
+        } set: { sensitivity in
+            Task { await model.setWakeSensitivity(sensitivity) }
         }
     }
 
@@ -1169,19 +1359,28 @@ struct SignalsSection: View {
         Array(model.wordStats.prefix(12))
     }
 
+    private var topReasons: [TriggerReasonAnalyticsRecord] {
+        Array(model.reasonStats.prefix(10))
+    }
+
+    private var topClassifierEvidence: [ClassifierEvidenceAnalyticsRecord] {
+        let words = model.classifierEvidenceStats.filter { $0.kind == "word" }
+        return Array((words.isEmpty ? model.classifierEvidenceStats : words).prefix(12))
+    }
+
+    private var metricModelChecks: [ClassifierModelCheckRecord] {
+        model.classifierModelChecks.filter { $0.precision != nil && $0.recall != nil }
+    }
+
+    private var shadowStats: [ClassifierShadowStatRecord] {
+        Array(model.classifierShadowStats.prefix(8))
+    }
+
     var body: some View {
         PageHeader(
             title: "Signals",
-            subtitle: "Classifier wake scores, review-only events, run outcomes, version rates, and optional review-term metadata."
+            subtitle: "Classifier wake scores, evidence tokens, message-level decisions, run outcomes, version rates, and optional review-term metadata."
         )
-
-        LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 12), count: 4), spacing: 12) {
-            SignalMetricCard(title: "Prompt events", value: "\(model.signalPromptCount)", detail: "\(model.signalClassifierScoredCount) scored")
-            SignalMetricCard(title: "Wake rate", value: model.signalTriggerRateText, detail: "\(model.signalTriggeredCount) woke")
-            SignalMetricCard(title: "Review-only", value: model.signalReviewOnlyRateText, detail: "\(model.signalReviewOnlyCount) held for audit")
-            SignalMetricCard(title: "Reflector runs", value: "\(model.triggerRuns.count)", detail: "\(model.signalChangedRunCount) changed")
-            SignalMetricCard(title: "Avg score", value: model.signalAverageClassifierScoreText, detail: "classifier mean")
-        }
 
         Card("Classifier score distribution") {
             if model.classifierScoreBands.allSatisfy({ $0.promptCount == 0 }) {
@@ -1230,6 +1429,182 @@ struct SignalsSection: View {
             }
         }
 
+        Card("Candidate impact") {
+            if shadowStats.isEmpty {
+                Text("No shadow-scored candidate models have been recorded.")
+                    .foregroundStyle(.secondary)
+            } else {
+                VStack(alignment: .leading, spacing: 14) {
+                    Chart(shadowStats) { stat in
+                        BarMark(
+                            x: .value("Model", stat.name),
+                            y: .value("Messages", stat.addedWakeCount)
+                        )
+                        .foregroundStyle(by: .value("Impact", "Added wakes"))
+
+                        BarMark(
+                            x: .value("Model", stat.name),
+                            y: .value("Messages", stat.removedWakeCount)
+                        )
+                        .foregroundStyle(by: .value("Impact", "Removed wakes"))
+                    }
+                    .chartForegroundStyleScale([
+                        "Added wakes": IntrospectTheme.warning,
+                        "Removed wakes": IntrospectTheme.accent
+                    ])
+                    .chartXAxis {
+                        AxisMarks(position: .bottom) {
+                            AxisValueLabel()
+                                .font(.caption2)
+                                .foregroundStyle(IntrospectTheme.inkTertiary)
+                        }
+                    }
+                    .chartYAxis {
+                        AxisMarks(position: .leading) {
+                            AxisGridLine().foregroundStyle(IntrospectTheme.border)
+                            AxisValueLabel().font(.caption2).foregroundStyle(IntrospectTheme.inkTertiary)
+                        }
+                    }
+                    .frame(height: 180)
+
+                    Divider().overlay(IntrospectTheme.border)
+
+                    LazyVStack(alignment: .leading, spacing: 0) {
+                        CandidateImpactHeader()
+                        Divider().overlay(IntrospectTheme.border)
+                        ForEach(shadowStats) { stat in
+                            CandidateImpactRow(stat: stat)
+                            Divider().overlay(IntrospectTheme.border)
+                        }
+                    }
+                }
+            }
+        }
+
+        Card("Classifier causes") {
+            if topReasons.isEmpty {
+                Text("No classifier reasons have been recorded.")
+                    .foregroundStyle(.secondary)
+            } else {
+                VStack(alignment: .leading, spacing: 14) {
+                    Chart(topReasons) { stat in
+                        BarMark(
+                            x: .value("Events", stat.loggedOnlyCount),
+                            y: .value("Cause", stat.reason),
+                            height: .fixed(16)
+                        )
+                        .foregroundStyle(by: .value("Decision", "Logged"))
+
+                        BarMark(
+                            x: .value("Events", stat.reviewOnlyCount),
+                            y: .value("Cause", stat.reason),
+                            height: .fixed(16)
+                        )
+                        .foregroundStyle(by: .value("Decision", "Review-only"))
+
+                        BarMark(
+                            x: .value("Events", stat.wakeCount),
+                            y: .value("Cause", stat.reason),
+                            height: .fixed(16)
+                        )
+                        .foregroundStyle(by: .value("Decision", "Woke"))
+                    }
+                    .chartForegroundStyleScale([
+                        "Logged": IntrospectTheme.inkTertiary,
+                        "Review-only": IntrospectTheme.warning,
+                        "Woke": IntrospectTheme.danger
+                    ])
+                    .chartXAxis {
+                        AxisMarks(position: .bottom) {
+                            AxisGridLine().foregroundStyle(IntrospectTheme.border)
+                            AxisValueLabel().font(.caption2).foregroundStyle(IntrospectTheme.inkTertiary)
+                        }
+                    }
+                    .chartYAxis {
+                        AxisMarks(position: .leading) {
+                            AxisValueLabel()
+                                .font(.system(.caption, design: .monospaced))
+                                .foregroundStyle(IntrospectTheme.inkSecondary)
+                        }
+                    }
+                    .frame(height: CGFloat(topReasons.count * 32 + 28))
+
+                    Divider().overlay(IntrospectTheme.border)
+
+                    LazyVStack(alignment: .leading, spacing: 0) {
+                        SignalReasonHeader()
+                        Divider().overlay(IntrospectTheme.border)
+                        ForEach(topReasons) { stat in
+                            SignalReasonRow(stat: stat)
+                            Divider().overlay(IntrospectTheme.border)
+                        }
+                    }
+                }
+            }
+        }
+
+        Card("Classifier evidence frequency") {
+            if topClassifierEvidence.isEmpty {
+                Text("No classifier feature evidence has been recorded.")
+                    .foregroundStyle(.secondary)
+            } else {
+                VStack(alignment: .leading, spacing: 14) {
+                    Chart(topClassifierEvidence) { stat in
+                        BarMark(
+                            x: .value("Events", stat.loggedOnlyCount),
+                            y: .value("Evidence", stat.feature),
+                            height: .fixed(16)
+                        )
+                        .foregroundStyle(by: .value("Decision", "Logged"))
+
+                        BarMark(
+                            x: .value("Events", stat.reviewOnlyCount),
+                            y: .value("Evidence", stat.feature),
+                            height: .fixed(16)
+                        )
+                        .foregroundStyle(by: .value("Decision", "Review-only"))
+
+                        BarMark(
+                            x: .value("Events", stat.wakeCount),
+                            y: .value("Evidence", stat.feature),
+                            height: .fixed(16)
+                        )
+                        .foregroundStyle(by: .value("Decision", "Woke"))
+                    }
+                    .chartForegroundStyleScale([
+                        "Logged": IntrospectTheme.inkTertiary,
+                        "Review-only": IntrospectTheme.warning,
+                        "Woke": IntrospectTheme.danger
+                    ])
+                    .chartXAxis {
+                        AxisMarks(position: .bottom) {
+                            AxisGridLine().foregroundStyle(IntrospectTheme.border)
+                            AxisValueLabel().font(.caption2).foregroundStyle(IntrospectTheme.inkTertiary)
+                        }
+                    }
+                    .chartYAxis {
+                        AxisMarks(position: .leading) {
+                            AxisValueLabel()
+                                .font(.system(.caption, design: .monospaced))
+                                .foregroundStyle(IntrospectTheme.inkSecondary)
+                        }
+                    }
+                    .frame(height: CGFloat(topClassifierEvidence.count * 32 + 28))
+
+                    Divider().overlay(IntrospectTheme.border)
+
+                    LazyVStack(alignment: .leading, spacing: 0) {
+                        ClassifierEvidenceAnalyticsHeader()
+                        Divider().overlay(IntrospectTheme.border)
+                        ForEach(topClassifierEvidence) { stat in
+                            ClassifierEvidenceAnalyticsRow(stat: stat)
+                            Divider().overlay(IntrospectTheme.border)
+                        }
+                    }
+                }
+            }
+        }
+
         Card("Recent classifier decisions") {
             if model.recentClassifierEvents.isEmpty {
                 Text("No scored messages to show yet.")
@@ -1246,7 +1621,64 @@ struct SignalsSection: View {
             }
         }
 
-        Card("Review term frequency") {
+        Card("Model quality checks") {
+            if model.classifierModelChecks.isEmpty {
+                Text("No model quality checks have been generated.")
+                    .foregroundStyle(.secondary)
+            } else {
+                VStack(alignment: .leading, spacing: 14) {
+                    if !metricModelChecks.isEmpty {
+                        ScrollView(.horizontal, showsIndicators: false) {
+                            Chart(metricModelChecks) { check in
+                                BarMark(
+                                    x: .value("Check", check.shortName),
+                                    y: .value("Score", check.precision ?? 0)
+                                )
+                                .foregroundStyle(by: .value("Metric", "Precision"))
+
+                                BarMark(
+                                    x: .value("Check", check.shortName),
+                                    y: .value("Score", check.recall ?? 0)
+                                )
+                                .foregroundStyle(by: .value("Metric", "Recall"))
+                            }
+                            .chartForegroundStyleScale([
+                                "Precision": IntrospectTheme.success,
+                                "Recall": IntrospectTheme.accent
+                            ])
+                            .chartYScale(domain: 0...1)
+                            .chartXAxis {
+                                AxisMarks(position: .bottom) {
+                                    AxisValueLabel()
+                                        .font(.caption2)
+                                        .foregroundStyle(IntrospectTheme.inkTertiary)
+                                }
+                            }
+                            .chartYAxis {
+                                AxisMarks(position: .leading) {
+                                    AxisGridLine().foregroundStyle(IntrospectTheme.border)
+                                    AxisValueLabel(format: FloatingPointFormatStyle<Double>.Percent().precision(.fractionLength(0)))
+                                        .font(.caption2)
+                                        .foregroundStyle(IntrospectTheme.inkTertiary)
+                                }
+                            }
+                            .frame(width: max(CGFloat(metricModelChecks.count) * 82, 680), height: 220)
+                        }
+                    }
+
+                    Divider().overlay(IntrospectTheme.border)
+
+                    LazyVStack(alignment: .leading, spacing: 0) {
+                        ForEach(model.classifierModelChecks) { check in
+                            ClassifierModelCheckRow(check: check)
+                            Divider().overlay(IntrospectTheme.border)
+                        }
+                    }
+                }
+            }
+        }
+
+        Card("Optional review-term frequency") {
             if topWords.isEmpty {
                 Text("No optional review terms have matched recorded events.")
                     .foregroundStyle(.secondary)
@@ -1290,55 +1722,94 @@ struct SignalsSection: View {
                 Text("No prompt versions have been recorded.")
                     .foregroundStyle(.secondary)
             } else {
-                Chart(recentVersions) { version in
-                    AreaMark(
-                        x: .value("Version", version.shortVersion),
-                        y: .value("Wake rate", version.triggerRate)
-                    )
-                    .interpolationMethod(.monotone)
-                    .foregroundStyle(
-                        .linearGradient(
-                            colors: [IntrospectTheme.accent.opacity(0.22), IntrospectTheme.accent.opacity(0.01)],
-                            startPoint: .top, endPoint: .bottom
+                VStack(alignment: .leading, spacing: 14) {
+                    Chart(recentVersions) { version in
+                        AreaMark(
+                            x: .value("Version", version.shortVersion),
+                            y: .value("Wake rate", version.triggerRate)
                         )
-                    )
+                        .interpolationMethod(.monotone)
+                        .foregroundStyle(
+                            .linearGradient(
+                                colors: [IntrospectTheme.accent.opacity(0.22), IntrospectTheme.accent.opacity(0.01)],
+                                startPoint: .top, endPoint: .bottom
+                            )
+                        )
 
-                    LineMark(
-                        x: .value("Version", version.shortVersion),
-                        y: .value("Wake rate", version.triggerRate)
-                    )
-                    .interpolationMethod(.monotone)
-                    .foregroundStyle(IntrospectTheme.accent)
-                    .lineStyle(StrokeStyle(lineWidth: 2))
+                        LineMark(
+                            x: .value("Version", version.shortVersion),
+                            y: .value("Wake rate", version.triggerRate)
+                        )
+                        .interpolationMethod(.monotone)
+                        .foregroundStyle(IntrospectTheme.accent)
+                        .lineStyle(StrokeStyle(lineWidth: 2))
 
-                    PointMark(
-                        x: .value("Version", version.shortVersion),
-                        y: .value("Wake rate", version.triggerRate)
-                    )
-                    .foregroundStyle(IntrospectTheme.accent)
-                    .symbolSize(26)
-                }
-                .chartYAxis {
-                    AxisMarks(position: .leading) {
-                        AxisGridLine().foregroundStyle(IntrospectTheme.border)
-                        AxisValueLabel(format: FloatingPointFormatStyle<Double>.Percent().precision(.fractionLength(0)))
-                            .font(.caption2).foregroundStyle(IntrospectTheme.inkTertiary)
+                        PointMark(
+                            x: .value("Version", version.shortVersion),
+                            y: .value("Wake rate", version.triggerRate)
+                        )
+                        .foregroundStyle(IntrospectTheme.accent)
+                        .symbolSize(26)
                     }
-                }
-                .chartXAxis {
-                    AxisMarks { _ in
-                        AxisValueLabel()
-                            .font(.system(size: 9, design: .monospaced))
-                            .foregroundStyle(IntrospectTheme.inkTertiary)
+                    .chartYAxis {
+                        AxisMarks(position: .leading) {
+                            AxisGridLine().foregroundStyle(IntrospectTheme.border)
+                            AxisValueLabel(format: FloatingPointFormatStyle<Double>.Percent().precision(.fractionLength(0)))
+                                .font(.caption2).foregroundStyle(IntrospectTheme.inkTertiary)
+                        }
                     }
-                }
-                .frame(height: 220)
+                    .chartXAxis {
+                        AxisMarks { _ in
+                            AxisValueLabel()
+                                .font(.system(size: 9, design: .monospaced))
+                                .foregroundStyle(IntrospectTheme.inkTertiary)
+                        }
+                    }
+                    .frame(height: 180)
 
-                Divider().overlay(IntrospectTheme.border)
+                    Chart(recentVersions) { version in
+                        BarMark(
+                            x: .value("Version", version.shortVersion),
+                            y: .value("Runs", version.runCount)
+                        )
+                        .foregroundStyle(by: .value("Run outcome", "All runs"))
 
-                LazyVStack(alignment: .leading, spacing: 8) {
-                    ForEach(recentVersions.reversed()) { version in
-                        VersionSignalRow(version: version)
+                        BarMark(
+                            x: .value("Version", version.shortVersion),
+                            y: .value("Runs", version.changedRunCount)
+                        )
+                        .foregroundStyle(by: .value("Run outcome", "Changed"))
+                    }
+                    .chartForegroundStyleScale([
+                        "All runs": IntrospectTheme.inkTertiary.opacity(0.55),
+                        "Changed": IntrospectTheme.warning
+                    ])
+                    .chartXAxis {
+                        AxisMarks { _ in
+                            AxisValueLabel()
+                                .font(.system(size: 9, design: .monospaced))
+                                .foregroundStyle(IntrospectTheme.inkTertiary)
+                        }
+                    }
+                    .chartYAxis {
+                        AxisMarks(position: .leading) {
+                            AxisGridLine().foregroundStyle(IntrospectTheme.border)
+                            AxisValueLabel()
+                                .font(.caption2)
+                                .foregroundStyle(IntrospectTheme.inkTertiary)
+                        }
+                    }
+                    .frame(height: 150)
+
+                    Divider().overlay(IntrospectTheme.border)
+
+                    LazyVStack(alignment: .leading, spacing: 0) {
+                        VersionSignalHeader()
+                        Divider().overlay(IntrospectTheme.border)
+                        ForEach(recentVersions.reversed()) { version in
+                            VersionSignalRow(version: version)
+                            Divider().overlay(IntrospectTheme.border)
+                        }
                     }
                 }
             }
@@ -1410,7 +1881,7 @@ struct SignalsSection: View {
             }
         }
 
-        Card("Review terms and outcomes") {
+        Card("Optional review terms and outcomes") {
             if model.wordStats.isEmpty {
                 Text("No review terms to show yet. Classifier score still controls wake decisions.")
                     .foregroundStyle(.secondary)
@@ -1500,6 +1971,111 @@ struct ClassifierVariantRow: View {
     }
 }
 
+struct ClassifierModelCheckRow: View {
+    let check: ClassifierModelCheckRecord
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 12) {
+            StatusDot(state: check.state)
+                .padding(.top, 5)
+
+            VStack(alignment: .leading, spacing: 5) {
+                HStack(spacing: 8) {
+                    Text(check.name)
+                        .font(.caption.weight(.semibold))
+                        .lineLimit(1)
+                    Text(check.status)
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(check.state.color)
+                        .padding(.horizontal, 7)
+                        .padding(.vertical, 3)
+                        .background(check.state.color.opacity(0.10))
+                        .clipShape(Capsule())
+                }
+                Text(check.detail)
+                    .font(.caption)
+                    .foregroundStyle(IntrospectTheme.inkSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+
+            VStack(alignment: .trailing, spacing: 4) {
+                Text(check.outcomeText)
+                    .font(.caption.monospacedDigit().weight(.semibold))
+                Text(check.thresholdSummary)
+                    .font(.caption2.monospacedDigit())
+                    .foregroundStyle(IntrospectTheme.inkTertiary)
+            }
+            .frame(width: 126, alignment: .trailing)
+
+            VStack(alignment: .trailing, spacing: 4) {
+                Text(check.countSummary)
+                    .font(.caption.monospacedDigit())
+                Text(check.sampleSummary)
+                    .font(.caption2.monospacedDigit())
+                    .foregroundStyle(IntrospectTheme.inkTertiary)
+            }
+            .frame(width: 116, alignment: .trailing)
+        }
+        .padding(.vertical, 9)
+    }
+}
+
+struct CandidateImpactHeader: View {
+    var body: some View {
+        HStack(spacing: 10) {
+            Text("Candidate")
+                .frame(maxWidth: .infinity, alignment: .leading)
+            Text("Would wake")
+                .frame(width: 82, alignment: .trailing)
+            Text("Added")
+                .frame(width: 56, alignment: .trailing)
+            Text("Removed")
+                .frame(width: 66, alignment: .trailing)
+            Text("Avg score")
+                .frame(width: 72, alignment: .trailing)
+        }
+        .font(.caption.weight(.semibold))
+        .foregroundStyle(IntrospectTheme.inkTertiary)
+        .padding(.vertical, 6)
+    }
+}
+
+struct CandidateImpactRow: View {
+    let stat: ClassifierShadowStatRecord
+
+    var body: some View {
+        HStack(spacing: 10) {
+            VStack(alignment: .leading, spacing: 3) {
+                Text(stat.name)
+                    .font(.caption.weight(.semibold))
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                Text(stat.sampleSummary)
+                    .font(.caption2.monospacedDigit())
+                    .foregroundStyle(IntrospectTheme.inkTertiary)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+
+            Text(stat.candidateWakeText)
+                .font(.caption.monospacedDigit())
+                .frame(width: 82, alignment: .trailing)
+            Text("\(stat.addedWakeCount)")
+                .font(.caption.monospacedDigit().weight(.semibold))
+                .foregroundStyle(stat.addedWakeCount > 0 ? IntrospectTheme.warning : IntrospectTheme.inkSecondary)
+                .frame(width: 56, alignment: .trailing)
+            Text("\(stat.removedWakeCount)")
+                .font(.caption.monospacedDigit().weight(.semibold))
+                .foregroundStyle(stat.removedWakeCount > 0 ? IntrospectTheme.accent : IntrospectTheme.inkSecondary)
+                .frame(width: 66, alignment: .trailing)
+            Text(stat.averageScoreText)
+                .font(.caption.monospacedDigit())
+                .frame(width: 72, alignment: .trailing)
+        }
+        .padding(.vertical, 8)
+    }
+}
+
 struct SignalEventHeader: View {
     var body: some View {
         HStack(spacing: 10) {
@@ -1557,6 +2133,9 @@ struct SignalEventRow: View {
                     .fixedSize(horizontal: false, vertical: true)
                     .textSelection(.enabled)
 
+                ClassifierEvidenceRow(explanations: event.classifierExplanations)
+                ClassifierShadowPills(alternates: event.classifierAlternates)
+
                 if !event.messageLocator.isEmpty || !event.eventID.isEmpty {
                     Text(event.messageLocator.isEmpty ? event.eventID : event.messageLocator)
                         .font(.system(.caption2, design: .monospaced))
@@ -1569,6 +2148,234 @@ struct SignalEventRow: View {
             .frame(maxWidth: .infinity, alignment: .leading)
         }
         .padding(.vertical, 8)
+    }
+}
+
+struct ClassifierEvidenceRow: View {
+    let explanations: [ClassifierExplanationRecord]
+
+    var body: some View {
+        if !explanations.isEmpty {
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 6) {
+                    ForEach(explanations.prefix(6)) { explanation in
+                        ClassifierEvidencePill(explanation: explanation)
+                    }
+                }
+                .padding(.bottom, 1)
+            }
+            .accessibilityLabel("Classifier evidence: \(explanations.prefix(6).map(\.feature).joined(separator: ", "))")
+        }
+    }
+}
+
+struct ClassifierShadowPills: View {
+    let alternates: [ClassifierAlternateRecord]
+
+    var body: some View {
+        if !alternates.isEmpty {
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 6) {
+                    ForEach(alternates.prefix(6)) { alternate in
+                        HStack(spacing: 5) {
+                            Text(alternate.name)
+                                .lineLimit(1)
+                                .truncationMode(.middle)
+                            Text(alternate.scoreText)
+                            Text(alternate.decisionText)
+                                .foregroundStyle(alternate.decisionColor)
+                        }
+                        .font(.caption2.monospaced())
+                        .padding(.horizontal, 7)
+                        .padding(.vertical, 3)
+                        .background(IntrospectTheme.inkTertiary.opacity(0.10))
+                        .clipShape(Capsule())
+                    }
+                }
+                .padding(.bottom, 1)
+            }
+            .accessibilityLabel("Shadow model scores: \(alternates.prefix(6).map { "\($0.name) \($0.scoreText)" }.joined(separator: ", "))")
+        }
+    }
+}
+
+struct ClassifierEvidencePill: View {
+    let explanation: ClassifierExplanationRecord
+
+    var body: some View {
+        HStack(spacing: 4) {
+            Text(explanation.feature)
+                .lineLimit(1)
+                .truncationMode(.middle)
+            Text(explanation.kindLabel)
+                .foregroundStyle(IntrospectTheme.inkTertiary)
+            Text(explanation.contributionText)
+                .foregroundStyle(IntrospectTheme.inkTertiary)
+        }
+        .font(.caption2.monospaced())
+        .padding(.horizontal, 7)
+        .padding(.vertical, 3)
+        .background(IntrospectTheme.accent.opacity(0.08))
+        .overlay(
+            RoundedRectangle(cornerRadius: 6)
+                .stroke(IntrospectTheme.border, lineWidth: 1)
+        )
+        .clipShape(RoundedRectangle(cornerRadius: 6))
+    }
+}
+
+struct ClassifierEvidenceSummaryPill: View {
+    let stat: ClassifierEvidenceAnalyticsRecord
+
+    var body: some View {
+        HStack(spacing: 5) {
+            Text(stat.feature)
+                .lineLimit(1)
+                .truncationMode(.middle)
+            Text(stat.kindLabel)
+                .foregroundStyle(IntrospectTheme.inkTertiary)
+            Text("\(stat.eventCount)x")
+                .foregroundStyle(IntrospectTheme.inkTertiary)
+            if stat.wakeCount > 0 {
+                Text("\(stat.wakeCount) woke")
+                    .foregroundStyle(IntrospectTheme.danger)
+            }
+            Text(stat.averageContributionText)
+                .foregroundStyle(IntrospectTheme.inkTertiary)
+        }
+        .font(.caption2.monospaced())
+        .padding(.horizontal, 7)
+        .padding(.vertical, 3)
+        .background(IntrospectTheme.accent.opacity(0.08))
+        .overlay(
+            RoundedRectangle(cornerRadius: 6)
+                .stroke(IntrospectTheme.border, lineWidth: 1)
+        )
+        .clipShape(RoundedRectangle(cornerRadius: 6))
+    }
+}
+
+struct SignalReasonHeader: View {
+    var body: some View {
+        HStack(spacing: 12) {
+            Text("Cause")
+                .frame(maxWidth: .infinity, alignment: .leading)
+            Text("Events")
+                .frame(width: 58, alignment: .trailing)
+            Text("Woke")
+                .frame(width: 54, alignment: .trailing)
+            Text("Review")
+                .frame(width: 58, alignment: .trailing)
+            Text("Changed")
+                .frame(width: 70, alignment: .trailing)
+            Text("Last seen")
+                .frame(width: 100, alignment: .leading)
+        }
+        .font(.caption.weight(.semibold))
+        .foregroundStyle(IntrospectTheme.inkTertiary)
+        .padding(.vertical, 6)
+    }
+}
+
+struct SignalReasonRow: View {
+    let stat: TriggerReasonAnalyticsRecord
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Text(stat.reason)
+                .font(.caption)
+                .lineLimit(1)
+                .truncationMode(.middle)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            Text("\(stat.eventCount)")
+                .font(.caption.monospacedDigit())
+                .frame(width: 58, alignment: .trailing)
+            Text("\(stat.wakeCount)")
+                .font(.caption.monospacedDigit().weight(.semibold))
+                .foregroundStyle(stat.wakeCount > 0 ? IntrospectTheme.danger : IntrospectTheme.inkSecondary)
+                .frame(width: 54, alignment: .trailing)
+            Text("\(stat.reviewOnlyCount)")
+                .font(.caption.monospacedDigit())
+                .foregroundStyle(stat.reviewOnlyCount > 0 ? IntrospectTheme.warning : IntrospectTheme.inkSecondary)
+                .frame(width: 58, alignment: .trailing)
+            Text("\(stat.changedRunCount)")
+                .font(.caption.monospacedDigit())
+                .frame(width: 70, alignment: .trailing)
+            Text(stat.lastSeenText)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .frame(width: 100, alignment: .leading)
+        }
+        .padding(.vertical, 7)
+    }
+}
+
+struct ClassifierEvidenceAnalyticsHeader: View {
+    var body: some View {
+        HStack(spacing: 12) {
+            Text("Evidence")
+                .frame(maxWidth: .infinity, alignment: .leading)
+            Text("Type")
+                .frame(width: 46, alignment: .leading)
+            Text("Events")
+                .frame(width: 58, alignment: .trailing)
+            Text("Woke")
+                .frame(width: 54, alignment: .trailing)
+            Text("Review")
+                .frame(width: 58, alignment: .trailing)
+            Text("Changed")
+                .frame(width: 70, alignment: .trailing)
+            Text("Avg")
+                .frame(width: 58, alignment: .trailing)
+            Text("Last seen")
+                .frame(width: 100, alignment: .leading)
+        }
+        .font(.caption.weight(.semibold))
+        .foregroundStyle(IntrospectTheme.inkTertiary)
+        .padding(.vertical, 6)
+    }
+}
+
+struct ClassifierEvidenceAnalyticsRow: View {
+    let stat: ClassifierEvidenceAnalyticsRecord
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Text(stat.feature)
+                .font(.system(.caption, design: .monospaced))
+                .lineLimit(1)
+                .truncationMode(.middle)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            Text(stat.kindLabel)
+                .font(.caption)
+                .foregroundStyle(IntrospectTheme.inkTertiary)
+                .frame(width: 46, alignment: .leading)
+            Text("\(stat.eventCount)")
+                .font(.caption.monospacedDigit())
+                .frame(width: 58, alignment: .trailing)
+            Text("\(stat.wakeCount)")
+                .font(.caption.monospacedDigit().weight(.semibold))
+                .foregroundStyle(stat.wakeCount > 0 ? IntrospectTheme.danger : IntrospectTheme.inkSecondary)
+                .frame(width: 54, alignment: .trailing)
+            Text("\(stat.reviewOnlyCount)")
+                .font(.caption.monospacedDigit())
+                .foregroundStyle(stat.reviewOnlyCount > 0 ? IntrospectTheme.warning : IntrospectTheme.inkSecondary)
+                .frame(width: 58, alignment: .trailing)
+            Text("\(stat.changedRunCount)")
+                .font(.caption.monospacedDigit())
+                .frame(width: 70, alignment: .trailing)
+            Text(stat.averageContributionText)
+                .font(.caption.monospacedDigit())
+                .foregroundStyle(IntrospectTheme.inkSecondary)
+                .frame(width: 58, alignment: .trailing)
+            Text(stat.lastSeenText)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .frame(width: 100, alignment: .leading)
+        }
+        .padding(.vertical, 7)
     }
 }
 
@@ -1653,6 +2460,34 @@ struct SignalWordRow: View {
     }
 }
 
+struct VersionSignalHeader: View {
+    var body: some View {
+        HStack(spacing: 10) {
+            Text("Version")
+                .frame(width: 64, alignment: .leading)
+            Text("Prompts")
+                .frame(width: 64, alignment: .trailing)
+            Text("Woke")
+                .frame(width: 58, alignment: .trailing)
+            Text("Review")
+                .frame(width: 58, alignment: .trailing)
+            Text("Runs")
+                .frame(width: 54, alignment: .trailing)
+            Text("Changed")
+                .frame(width: 70, alignment: .trailing)
+            Text("Rate")
+                .frame(width: 58, alignment: .trailing)
+            Text("Delta")
+                .frame(width: 64, alignment: .trailing)
+            Text("Commit subject")
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .font(.caption.weight(.semibold))
+        .foregroundStyle(IntrospectTheme.inkTertiary)
+        .padding(.vertical, 6)
+    }
+}
+
 struct VersionSignalRow: View {
     let version: TriggerVersionAnalyticsRecord
 
@@ -1661,25 +2496,38 @@ struct VersionSignalRow: View {
             Text(version.shortVersion)
                 .font(.system(.caption, design: .monospaced).weight(.semibold))
                 .frame(width: 64, alignment: .leading)
-            Text("\(version.promptCount) prompts")
+            Text("\(version.promptCount)")
                 .font(.caption.monospacedDigit())
-                .frame(width: 82, alignment: .trailing)
-            Text("\(version.triggerCount) triggered")
+                .frame(width: 64, alignment: .trailing)
+            Text("\(version.triggerCount)")
                 .font(.caption.monospacedDigit())
-                .frame(width: 92, alignment: .trailing)
+                .foregroundStyle(version.triggerCount > 0 ? IntrospectTheme.danger : IntrospectTheme.inkSecondary)
+                .frame(width: 58, alignment: .trailing)
+            Text("\(version.reviewOnlyCount)")
+                .font(.caption.monospacedDigit())
+                .foregroundStyle(version.reviewOnlyCount > 0 ? IntrospectTheme.warning : IntrospectTheme.inkSecondary)
+                .frame(width: 58, alignment: .trailing)
+            Text("\(version.runCount)")
+                .font(.caption.monospacedDigit())
+                .frame(width: 54, alignment: .trailing)
+            Text("\(version.changedRunCount)")
+                .font(.caption.monospacedDigit().weight(.semibold))
+                .foregroundStyle(version.changedRunCount > 0 ? IntrospectTheme.warning : IntrospectTheme.inkSecondary)
+                .frame(width: 70, alignment: .trailing)
             Text(version.triggerRateText)
                 .font(.caption.monospacedDigit().weight(.semibold))
                 .frame(width: 58, alignment: .trailing)
             Text(version.deltaText)
                 .font(.caption.monospacedDigit())
                 .foregroundStyle(version.deltaColor)
-                .frame(width: 68, alignment: .trailing)
-            Text(version.subject)
+                .frame(width: 64, alignment: .trailing)
+            Text(version.subject.trimmedOr(version.lastSeenText))
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
                 .truncationMode(.tail)
         }
+        .padding(.vertical, 7)
     }
 }
 
@@ -2130,6 +2978,74 @@ struct AgentSurfaceDiffRow: View {
 struct RunTriggerCauseBlock: View {
     let run: TriggerRunRecord
 
+    private var topClassifierEvidence: [ClassifierEvidenceAnalyticsRecord] {
+        struct Counts {
+            let feature: String
+            let kind: String
+            var eventCount = 0
+            var wakeCount = 0
+            var reviewOnlyCount = 0
+            var contributionSum = 0.0
+            var lastSeenValue = ""
+            var lastSeenText = ""
+        }
+
+        var countsByKey: [String: Counts] = [:]
+        for event in run.events {
+            var eventEvidence: [String: ClassifierExplanationRecord] = [:]
+            for explanation in event.classifierExplanations {
+                let key = "\(explanation.kind)\u{1f}\(explanation.feature)"
+                if let current = eventEvidence[key], current.contribution >= explanation.contribution {
+                    continue
+                }
+                eventEvidence[key] = explanation
+            }
+
+            for (key, explanation) in eventEvidence {
+                var counts = countsByKey[key] ?? Counts(feature: explanation.feature, kind: explanation.kind)
+                counts.eventCount += 1
+                counts.contributionSum += explanation.contribution
+                if event.triggered {
+                    counts.wakeCount += 1
+                } else if event.reviewTriggered {
+                    counts.reviewOnlyCount += 1
+                }
+                if counts.lastSeenValue.isEmpty || event.timestampValue > counts.lastSeenValue {
+                    counts.lastSeenValue = event.timestampValue
+                    counts.lastSeenText = event.timestampText
+                }
+                countsByKey[key] = counts
+            }
+        }
+
+        let records = countsByKey.map { _, counts in
+            ClassifierEvidenceAnalyticsRecord(
+                feature: counts.feature,
+                kind: counts.kind,
+                eventCount: counts.eventCount,
+                wakeCount: counts.wakeCount,
+                reviewOnlyCount: counts.reviewOnlyCount,
+                loggedOnlyCount: max(counts.eventCount - counts.wakeCount - counts.reviewOnlyCount, 0),
+                changedRunCount: 0,
+                averageContribution: counts.eventCount > 0 ? counts.contributionSum / Double(counts.eventCount) : 0,
+                lastSeenValue: counts.lastSeenValue,
+                lastSeenText: counts.lastSeenText
+            )
+        }
+        .sorted {
+            if $0.wakeCount != $1.wakeCount {
+                return $0.wakeCount > $1.wakeCount
+            }
+            if $0.eventCount != $1.eventCount {
+                return $0.eventCount > $1.eventCount
+            }
+            return $0.averageContribution > $1.averageContribution
+        }
+
+        let words = records.filter { $0.kind == "word" }
+        return Array((words.isEmpty ? records : words).prefix(10))
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(alignment: .center, spacing: 8) {
@@ -2165,6 +3081,23 @@ struct RunTriggerCauseBlock: View {
                         .padding(.bottom, 1)
                     }
                     .accessibilityLabel("Review terms: \(run.triggerWordsText)")
+                }
+            }
+
+            if !topClassifierEvidence.isEmpty {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Classifier evidence")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(IntrospectTheme.inkTertiary)
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: 8) {
+                            ForEach(topClassifierEvidence) { stat in
+                                ClassifierEvidenceSummaryPill(stat: stat)
+                            }
+                        }
+                        .padding(.bottom, 1)
+                    }
+                    .accessibilityLabel("Classifier evidence: \(topClassifierEvidence.map(\.feature).joined(separator: ", "))")
                 }
             }
 
@@ -2205,6 +3138,7 @@ struct RunTriggerCauseBlock: View {
                                 .lineLimit(3)
                                 .fixedSize(horizontal: false, vertical: true)
                                 .textSelection(.enabled)
+                            ClassifierEvidenceRow(explanations: event.classifierExplanations)
                             if !event.messageLocator.isEmpty || !event.eventID.isEmpty {
                                 Text(event.messageLocator.isEmpty ? event.eventID : event.messageLocator)
                                     .font(.system(.caption2, design: .monospaced))
@@ -3237,6 +4171,72 @@ enum ReflectorRunner: String, CaseIterable, Identifiable {
     }
 }
 
+enum WakeSensitivity: String, CaseIterable, Identifiable {
+    case quiet
+    case balanced
+    case sensitive
+    case custom
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .quiet: "Quiet"
+        case .balanced: "Balanced"
+        case .sensitive: "Sensitive"
+        case .custom: "Custom"
+        }
+    }
+
+    var helpText: String {
+        switch self {
+        case .quiet:
+            "Only high-confidence negative feedback wakes Introspect."
+        case .balanced:
+            "Uses the classifier's production threshold."
+        case .sensitive:
+            "Wakes on earlier frustration signals and accepts more false positives."
+        case .custom:
+            "Uses the exact threshold below."
+        }
+    }
+
+    var fixedThreshold: Double? {
+        switch self {
+        case .quiet:
+            0.80
+        case .sensitive:
+            0.50
+        case .balanced, .custom:
+            nil
+        }
+    }
+
+    func thresholdSummary(customThreshold: Double) -> String {
+        switch self {
+        case .balanced:
+            "threshold: model default"
+        case .custom:
+            String(format: "threshold: %.2f", customThreshold)
+        case .quiet, .sensitive:
+            String(format: "threshold: %.2f", fixedThreshold ?? customThreshold)
+        }
+    }
+
+    static func parse(_ value: String?) -> WakeSensitivity {
+        switch value?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
+        case "quiet":
+            .quiet
+        case "sensitive":
+            .sensitive
+        case "custom":
+            .custom
+        default:
+            .balanced
+        }
+    }
+}
+
 enum ProjectSurfaceKind: String {
     case agentFile = "Agent file"
     case skill = "Skill"
@@ -3293,6 +4293,8 @@ struct TriggerEventRecord: Identifiable, Hashable {
     let classifierThreshold: Double?
     let classifierReviewThreshold: Double?
     let classifierModelType: String?
+    let classifierExplanations: [ClassifierExplanationRecord]
+    let classifierAlternates: [ClassifierAlternateRecord]
 
     var sourceLabel: String {
         switch source {
@@ -3350,6 +4352,59 @@ struct TriggerEventRecord: Identifiable, Hashable {
         let value = wakeReason.trimmingCharacters(in: .whitespacesAndNewlines)
         if value.isEmpty { return "reason unknown" }
         return value.replacingOccurrences(of: "_", with: " ")
+    }
+}
+
+struct ClassifierExplanationRecord: Identifiable, Hashable {
+    let id: String
+    let kind: String
+    let feature: String
+    let contribution: Double
+
+    var kindLabel: String {
+        switch kind {
+        case "char":
+            return "char"
+        case "word":
+            return "word"
+        default:
+            return kind.isEmpty ? "feature" : kind
+        }
+    }
+
+    var contributionText: String {
+        String(format: "%+.2f", contribution)
+    }
+}
+
+struct ClassifierAlternateRecord: Identifiable, Hashable {
+    let id: String
+    let name: String
+    let score: Double?
+    let threshold: Double?
+    let reviewThreshold: Double?
+    let triggered: Bool
+    let review: Bool
+    let modelType: String?
+    let error: String?
+
+    var scoreText: String {
+        guard let score else { return "error" }
+        return String(format: "%.3f", score)
+    }
+
+    var decisionText: String {
+        if error != nil { return "error" }
+        if triggered { return "wake" }
+        if review { return "review" }
+        return "log"
+    }
+
+    var decisionColor: Color {
+        if error != nil { return IntrospectTheme.danger }
+        if triggered { return IntrospectTheme.warning }
+        if review { return IntrospectTheme.accent }
+        return IntrospectTheme.inkTertiary
     }
 }
 
@@ -3508,6 +4563,49 @@ struct TriggerWordAnalyticsRecord: Identifiable {
     var id: String { word }
 }
 
+struct TriggerReasonAnalyticsRecord: Identifiable {
+    let reason: String
+    let eventCount: Int
+    let wakeCount: Int
+    let reviewOnlyCount: Int
+    let loggedOnlyCount: Int
+    let changedRunCount: Int
+    let lastSeenValue: String
+    let lastSeenText: String
+
+    var id: String { reason }
+}
+
+struct ClassifierEvidenceAnalyticsRecord: Identifiable {
+    let feature: String
+    let kind: String
+    let eventCount: Int
+    let wakeCount: Int
+    let reviewOnlyCount: Int
+    let loggedOnlyCount: Int
+    let changedRunCount: Int
+    let averageContribution: Double
+    let lastSeenValue: String
+    let lastSeenText: String
+
+    var id: String { "\(kind):\(feature)" }
+
+    var kindLabel: String {
+        switch kind {
+        case "char":
+            return "char"
+        case "word":
+            return "word"
+        default:
+            return kind.isEmpty ? "feature" : kind
+        }
+    }
+
+    var averageContributionText: String {
+        String(format: "%+.2f", averageContribution)
+    }
+}
+
 struct ClassifierScoreBandRecord: Identifiable {
     let lowerBound: Double
     let upperBound: Double
@@ -3520,10 +4618,64 @@ struct ClassifierScoreBandRecord: Identifiable {
     var label: String { String(format: "%.1f-%.1f", lowerBound, upperBound) }
 }
 
+struct ClassifierScoreDayRecord: Identifiable {
+    let day: Date
+    let label: String
+    let averageScore: Double
+    let promptCount: Int
+    let wakeCount: Int
+
+    var id: Date { day }
+    var averageScoreText: String { String(format: "%.3f", averageScore) }
+}
+
+struct ClassifierShadowStatRecord: Identifiable {
+    let name: String
+    let promptCount: Int
+    let candidateWakeCount: Int
+    let candidateReviewOnlyCount: Int
+    let productionWakeCount: Int
+    let addedWakeCount: Int
+    let removedWakeCount: Int
+    let errorCount: Int
+    let averageScore: Double?
+
+    var id: String { name }
+
+    var candidateWakeText: String {
+        guard promptCount > 0 else { return "0%" }
+        return Self.percentText(Double(candidateWakeCount) / Double(promptCount))
+    }
+
+    var averageScoreText: String {
+        guard let averageScore else { return "--" }
+        return String(format: "%.3f", averageScore)
+    }
+
+    var sampleSummary: String {
+        var parts = ["\(promptCount) scored"]
+        if candidateReviewOnlyCount > 0 {
+            parts.append("\(candidateReviewOnlyCount) review")
+        }
+        if productionWakeCount > 0 {
+            parts.append("\(productionWakeCount) prod wake")
+        }
+        if errorCount > 0 {
+            parts.append("\(errorCount) errors")
+        }
+        return parts.joined(separator: " · ")
+    }
+
+    private static func percentText(_ value: Double) -> String {
+        String(format: "%.0f%%", value * 100)
+    }
+}
+
 struct TriggerVersionAnalyticsRecord: Identifiable {
     let version: String
     let promptCount: Int
     let triggerCount: Int
+    let reviewOnlyCount: Int
     let runCount: Int
     let changedRunCount: Int
     let firstSeenValue: String
@@ -3618,6 +4770,75 @@ struct ClassifierPromptVariantRecord: Identifiable {
     }
 }
 
+struct ClassifierModelCheckRecord: Identifiable {
+    let name: String
+    let shortName: String
+    let status: String
+    let detail: String
+    let threshold: Double?
+    let precision: Double?
+    let recall: Double?
+    let wakeRate: Double?
+    let truePositiveCount: Int?
+    let falsePositiveCount: Int?
+    let falseNegativeCount: Int?
+    let trueNegativeCount: Int?
+    let wakeCount: Int?
+    let rowCount: Int?
+    let maxScore: Double?
+    let state: HealthState
+
+    var id: String { name }
+
+    var outcomeText: String {
+        if let precision, let recall {
+            return "\(Self.percentText(precision)) / \(Self.percentText(recall))"
+        }
+        if let wakeCount, let rowCount {
+            return "\(wakeCount)/\(rowCount) wakes"
+        }
+        return "--"
+    }
+
+    var thresholdSummary: String {
+        guard let threshold else { return "threshold --" }
+        return String(format: "threshold %.3f", threshold)
+    }
+
+    var countSummary: String {
+        if let truePositiveCount, let falsePositiveCount, let falseNegativeCount, let trueNegativeCount {
+            return "\(truePositiveCount)/\(falsePositiveCount)/\(falseNegativeCount)/\(trueNegativeCount)"
+        }
+        if let maxScore {
+            return String(format: "max %.3f", maxScore)
+        }
+        return "--"
+    }
+
+    var sampleSummary: String {
+        if let rowCount {
+            return "\(rowCount) rows"
+        }
+        return "rows --"
+    }
+
+    private static func percentText(_ value: Double) -> String {
+        String(format: "%.0f%%", value * 100)
+    }
+}
+
+private struct ParsedClassifierMetric {
+    let threshold: Double
+    let precision: Double
+    let recall: Double
+    let wakeRate: Double
+    let truePositiveCount: Int
+    let falsePositiveCount: Int
+    let falseNegativeCount: Int
+    let trueNegativeCount: Int
+    let rowCount: Int?
+}
+
 struct HomeCommitRecord: Identifiable, Hashable {
     let hash: String
     let shortHash: String
@@ -3658,12 +4879,14 @@ private struct ReflectorRunBuilder {
 
 @MainActor
 final class IntrospectModel: ObservableObject {
-    @Published var selectedSection: IntrospectSection? = .signals
+    @Published var selectedSection: IntrospectSection? = .status
     @Published var mode: ReflectionMode = .immediate
     @Published var reflectorRunner: ReflectorRunner = .defaultRunner
     @Published var reflectorClaudeModel = ""
     @Published var reflectorClaudeFallbackModel = ""
     @Published var reflectorCodexModel = ""
+    @Published var wakeSensitivity: WakeSensitivity = .balanced
+    @Published var wakeCustomThreshold = 0.64
     @Published var nightlyHour = 3
     @Published var nightlyMinute = 0
     @Published var claudePromptOK = false
@@ -3700,11 +4923,16 @@ final class IntrospectModel: ObservableObject {
     @Published var signalAverageClassifierScore: Double?
     @Published var signalClassifierScoredCount = 0
     @Published var wordStats: [TriggerWordAnalyticsRecord] = []
+    @Published var reasonStats: [TriggerReasonAnalyticsRecord] = []
+    @Published var classifierEvidenceStats: [ClassifierEvidenceAnalyticsRecord] = []
     @Published var classifierScoreBands: [ClassifierScoreBandRecord] = []
+    @Published var classifierScoreTrend: [ClassifierScoreDayRecord] = []
+    @Published var classifierShadowStats: [ClassifierShadowStatRecord] = []
     @Published var recentClassifierEvents: [TriggerEventRecord] = []
     @Published var versionStats: [TriggerVersionAnalyticsRecord] = []
     @Published var classifierThresholdStats: [ClassifierThresholdRecord] = []
     @Published var classifierPromptVariantStats: [ClassifierPromptVariantRecord] = []
+    @Published var classifierModelChecks: [ClassifierModelCheckRecord] = []
     @Published var homeCommits: [HomeCommitRecord] = []
     @Published var selectedHomeCommitID: String?
     @Published var selectedHomeCommitDiff = ""
@@ -3828,6 +5056,21 @@ final class IntrospectModel: ObservableObject {
         return String(format: "%.3f", signalAverageClassifierScore)
     }
 
+    /// Change in daily average wake score from the first half of the charted
+    /// window to the second half. Negative = scores trending down, i.e. the
+    /// agent needs fewer corrections over time (instructions improving).
+    var classifierScoreTrendDelta: Double? {
+        let points = classifierScoreTrend
+        guard points.count >= 2 else { return nil }
+        let mid = points.count / 2
+        let early = points.prefix(mid)
+        let late = points.suffix(points.count - mid)
+        guard !early.isEmpty, !late.isEmpty else { return nil }
+        let earlyMean = early.map(\.averageScore).reduce(0, +) / Double(early.count)
+        let lateMean = late.map(\.averageScore).reduce(0, +) / Double(late.count)
+        return lateMean - earlyMean
+    }
+
     var signalAverageSentimentText: String {
         guard let signalAverageSentiment else { return "none" }
         return String(format: "%+.2f", signalAverageSentiment)
@@ -3838,6 +5081,18 @@ final class IntrospectModel: ObservableObject {
         if score < -0.25 { return "negative average" }
         if score > 0.25 { return "positive average" }
         return "neutral average"
+    }
+
+    var clampedWakeCustomThreshold: Double {
+        min(max(wakeCustomThreshold, 0.05), 0.95)
+    }
+
+    var wakeCustomThresholdText: String {
+        String(format: "%.2f", clampedWakeCustomThreshold)
+    }
+
+    var wakeSensitivityDetail: String {
+        "\(wakeSensitivity.helpText) \(wakeSensitivity.thresholdSummary(customThreshold: clampedWakeCustomThreshold))"
     }
 
     var activeTriggerWords: [String] {
@@ -4078,6 +5333,10 @@ final class IntrospectModel: ObservableObject {
             reflectorClaudeModel = launchEnvironment["INTROSPECT_REFLECTOR_CLAUDE_MODEL"] ?? ""
             reflectorClaudeFallbackModel = launchEnvironment["INTROSPECT_REFLECTOR_CLAUDE_FALLBACK_MODEL"] ?? ""
             reflectorCodexModel = launchEnvironment["INTROSPECT_REFLECTOR_CODEX_MODEL"] ?? ""
+            wakeSensitivity = WakeSensitivity.parse(launchEnvironment["INTROSPECT_WAKE_SENSITIVITY"])
+            if let threshold = doubleSetting(launchEnvironment["INTROSPECT_WAKE_THRESHOLD"]) {
+                wakeCustomThreshold = threshold
+            }
         }
         queuedEvents = lineCount(repoURL.appendingPathComponent("feedback/trigger-queue.jsonl"))
         lastRunText = readLastRun()
@@ -4125,7 +5384,9 @@ final class IntrospectModel: ObservableObject {
             "--runner", reflectorRunner.rawValue,
             "--claude-model", normalizedModelSetting(reflectorClaudeModel),
             "--claude-fallback-model", normalizedModelSetting(reflectorClaudeFallbackModel),
-            "--codex-model", normalizedModelSetting(reflectorCodexModel)
+            "--codex-model", normalizedModelSetting(reflectorCodexModel),
+            "--wake-sensitivity", wakeSensitivity.rawValue,
+            "--wake-threshold", wakeThresholdSetting
         ]
         if mode == .off {
             args = [
@@ -4133,7 +5394,9 @@ final class IntrospectModel: ObservableObject {
                 "--home", introspectHomeURL.path,
                 "--prompt", introspectHomeURL.appendingPathComponent("AGENTS.md").path,
                 "--user-skills", introspectHomeURL.appendingPathComponent("skills").path,
-                "--reflect-mode", "off"
+                "--reflect-mode", "off",
+                "--wake-sensitivity", wakeSensitivity.rawValue,
+                "--wake-threshold", wakeThresholdSetting
             ]
         }
         let output = await shell("/bin/bash", args)
@@ -4161,7 +5424,19 @@ final class IntrospectModel: ObservableObject {
         await applyConfigurationChange()
     }
 
+    func setWakeSensitivity(_ newSensitivity: WakeSensitivity) async {
+        guard wakeSensitivity != newSensitivity else { return }
+        wakeSensitivity = newSensitivity
+        wakeCustomThreshold = clampedWakeCustomThreshold
+        await applyConfigurationChange()
+    }
+
     func saveReflectorAgentSettings() async {
+        await applyConfigurationChange()
+    }
+
+    func saveWakeSensitivitySettings() async {
+        wakeCustomThreshold = clampedWakeCustomThreshold
         await applyConfigurationChange()
     }
 
@@ -4198,6 +5473,8 @@ final class IntrospectModel: ObservableObject {
             "reflector_claude_model": normalizedModelSetting(reflectorClaudeModel),
             "reflector_claude_fallback_model": normalizedModelSetting(reflectorClaudeFallbackModel),
             "reflector_codex_model": normalizedModelSetting(reflectorCodexModel),
+            "wake_sensitivity": wakeSensitivity.rawValue,
+            "wake_custom_threshold": clampedWakeCustomThreshold,
             "nightly_hour": nightlyHour,
             "nightly_minute": nightlyMinute
         ])
@@ -4239,6 +5516,8 @@ final class IntrospectModel: ObservableObject {
                     "reflector_claude_model": normalizedModelSetting(reflectorClaudeModel),
                     "reflector_claude_fallback_model": normalizedModelSetting(reflectorClaudeFallbackModel),
                     "reflector_codex_model": normalizedModelSetting(reflectorCodexModel),
+                    "wake_sensitivity": wakeSensitivity.rawValue,
+                    "wake_custom_threshold": clampedWakeCustomThreshold,
                     "nightly_hour": nightlyHour,
                     "nightly_minute": nightlyMinute
                 ], to: homeSettingsURL)
@@ -4946,6 +6225,10 @@ final class IntrospectModel: ObservableObject {
         reflectorClaudeModel = settings["reflector_claude_model"] as? String ?? ""
         reflectorClaudeFallbackModel = settings["reflector_claude_fallback_model"] as? String ?? ""
         reflectorCodexModel = settings["reflector_codex_model"] as? String ?? ""
+        wakeSensitivity = WakeSensitivity.parse(settings["wake_sensitivity"] as? String)
+        if let threshold = doubleSetting(settings["wake_custom_threshold"]) {
+            wakeCustomThreshold = threshold
+        }
         if let hour = settings["nightly_hour"] as? Int, (0...23).contains(hour) {
             nightlyHour = hour
         }
@@ -4969,6 +6252,19 @@ final class IntrospectModel: ObservableObject {
             return [:]
         }
         return object
+    }
+
+    private func doubleSetting(_ value: Any?) -> Double? {
+        if let value = value as? Double {
+            return value
+        }
+        if let value = value as? NSNumber {
+            return value.doubleValue
+        }
+        if let value = value as? String {
+            return Double(value.trimmingCharacters(in: .whitespacesAndNewlines))
+        }
+        return nil
     }
 
     private func symlink(_ link: URL, pointsTo expected: URL) -> Bool {
@@ -5222,6 +6518,9 @@ final class IntrospectModel: ObservableObject {
             ? nil
             : classifierScores.reduce(0, +) / Double(classifierScores.count)
         classifierScoreBands = buildClassifierScoreBands(events: events)
+        classifierScoreTrend = buildClassifierScoreTrend(events: events)
+        classifierShadowStats = buildClassifierShadowStats(events: events)
+        classifierEvidenceStats = buildClassifierEvidenceStats(events: events, runs: runs)
         recentClassifierEvents = Array(events.filter { $0.classifierScore != nil }.prefix(30))
 
         var wordEvents: [String: [TriggerEventRecord]] = [:]
@@ -5265,6 +6564,47 @@ final class IntrospectModel: ObservableObject {
             return $0.word.localizedStandardCompare($1.word) == .orderedAscending
         }
 
+        var changedRunCountsByReason: [String: Int] = [:]
+        for run in runs where runDidChange(run) {
+            for reason in unique(run.events.map(\.wakeReasonLabel)) {
+                changedRunCountsByReason[reason, default: 0] += 1
+            }
+        }
+
+        let reasonEvents = Dictionary(grouping: events) { event in
+            event.wakeReasonLabel
+        }
+        reasonStats = reasonEvents.map { reason, reasonEvents in
+            let ordered = reasonEvents.sorted {
+                compareTimestamps($0.timestampValue, $1.timestampValue) == .orderedDescending
+            }
+            let wakeCount = reasonEvents.filter(\.triggered).count
+            let reviewOnlyCount = reasonEvents.filter { $0.reviewTriggered && !$0.triggered }.count
+            let loggedOnlyCount = max(reasonEvents.count - wakeCount - reviewOnlyCount, 0)
+            return TriggerReasonAnalyticsRecord(
+                reason: reason,
+                eventCount: reasonEvents.count,
+                wakeCount: wakeCount,
+                reviewOnlyCount: reviewOnlyCount,
+                loggedOnlyCount: loggedOnlyCount,
+                changedRunCount: changedRunCountsByReason[reason] ?? 0,
+                lastSeenValue: ordered.first?.timestampValue ?? "",
+                lastSeenText: ordered.first?.timestampText ?? "unknown"
+            )
+        }
+        .sorted {
+            if $0.wakeCount != $1.wakeCount {
+                return $0.wakeCount > $1.wakeCount
+            }
+            if $0.reviewOnlyCount != $1.reviewOnlyCount {
+                return $0.reviewOnlyCount > $1.reviewOnlyCount
+            }
+            if $0.eventCount != $1.eventCount {
+                return $0.eventCount > $1.eventCount
+            }
+            return $0.reason.localizedStandardCompare($1.reason) == .orderedAscending
+        }
+
         buildVersionStats(events: events, runs: runs)
     }
 
@@ -5296,6 +6636,7 @@ final class IntrospectModel: ObservableObject {
         for version in versionOrder {
             let versionEvents = eventsByVersion[version] ?? []
             let triggerCount = versionEvents.filter(\.triggered).count
+            let reviewOnlyCount = versionEvents.filter { $0.reviewTriggered && !$0.triggered }.count
             let promptCount = versionEvents.count
             let rate = promptCount > 0 ? Double(triggerCount) / Double(promptCount) : 0
             let versionRuns = runsByVersion[version] ?? []
@@ -5307,6 +6648,7 @@ final class IntrospectModel: ObservableObject {
                     version: version,
                     promptCount: promptCount,
                     triggerCount: triggerCount,
+                    reviewOnlyCount: reviewOnlyCount,
                     runCount: versionRuns.count,
                     changedRunCount: versionRuns.filter(runDidChange).count,
                     firstSeenValue: ordered.first?.timestampValue ?? "",
@@ -5353,6 +6695,191 @@ final class IntrospectModel: ObservableObject {
         }
     }
 
+    private func buildClassifierScoreTrend(events: [TriggerEventRecord]) -> [ClassifierScoreDayRecord] {
+        struct Bucket { var total = 0.0; var count = 0; var wake = 0 }
+        var byDay: [Date: Bucket] = [:]
+        let calendar = Calendar.current
+        for event in events {
+            guard let score = event.classifierScore,
+                  let date = dateValue(event.timestampValue) else { continue }
+            let day = calendar.startOfDay(for: date)
+            var bucket = byDay[day] ?? Bucket()
+            bucket.total += score
+            bucket.count += 1
+            if event.triggered { bucket.wake += 1 }
+            byDay[day] = bucket
+        }
+        return byDay.keys.sorted().suffix(30).map { day in
+            let bucket = byDay[day]!
+            return ClassifierScoreDayRecord(
+                day: day,
+                label: Self.dayLabelFormatter.string(from: day),
+                averageScore: bucket.count > 0 ? bucket.total / Double(bucket.count) : 0,
+                promptCount: bucket.count,
+                wakeCount: bucket.wake
+            )
+        }
+    }
+
+    private func buildClassifierShadowStats(events: [TriggerEventRecord]) -> [ClassifierShadowStatRecord] {
+        struct Counts {
+            var prompt = 0
+            var candidateWake = 0
+            var candidateReviewOnly = 0
+            var productionWake = 0
+            var addedWake = 0
+            var removedWake = 0
+            var error = 0
+            var scoreSum = 0.0
+            var scoreCount = 0
+        }
+
+        var countsByName: [String: Counts] = [:]
+        for event in events {
+            for alternate in event.classifierAlternates {
+                var counts = countsByName[alternate.name, default: Counts()]
+                if alternate.error != nil {
+                    counts.error += 1
+                    countsByName[alternate.name] = counts
+                    continue
+                }
+                guard let score = alternate.score else {
+                    counts.error += 1
+                    countsByName[alternate.name] = counts
+                    continue
+                }
+
+                counts.prompt += 1
+                counts.scoreSum += score
+                counts.scoreCount += 1
+                if alternate.triggered {
+                    counts.candidateWake += 1
+                } else if alternate.review {
+                    counts.candidateReviewOnly += 1
+                }
+                if event.triggered {
+                    counts.productionWake += 1
+                }
+                if alternate.triggered && !event.triggered {
+                    counts.addedWake += 1
+                }
+                if !alternate.triggered && event.triggered {
+                    counts.removedWake += 1
+                }
+                countsByName[alternate.name] = counts
+            }
+        }
+
+        return countsByName.map { name, counts in
+            ClassifierShadowStatRecord(
+                name: name,
+                promptCount: counts.prompt,
+                candidateWakeCount: counts.candidateWake,
+                candidateReviewOnlyCount: counts.candidateReviewOnly,
+                productionWakeCount: counts.productionWake,
+                addedWakeCount: counts.addedWake,
+                removedWakeCount: counts.removedWake,
+                errorCount: counts.error,
+                averageScore: counts.scoreCount > 0 ? counts.scoreSum / Double(counts.scoreCount) : nil
+            )
+        }
+        .sorted {
+            if $0.promptCount != $1.promptCount {
+                return $0.promptCount > $1.promptCount
+            }
+            if $0.addedWakeCount != $1.addedWakeCount {
+                return $0.addedWakeCount > $1.addedWakeCount
+            }
+            return $0.name.localizedStandardCompare($1.name) == .orderedAscending
+        }
+    }
+
+    private func classifierEvidenceKey(_ explanation: ClassifierExplanationRecord) -> String {
+        "\(explanation.kind)\u{1f}\(explanation.feature)"
+    }
+
+    private func buildClassifierEvidenceStats(events: [TriggerEventRecord], runs: [TriggerRunRecord]) -> [ClassifierEvidenceAnalyticsRecord] {
+        struct Counts {
+            let feature: String
+            let kind: String
+            var eventCount = 0
+            var wakeCount = 0
+            var reviewOnlyCount = 0
+            var contributionSum = 0.0
+            var lastSeenValue = ""
+            var lastSeenText = ""
+        }
+
+        var changedRunCounts: [String: Int] = [:]
+        for run in runs where runDidChange(run) {
+            var runKeys: Set<String> = []
+            for event in run.events {
+                for explanation in event.classifierExplanations {
+                    runKeys.insert(classifierEvidenceKey(explanation))
+                }
+            }
+            for key in runKeys {
+                changedRunCounts[key, default: 0] += 1
+            }
+        }
+
+        var countsByKey: [String: Counts] = [:]
+        for event in events {
+            var eventEvidence: [String: ClassifierExplanationRecord] = [:]
+            for explanation in event.classifierExplanations {
+                let key = classifierEvidenceKey(explanation)
+                if let current = eventEvidence[key], current.contribution >= explanation.contribution {
+                    continue
+                }
+                eventEvidence[key] = explanation
+            }
+
+            for (key, explanation) in eventEvidence {
+                var counts = countsByKey[key] ?? Counts(feature: explanation.feature, kind: explanation.kind)
+                counts.eventCount += 1
+                counts.contributionSum += explanation.contribution
+                if event.triggered {
+                    counts.wakeCount += 1
+                } else if event.reviewTriggered {
+                    counts.reviewOnlyCount += 1
+                }
+                if counts.lastSeenValue.isEmpty ||
+                    compareTimestamps(event.timestampValue, counts.lastSeenValue) == .orderedDescending {
+                    counts.lastSeenValue = event.timestampValue
+                    counts.lastSeenText = event.timestampText
+                }
+                countsByKey[key] = counts
+            }
+        }
+
+        return countsByKey.map { key, counts in
+            ClassifierEvidenceAnalyticsRecord(
+                feature: counts.feature,
+                kind: counts.kind,
+                eventCount: counts.eventCount,
+                wakeCount: counts.wakeCount,
+                reviewOnlyCount: counts.reviewOnlyCount,
+                loggedOnlyCount: max(counts.eventCount - counts.wakeCount - counts.reviewOnlyCount, 0),
+                changedRunCount: changedRunCounts[key] ?? 0,
+                averageContribution: counts.eventCount > 0 ? counts.contributionSum / Double(counts.eventCount) : 0,
+                lastSeenValue: counts.lastSeenValue,
+                lastSeenText: counts.lastSeenText
+            )
+        }
+        .sorted {
+            if $0.wakeCount != $1.wakeCount {
+                return $0.wakeCount > $1.wakeCount
+            }
+            if $0.reviewOnlyCount != $1.reviewOnlyCount {
+                return $0.reviewOnlyCount > $1.reviewOnlyCount
+            }
+            if $0.eventCount != $1.eventCount {
+                return $0.eventCount > $1.eventCount
+            }
+            return $0.averageContribution > $1.averageContribution
+        }
+    }
+
     private func loadClassifierReports() {
         let reportDir = repoURL.appendingPathComponent("feedback/intent-classifier")
         let selectedStats = readClassifierThresholds(
@@ -5378,6 +6905,7 @@ final class IntrospectModel: ObservableObject {
         classifierPromptVariantStats = readClassifierPromptVariants(
             reportDir.appendingPathComponent("prompt-variant-audit-report.md")
         )
+        classifierModelChecks = readClassifierModelChecks(reportDir: reportDir)
     }
 
     private func readClassifierThresholds(_ url: URL) -> [ClassifierThresholdRecord] {
@@ -5456,6 +6984,913 @@ final class IntrospectModel: ObservableObject {
         }
     }
 
+    private func readClassifierModelChecks(reportDir: URL) -> [ClassifierModelCheckRecord] {
+        var checks: [ClassifierModelCheckRecord] = []
+
+        if let production = readSelectedClassifierMetric(
+            reportDir.appendingPathComponent("intent-v2-round4-split-grid-report.md")
+        ) {
+            checks.append(
+                classifierModelCheck(
+                    name: "Production v2",
+                    shortName: "Production",
+                    status: "Installed",
+                    detail: "Private round-4 JSON kept as the foreground wake model.",
+                    metric: production,
+                    state: .ok
+                )
+            )
+        }
+
+        if let hardRound6 = readThresholdClassifierMetric(
+            reportDir.appendingPathComponent("round6-wxyz-installed-holdout-report.md"),
+            targetThreshold: 0.675
+        ) {
+            checks.append(
+                classifierModelCheck(
+                    name: "Round-6 hard labels",
+                    shortName: "Round 6",
+                    status: "Gap found",
+                    detail: "Installed model misses process-failure prompts near the gate.",
+                    metric: hardRound6,
+                    state: .warning
+                )
+            )
+        }
+
+        if let round6Candidate = readSelectedClassifierMetric(
+            reportDir.appendingPathComponent("intent-v2-round6-holdout-grid-report.md")
+        ) {
+            checks.append(
+                classifierModelCheck(
+                    name: "Round-6 retrain",
+                    shortName: "R6 retrain",
+                    status: "Rejected",
+                    detail: "Higher recall, but below the 95% precision promotion floor.",
+                    metric: round6Candidate,
+                    state: .warning
+                )
+            )
+        }
+
+        if let round7Candidate = readSelectedClassifierMetric(
+            reportDir.appendingPathComponent("intent-v2-round7-holdout-grid-report.md")
+        ) {
+            checks.append(
+                classifierModelCheck(
+                    name: "Round-7 retrain",
+                    shortName: "R7 retrain",
+                    status: "Rejected",
+                    detail: "TF-IDF hit the task-instruction versus process-failure boundary.",
+                    metric: round7Candidate,
+                    state: .warning
+                )
+            )
+        }
+
+        if let qwenAux = readSelectedClassifierMetric(
+            reportDir.appendingPathComponent("intent-v2-round7-qwen-aux-grid-report.md")
+        ) {
+            checks.append(
+                classifierModelCheck(
+                    name: "Qwen weak labels",
+                    shortName: "Qwen weak",
+                    status: "Rejected",
+                    detail: "Weak labels made TF-IDF precise by waking on almost nothing.",
+                    metric: qwenAux,
+                    state: .warning
+                )
+            )
+        }
+
+        if let qwenPositiveAux = readSelectedClassifierMetric(
+            reportDir.appendingPathComponent("intent-v2-round7-qwen-positive-aux-grid-report.md")
+        ) {
+            checks.append(
+                classifierModelCheck(
+                    name: "Qwen positives",
+                    shortName: "Qwen pos",
+                    status: "Rejected",
+                    detail: "Weak positives alone still missed nearly every held-out wake.",
+                    metric: qwenPositiveAux,
+                    state: .warning
+                )
+            )
+        }
+
+        if let hardRound8 = readThresholdClassifierMetric(
+            reportDir.appendingPathComponent("round8-installed-eval-report.md"),
+            targetThreshold: 0.675
+        ) {
+            checks.append(
+                classifierModelCheck(
+                    name: "Round-8 hard labels",
+                    shortName: "Round 8",
+                    status: "Gap found",
+                    detail: "Feature-boundary labels expose normal-instruction false wakes.",
+                    metric: hardRound8,
+                    state: .warning
+                )
+            )
+        }
+
+        if let round8Candidate = readSelectedClassifierMetric(
+            reportDir.appendingPathComponent("intent-v2-round8-holdout-grid-report.md")
+        ) {
+            checks.append(
+                classifierModelCheck(
+                    name: "Round-8 retrain",
+                    shortName: "R8 retrain",
+                    status: "Rejected",
+                    detail: "TF-IDF still cannot separate task instructions from process failure.",
+                    metric: round8Candidate,
+                    state: .warning
+                )
+            )
+        }
+
+        if let twoStageGate = readTwoStageGateMetric(
+            reportDir.appendingPathComponent("two-stage-gate-round8-report.md")
+        ) {
+            checks.append(
+                classifierModelCheck(
+                    name: "Two-stage gate",
+                    shortName: "2-stage",
+                    status: "Rejected",
+                    detail: "A learned veto matched the TF-IDF ceiling instead of beating it.",
+                    metric: twoStageGate,
+                    state: .warning
+                )
+            )
+        }
+
+        if let round8ScoreEnsemble = readNamedHoldoutMetric(
+            reportDir.appendingPathComponent("score-ensemble-round8-report.md"),
+            metricName: "holdout best"
+        ) {
+            checks.append(
+                classifierModelCheck(
+                    name: "Round-8 score ensemble",
+                    shortName: "R8 ensemble",
+                    status: "Rejected",
+                    detail: "Stacking compact TF-IDF scorers stayed at the same hard-boundary ceiling.",
+                    metric: round8ScoreEnsemble,
+                    state: .warning
+                )
+            )
+        }
+
+        if let qwenRound8Aux = readSelectedClassifierMetric(
+            reportDir.appendingPathComponent("intent-v2-round8-qwen-all-aux-w005-grid-report.md")
+        ) {
+            checks.append(
+                classifierModelCheck(
+                    name: "Round-8 Qwen labels",
+                    shortName: "R8 Qwen",
+                    status: "Rejected",
+                    detail: "More weak labels made the compact TF-IDF student too timid.",
+                    metric: qwenRound8Aux,
+                    state: .warning
+                )
+            )
+        }
+
+        if let distilledStudent = readSelectedClassifierMetric(
+            reportDir.appendingPathComponent("distilled-tfidf-student-round8-qwen-labels-w005-report.md")
+        ) {
+            checks.append(
+                classifierModelCheck(
+                    name: "Distilled TF-IDF student",
+                    shortName: "Distill",
+                    status: "Rejected",
+                    detail: "Soft Qwen labels improved infrastructure, not the hard intent boundary.",
+                    metric: distilledStudent,
+                    state: .warning
+                )
+            )
+        }
+
+        if let hardRound9 = readThresholdClassifierMetric(
+            reportDir.appendingPathComponent("round9-installed-eval-report.md"),
+            targetThreshold: 0.675
+        ) {
+            checks.append(
+                classifierModelCheck(
+                    name: "Round-9 hard labels",
+                    shortName: "Round 9",
+                    status: "Gap found",
+                    detail: "Quoted context, revision, and agent-control labels expose the remaining intent boundary.",
+                    metric: hardRound9,
+                    state: .warning
+                )
+            )
+        }
+
+        if let round9Candidate = readSelectedClassifierMetric(
+            reportDir.appendingPathComponent("intent-v2-round9-holdout-grid-report.md")
+        ) {
+            checks.append(
+                classifierModelCheck(
+                    name: "Round-9 retrain",
+                    shortName: "R9 retrain",
+                    status: "Rejected",
+                    detail: "Smaller TF-IDF cleared precision only by waking on almost nothing.",
+                    metric: round9Candidate,
+                    state: .warning
+                )
+            )
+        }
+
+        if let round9DistilledStudent = readSelectedClassifierMetric(
+            reportDir.appendingPathComponent("distilled-tfidf-student-round9-qwen-labels-w005-report.md")
+        ) {
+            checks.append(
+                classifierModelCheck(
+                    name: "Round-9 weak-teacher distill",
+                    shortName: "R9 distill",
+                    status: "Rejected",
+                    detail: "Existing Qwen weak labels produced a small student with too little recall.",
+                    metric: round9DistilledStudent,
+                    state: .warning
+                )
+            )
+        }
+
+        if let qwen35BDistilledStudent = readSelectedClassifierMetric(
+            reportDir.appendingPathComponent("distilled-tfidf-student-qwen36-35b-nvfp4-round10-report.md")
+        ) {
+            checks.append(
+                classifierModelCheck(
+                    name: "Qwen 35B private distill",
+                    shortName: "35B distill",
+                    status: "Rejected",
+                    detail: "Private DGX teacher labels improved coverage, but the tiny TF-IDF student still woke on too little.",
+                    metric: qwen35BDistilledStudent,
+                    state: .warning
+                )
+            )
+        }
+
+        if let qwen80BDistilledStudent = readSelectedClassifierMetric(
+            reportDir.appendingPathComponent("distilled-tfidf-student-qwen3-next-80b-fp8-round10-w002-report.md")
+        ) {
+            checks.append(
+                classifierModelCheck(
+                    name: "Qwen 80B private distill",
+                    shortName: "80B distill",
+                    status: "Rejected",
+                    detail: "A larger private teacher improved precision cleanliness, but TF-IDF still missed most held-out wakes.",
+                    metric: qwen80BDistilledStudent,
+                    state: .warning
+                )
+            )
+        }
+
+        if let embeddingTeacherStudent = readEmbeddingTeacherStudentMetric(
+            reportDir.appendingPathComponent("embedding-teacher-student-nomic-nosource-report.md")
+        ) {
+            checks.append(
+                classifierModelCheck(
+                    name: "Nomic embedding teacher-student",
+                    shortName: "Nomic teach",
+                    status: "Rejected",
+                    detail: "Semantic embeddings plus 35B teacher labels stayed clean but missed almost every wake.",
+                    metric: embeddingTeacherStudent,
+                    state: .warning
+                )
+            )
+        }
+
+        for transformer in [
+            (
+                "4.39M BERT intent",
+                "BERT 4M",
+                "transformer-student-google-bert-l2-h128-round10-report.md",
+                "Smallest transformer candidate was too blind at the deployment threshold."
+            ),
+            (
+                "9.59M BERT intent",
+                "BERT 10M",
+                "transformer-student-google-bert-l2-h256-round10-report.md",
+                "A wider two-layer BERT stayed precise by waking on almost nothing."
+            ),
+            (
+                "DeBERTa xsmall intent",
+                "DeBERTa",
+                "transformer-student-deberta-v3-xsmall-round10-fp32-report.md",
+                "DGX semantic ceiling test for the small-transformer path."
+            ),
+            (
+                "DeBERTa hard-only intent",
+                "DeBERTa hard",
+                "transformer-student-deberta-v3-xsmall-hard-only-round9-fp32-report.md",
+                "Hard-label-only ablation tested whether 80B pseudo-labels hurt the student."
+            )
+        ] {
+            if let transformerMetric = readTransformerHoldoutMetric(
+                reportDir.appendingPathComponent(transformer.2),
+                metricName: "holdout at dev threshold"
+            ) {
+                let clearsGate = transformerMetric.precision >= 0.95 && transformerMetric.recall > 0.30
+                checks.append(
+                    classifierModelCheck(
+                        name: transformer.0,
+                        shortName: transformer.1,
+                        status: clearsGate ? "Candidate" : "Rejected",
+                        detail: transformer.3,
+                        metric: transformerMetric,
+                        state: clearsGate ? .ok : .warning
+                    )
+                )
+            }
+        }
+
+        if let round8AfterRound9 = readSelectedClassifierMetric(
+            reportDir.appendingPathComponent("intent-v2-round8-after-round9-grid-report.md")
+        ) {
+            checks.append(
+                classifierModelCheck(
+                    name: "Round-8 after Round-9 train",
+                    shortName: "R8+R9",
+                    status: "Rejected",
+                    detail: "Training on round-9 labels still failed to generalize to the round-8 boundary.",
+                    metric: round8AfterRound9,
+                    state: .warning
+                )
+            )
+        }
+
+        if let foldTrainedEnsemble = readNamedHoldoutMetric(
+            reportDir.appendingPathComponent("fold-trained-and-ensemble-report.md"),
+            metricName: "loro selected"
+        ) {
+            checks.append(
+                classifierModelCheck(
+                    name: "Fold-trained ensemble",
+                    shortName: "Fold AND",
+                    status: "Rejected",
+                    detail: "A fair fold-trained veto recovered recall but failed the precision floor.",
+                    metric: foldTrainedEnsemble,
+                    state: .warning
+                )
+            )
+        }
+
+        if let fastText = readSelectedClassifierMetric(
+            reportDir.appendingPathComponent("fasttext-supervised-round8-ova-report.md")
+        ) {
+            checks.append(
+                classifierModelCheck(
+                    name: "fastText supervised",
+                    shortName: "fastText",
+                    status: "Rejected",
+                    detail: "Compact subword embeddings were tiny, but missed nearly every wake.",
+                    metric: fastText,
+                    state: .warning
+                )
+            )
+        }
+
+        if let createMLStatic = readSelectedThresholdMetric(
+            reportDir.appendingPathComponent("createml-static-round7-report.md")
+        ) {
+            checks.append(
+                classifierModelCheck(
+                    name: "Create ML static",
+                    shortName: "CML static",
+                    status: "Rejected",
+                    detail: "Mac-native static embedding model is small, but below precision floor.",
+                    metric: createMLStatic,
+                    state: .warning
+                )
+            )
+        }
+
+        if let createMLBERT = readSelectedThresholdMetric(
+            reportDir.appendingPathComponent("createml-bert-round7-report.md")
+        ) {
+            checks.append(
+                classifierModelCheck(
+                    name: "Create ML BERT",
+                    shortName: "CML BERT",
+                    status: "Rejected",
+                    detail: "Mac-native BERT embedding model did not beat the TF-IDF ceiling.",
+                    metric: createMLBERT,
+                    state: .warning
+                )
+            )
+        }
+
+        if let createMLMaxEnt = readSelectedThresholdMetric(
+            reportDir.appendingPathComponent("createml-maxent-round7-report.md")
+        ) {
+            checks.append(
+                classifierModelCheck(
+                    name: "Create ML maxEnt",
+                    shortName: "CML maxEnt",
+                    status: "Rejected",
+                    detail: "Smallest Mac-native model has useful recall but too many false wakes.",
+                    metric: createMLMaxEnt,
+                    state: .warning
+                )
+            )
+        }
+
+        if let scoreEnsemble = readNamedHoldoutMetric(
+            reportDir.appendingPathComponent("score-ensemble-round7-report.md"),
+            metricName: "holdout at OOF threshold"
+        ) {
+            checks.append(
+                classifierModelCheck(
+                    name: "Score ensemble",
+                    shortName: "Ensemble",
+                    status: "Rejected",
+                    detail: "Stacked TF-IDF scores did not generalize to the round-7 boundary.",
+                    metric: scoreEnsemble,
+                    state: .warning
+                )
+            )
+        }
+
+        if let nlEmbedding = readNamedHoldoutMetric(
+            reportDir.appendingPathComponent("nlembedding-round7-report.md"),
+            metricName: "holdout at OOF threshold"
+        ) {
+            checks.append(
+                classifierModelCheck(
+                    name: "NaturalLanguage embedding",
+                    shortName: "NL embed",
+                    status: "Rejected",
+                    detail: "Apple sentence embeddings stayed below the precision floor.",
+                    metric: nlEmbedding,
+                    state: .warning
+                )
+            )
+        }
+
+        for baseline in [
+            ("Current-label NB", "NB current", "group-holdout-nb-current-report.md"),
+            ("Current-label logreg", "LR current", "group-holdout-logreg-current-report.md"),
+            ("Current-label SVC", "SVC current", "group-holdout-svc-current-report.md")
+        ] {
+            if let currentBaseline = readGroupHoldoutBestMetric(
+                reportDir.appendingPathComponent(baseline.2)
+            ) {
+                checks.append(
+                    classifierModelCheck(
+                        name: baseline.0,
+                        shortName: baseline.1,
+                        status: "Rejected",
+                        detail: "Fresh all-label-file holdout rerun still misses the precision floor.",
+                        metric: currentBaseline,
+                        state: .warning
+                    )
+                )
+            }
+        }
+
+        if let ollamaCheck = readOllamaIntentCheck(
+            reportDir.appendingPathComponent("ollama-gemma3-270m-round8-smoke-report.md")
+        ) {
+            checks.append(ollamaCheck)
+        }
+
+        if let publicTraceCheck = readPublicTraceModelCheck(
+            reportDir.appendingPathComponent("public-trace-installed-false-wake-report.md")
+        ) {
+            checks.append(publicTraceCheck)
+        }
+
+        return checks
+    }
+
+    private func classifierModelCheck(
+        name: String,
+        shortName: String,
+        status: String,
+        detail: String,
+        metric: ParsedClassifierMetric,
+        state: HealthState
+    ) -> ClassifierModelCheckRecord {
+        ClassifierModelCheckRecord(
+            name: name,
+            shortName: shortName,
+            status: status,
+            detail: detail,
+            threshold: metric.threshold,
+            precision: metric.precision,
+            recall: metric.recall,
+            wakeRate: metric.wakeRate,
+            truePositiveCount: metric.truePositiveCount,
+            falsePositiveCount: metric.falsePositiveCount,
+            falseNegativeCount: metric.falseNegativeCount,
+            trueNegativeCount: metric.trueNegativeCount,
+            wakeCount: nil,
+            rowCount: metric.rowCount,
+            maxScore: nil,
+            state: state
+        )
+    }
+
+    private func readSelectedClassifierMetric(_ url: URL) -> ParsedClassifierMetric? {
+        let text = (try? String(contentsOf: url, encoding: .utf8)) ?? ""
+        var selectedThreshold: Double?
+        var inSelectedMetrics = false
+        for rawLine in text.components(separatedBy: .newlines) {
+            if rawLine.hasPrefix("Selected threshold:") {
+                selectedThreshold = Double(rawLine.replacingOccurrences(of: "Selected threshold:", with: "").trimmingCharacters(in: .whitespaces))
+                continue
+            }
+            if rawLine.hasPrefix("## ") {
+                inSelectedMetrics = rawLine.contains("Selected Group-Holdout Metrics")
+                    || rawLine.contains("Selected Holdout Metrics")
+                continue
+            }
+            guard inSelectedMetrics, let selectedThreshold else { continue }
+            let cells = markdownTableCells(rawLine)
+            guard cells.count >= 7,
+                  let precision = Double(cells[0]),
+                  let recall = Double(cells[1]),
+                  let wakeRate = Double(cells[2]),
+                  let truePositiveCount = Int(cells[3]),
+                  let falsePositiveCount = Int(cells[4]),
+                  let falseNegativeCount = Int(cells[5]),
+                  let trueNegativeCount = Int(cells[6])
+            else { continue }
+            return ParsedClassifierMetric(
+                threshold: selectedThreshold,
+                precision: precision,
+                recall: recall,
+                wakeRate: wakeRate,
+                truePositiveCount: truePositiveCount,
+                falsePositiveCount: falsePositiveCount,
+                falseNegativeCount: falseNegativeCount,
+                trueNegativeCount: trueNegativeCount,
+                rowCount: truePositiveCount + falsePositiveCount + falseNegativeCount + trueNegativeCount
+            )
+        }
+        return nil
+    }
+
+    private func readSelectedThresholdMetric(_ url: URL) -> ParsedClassifierMetric? {
+        let text = (try? String(contentsOf: url, encoding: .utf8)) ?? ""
+        var inSelectedMetrics = false
+        for rawLine in text.components(separatedBy: .newlines) {
+            if rawLine.hasPrefix("## ") {
+                inSelectedMetrics = rawLine.contains("Selected Holdout Metric")
+                continue
+            }
+            guard inSelectedMetrics else { continue }
+            let cells = markdownTableCells(rawLine)
+            guard cells.count >= 8,
+                  let threshold = Double(cells[0]),
+                  let precision = Double(cells[1]),
+                  let recall = Double(cells[2]),
+                  let wakeRate = Double(cells[3]),
+                  let truePositiveCount = Int(cells[4]),
+                  let falsePositiveCount = Int(cells[5]),
+                  let falseNegativeCount = Int(cells[6]),
+                  let trueNegativeCount = Int(cells[7])
+            else { continue }
+            return ParsedClassifierMetric(
+                threshold: threshold,
+                precision: precision,
+                recall: recall,
+                wakeRate: wakeRate,
+                truePositiveCount: truePositiveCount,
+                falsePositiveCount: falsePositiveCount,
+                falseNegativeCount: falseNegativeCount,
+                trueNegativeCount: trueNegativeCount,
+                rowCount: truePositiveCount + falsePositiveCount + falseNegativeCount + trueNegativeCount
+            )
+        }
+        return nil
+    }
+
+    private func readNamedHoldoutMetric(_ url: URL, metricName: String) -> ParsedClassifierMetric? {
+        let text = (try? String(contentsOf: url, encoding: .utf8)) ?? ""
+        var inHoldout = false
+        for rawLine in text.components(separatedBy: .newlines) {
+            if rawLine.hasPrefix("## ") {
+                inHoldout = rawLine.contains("Round-7 Holdout") || rawLine == "## Holdout"
+                continue
+            }
+            guard inHoldout else { continue }
+            let cells = markdownTableCells(rawLine)
+            guard cells.count >= 9,
+                  cells[0] == metricName,
+                  let threshold = Double(cells[1]),
+                  let precision = Double(cells[2]),
+                  let recall = Double(cells[3]),
+                  let wakeRate = Double(cells[4]),
+                  let truePositiveCount = Int(cells[5]),
+                  let falsePositiveCount = Int(cells[6]),
+                  let falseNegativeCount = Int(cells[7]),
+                  let trueNegativeCount = Int(cells[8])
+            else { continue }
+            return ParsedClassifierMetric(
+                threshold: threshold,
+                precision: precision,
+                recall: recall,
+                wakeRate: wakeRate,
+                truePositiveCount: truePositiveCount,
+                falsePositiveCount: falsePositiveCount,
+                falseNegativeCount: falseNegativeCount,
+                trueNegativeCount: trueNegativeCount,
+                rowCount: truePositiveCount + falsePositiveCount + falseNegativeCount + trueNegativeCount
+            )
+        }
+        return nil
+    }
+
+    private func readEmbeddingTeacherStudentMetric(_ url: URL) -> ParsedClassifierMetric? {
+        let text = (try? String(contentsOf: url, encoding: .utf8)) ?? ""
+        var inBest = false
+        for rawLine in text.components(separatedBy: .newlines) {
+            if rawLine.hasPrefix("## ") {
+                inBest = rawLine == "## Best"
+                continue
+            }
+            guard inBest else { continue }
+            let cells = markdownTableCells(rawLine)
+            guard cells.count >= 10,
+                  let threshold = Double(cells[2]),
+                  let precision = Double(cells[3]),
+                  let recall = Double(cells[4]),
+                  let wakeRate = Double(cells[5]),
+                  let truePositiveCount = Int(cells[6]),
+                  let falsePositiveCount = Int(cells[7]),
+                  let falseNegativeCount = Int(cells[8]),
+                  let trueNegativeCount = Int(cells[9])
+            else { continue }
+            return ParsedClassifierMetric(
+                threshold: threshold,
+                precision: precision,
+                recall: recall,
+                wakeRate: wakeRate,
+                truePositiveCount: truePositiveCount,
+                falsePositiveCount: falsePositiveCount,
+                falseNegativeCount: falseNegativeCount,
+                trueNegativeCount: trueNegativeCount,
+                rowCount: truePositiveCount + falsePositiveCount + falseNegativeCount + trueNegativeCount
+            )
+        }
+        return nil
+    }
+
+    private func readGroupHoldoutBestMetric(_ url: URL) -> ParsedClassifierMetric? {
+        let text = (try? String(contentsOf: url, encoding: .utf8)) ?? ""
+        var inThresholds = false
+        var best: ParsedClassifierMetric?
+        for rawLine in text.components(separatedBy: .newlines) {
+            if rawLine.hasPrefix("## ") {
+                inThresholds = rawLine.trimmingCharacters(in: .whitespacesAndNewlines) == "## Overall Thresholds"
+                continue
+            }
+            guard inThresholds else { continue }
+            let cells = markdownTableCells(rawLine)
+            guard cells.count >= 8,
+                  let threshold = Double(cells[0]),
+                  let precision = Double(cells[1]),
+                  let recall = Double(cells[2]),
+                  let wakeRate = Double(cells[3]),
+                  let truePositiveCount = Int(cells[4]),
+                  let falsePositiveCount = Int(cells[5]),
+                  let falseNegativeCount = Int(cells[6]),
+                  let trueNegativeCount = Int(cells[7])
+            else { continue }
+            let metric = ParsedClassifierMetric(
+                threshold: threshold,
+                precision: precision,
+                recall: recall,
+                wakeRate: wakeRate,
+                truePositiveCount: truePositiveCount,
+                falsePositiveCount: falsePositiveCount,
+                falseNegativeCount: falseNegativeCount,
+                trueNegativeCount: trueNegativeCount,
+                rowCount: truePositiveCount + falsePositiveCount + falseNegativeCount + trueNegativeCount
+            )
+            if best == nil
+                || metric.precision > best!.precision
+                || (metric.precision == best!.precision && metric.recall > best!.recall) {
+                best = metric
+            }
+        }
+        return best
+    }
+
+    private func readTransformerHoldoutMetric(_ url: URL, metricName: String) -> ParsedClassifierMetric? {
+        let text = (try? String(contentsOf: url, encoding: .utf8)) ?? ""
+        var inMetrics = false
+        for rawLine in text.components(separatedBy: .newlines) {
+            if rawLine.hasPrefix("## ") {
+                inMetrics = rawLine.trimmingCharacters(in: .whitespacesAndNewlines) == "## Metrics"
+                continue
+            }
+            guard inMetrics else { continue }
+            let cells = markdownTableCells(rawLine)
+            guard cells.count >= 9,
+                  cells[0] == metricName,
+                  let threshold = Double(cells[1]),
+                  let precision = Double(cells[2]),
+                  let recall = Double(cells[3]),
+                  let wakeRate = Double(cells[4]),
+                  let truePositiveCount = Int(cells[5]),
+                  let falsePositiveCount = Int(cells[6]),
+                  let falseNegativeCount = Int(cells[7]),
+                  let trueNegativeCount = Int(cells[8])
+            else { continue }
+            return ParsedClassifierMetric(
+                threshold: threshold,
+                precision: precision,
+                recall: recall,
+                wakeRate: wakeRate,
+                truePositiveCount: truePositiveCount,
+                falsePositiveCount: falsePositiveCount,
+                falseNegativeCount: falseNegativeCount,
+                trueNegativeCount: trueNegativeCount,
+                rowCount: truePositiveCount + falsePositiveCount + falseNegativeCount + trueNegativeCount
+            )
+        }
+        return nil
+    }
+
+    private func readTwoStageGateMetric(_ url: URL) -> ParsedClassifierMetric? {
+        let text = (try? String(contentsOf: url, encoding: .utf8)) ?? ""
+        var inSelected = false
+        for rawLine in text.components(separatedBy: .newlines) {
+            if rawLine.hasPrefix("## ") {
+                inSelected = rawLine.contains("Selected Holdout Metric")
+                continue
+            }
+            guard inSelected else { continue }
+            let cells = markdownTableCells(rawLine)
+            guard cells.count >= 9,
+                  let gateThreshold = Double(cells[1]),
+                  let precision = Double(cells[2]),
+                  let recall = Double(cells[3]),
+                  let wakeRate = Double(cells[4]),
+                  let truePositiveCount = Int(cells[5]),
+                  let falsePositiveCount = Int(cells[6]),
+                  let falseNegativeCount = Int(cells[7]),
+                  let trueNegativeCount = Int(cells[8])
+            else { continue }
+            return ParsedClassifierMetric(
+                threshold: gateThreshold,
+                precision: precision,
+                recall: recall,
+                wakeRate: wakeRate,
+                truePositiveCount: truePositiveCount,
+                falsePositiveCount: falsePositiveCount,
+                falseNegativeCount: falseNegativeCount,
+                trueNegativeCount: trueNegativeCount,
+                rowCount: truePositiveCount + falsePositiveCount + falseNegativeCount + trueNegativeCount
+            )
+        }
+        return nil
+    }
+
+    private func readOllamaIntentCheck(_ url: URL) -> ClassifierModelCheckRecord? {
+        let text = (try? String(contentsOf: url, encoding: .utf8)) ?? ""
+        var rowCount: Int?
+        var inMetrics = false
+        for rawLine in text.components(separatedBy: .newlines) {
+            if rawLine.hasPrefix("Rows:") {
+                rowCount = Int(rawLine.replacingOccurrences(of: "Rows:", with: "").trimmingCharacters(in: .whitespaces))
+                continue
+            }
+            if rawLine.hasPrefix("## ") {
+                inMetrics = rawLine.trimmingCharacters(in: .whitespacesAndNewlines) == "## Metrics"
+                continue
+            }
+            guard inMetrics else { continue }
+            let cells = markdownTableCells(rawLine)
+            guard cells.count >= 8,
+                  let precision = Double(cells[0]),
+                  let recall = Double(cells[1]),
+                  let wakeRate = Double(cells[2]),
+                  let truePositiveCount = Int(cells[3]),
+                  let falsePositiveCount = Int(cells[4]),
+                  let falseNegativeCount = Int(cells[5]),
+                  let trueNegativeCount = Int(cells[6])
+            else { continue }
+            return ClassifierModelCheckRecord(
+                name: "Ollama Gemma 270M",
+                shortName: "Gemma 270M",
+                status: "Rejected",
+                detail: "Tiny local LLM over-triggered and returned invalid JSON in smoke testing.",
+                threshold: nil,
+                precision: precision,
+                recall: recall,
+                wakeRate: wakeRate,
+                truePositiveCount: truePositiveCount,
+                falsePositiveCount: falsePositiveCount,
+                falseNegativeCount: falseNegativeCount,
+                trueNegativeCount: trueNegativeCount,
+                wakeCount: nil,
+                rowCount: rowCount ?? truePositiveCount + falsePositiveCount + falseNegativeCount + trueNegativeCount,
+                maxScore: nil,
+                state: .warning
+            )
+        }
+        return nil
+    }
+
+    private func readThresholdClassifierMetric(_ url: URL, targetThreshold: Double) -> ParsedClassifierMetric? {
+        let text = (try? String(contentsOf: url, encoding: .utf8)) ?? ""
+        var inMetrics = false
+        for rawLine in text.components(separatedBy: .newlines) {
+            if rawLine.hasPrefix("## ") {
+                inMetrics = rawLine.trimmingCharacters(in: .whitespacesAndNewlines) == "## Metrics"
+                continue
+            }
+            guard inMetrics else { continue }
+            let cells = markdownTableCells(rawLine)
+            guard cells.count >= 8,
+                  let threshold = Double(cells[0]),
+                  abs(threshold - targetThreshold) < 0.0005,
+                  let precision = Double(cells[1]),
+                  let recall = Double(cells[2]),
+                  let wakeRate = Double(cells[3]),
+                  let truePositiveCount = Int(cells[4]),
+                  let falsePositiveCount = Int(cells[5]),
+                  let falseNegativeCount = Int(cells[6]),
+                  let trueNegativeCount = Int(cells[7])
+            else { continue }
+            return ParsedClassifierMetric(
+                threshold: threshold,
+                precision: precision,
+                recall: recall,
+                wakeRate: wakeRate,
+                truePositiveCount: truePositiveCount,
+                falsePositiveCount: falsePositiveCount,
+                falseNegativeCount: falseNegativeCount,
+                trueNegativeCount: trueNegativeCount,
+                rowCount: truePositiveCount + falsePositiveCount + falseNegativeCount + trueNegativeCount
+            )
+        }
+        return nil
+    }
+
+    private func readPublicTraceModelCheck(_ url: URL) -> ClassifierModelCheckRecord? {
+        let text = (try? String(contentsOf: url, encoding: .utf8)) ?? ""
+        var rows: Int?
+        var modelThreshold: Double?
+        var wakeCount: Int?
+        var maxScore: Double?
+        var tableKind: String?
+
+        for rawLine in text.components(separatedBy: .newlines) {
+            if rawLine.hasPrefix("Rows:") {
+                rows = Int(rawLine.replacingOccurrences(of: "Rows:", with: "").trimmingCharacters(in: .whitespaces))
+                continue
+            }
+            if rawLine.hasPrefix("Model threshold:") {
+                modelThreshold = Double(rawLine.replacingOccurrences(of: "Model threshold:", with: "").trimmingCharacters(in: .whitespaces))
+                continue
+            }
+            if rawLine.hasPrefix("## ") {
+                if rawLine.contains("Wake Counts") {
+                    tableKind = "wake-counts"
+                } else if rawLine.contains("Score Quantiles") {
+                    tableKind = "quantiles"
+                } else {
+                    tableKind = nil
+                }
+                continue
+            }
+
+            let cells = markdownTableCells(rawLine)
+            if tableKind == "wake-counts", cells.count >= 3,
+               let threshold = Double(cells[0]),
+               abs(threshold - (modelThreshold ?? 0.675)) < 0.0005 {
+                wakeCount = Int(cells[1])
+            } else if tableKind == "quantiles", cells.count >= 2, cells[0] == "1.00" {
+                maxScore = Double(cells[1])
+            }
+        }
+
+        guard let rows, let wakeCount else { return nil }
+        return ClassifierModelCheckRecord(
+            name: "Public trace control",
+            shortName: "Public traces",
+            status: wakeCount == 0 ? "Passed" : "Review",
+            detail: "External coding-agent prompts used as false-wake controls.",
+            threshold: modelThreshold,
+            precision: nil,
+            recall: nil,
+            wakeRate: rows > 0 ? Double(wakeCount) / Double(rows) : nil,
+            truePositiveCount: nil,
+            falsePositiveCount: nil,
+            falseNegativeCount: nil,
+            trueNegativeCount: nil,
+            wakeCount: wakeCount,
+            rowCount: rows,
+            maxScore: maxScore,
+            state: wakeCount == 0 ? .ok : .warning
+        )
+    }
+
     private func markdownTableCells(_ rawLine: String) -> [String] {
         let trimmed = rawLine.trimmingCharacters(in: .whitespacesAndNewlines)
         guard trimmed.hasPrefix("|"), trimmed.hasSuffix("|") else { return [] }
@@ -5503,7 +7938,44 @@ final class IntrospectModel: ObservableObject {
                 classifierScore: doubleValue(classifier["score"]),
                 classifierThreshold: doubleValue(classifier["threshold"]),
                 classifierReviewThreshold: doubleValue(classifier["review_threshold"]),
-                classifierModelType: classifier["model_type"] as? String
+                classifierModelType: classifier["model_type"] as? String,
+                classifierExplanations: readClassifierExplanations(classifier["explanations"]),
+                classifierAlternates: readClassifierAlternates(classifier["alternates"])
+            )
+        }
+    }
+
+    private func readClassifierExplanations(_ value: Any?) -> [ClassifierExplanationRecord] {
+        let rows = value as? [[String: Any]] ?? []
+        return rows.enumerated().compactMap { index, row in
+            guard let contribution = doubleValue(row["contribution"]) else { return nil }
+            let feature = (row["feature"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !feature.isEmpty else { return nil }
+            let kind = row["kind"] as? String ?? "feature"
+            return ClassifierExplanationRecord(
+                id: "\(index)-\(kind)-\(feature)",
+                kind: kind,
+                feature: feature,
+                contribution: contribution
+            )
+        }
+    }
+
+    private func readClassifierAlternates(_ value: Any?) -> [ClassifierAlternateRecord] {
+        let rows = value as? [[String: Any]] ?? []
+        return rows.enumerated().compactMap { index, row in
+            let rawName = (row["name"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            let name = rawName.isEmpty ? "candidate \(index + 1)" : rawName
+            return ClassifierAlternateRecord(
+                id: "\(index)-\(name)",
+                name: name,
+                score: doubleValue(row["score"]),
+                threshold: doubleValue(row["threshold"]),
+                reviewThreshold: doubleValue(row["review_threshold"]),
+                triggered: row["triggered"] as? Bool ?? false,
+                review: row["review"] as? Bool ?? false,
+                modelType: row["model_type"] as? String,
+                error: row["error"] as? String
             )
         }
     }
@@ -5962,6 +8434,11 @@ final class IntrospectModel: ObservableObject {
         formatter.timeStyle = .short
         return formatter
     }()
+    private static let dayLabelFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "MMM d"
+        return formatter
+    }()
 
     private static let percentFormatter: NumberFormatter = {
         let formatter = NumberFormatter()
@@ -5992,6 +8469,10 @@ final class IntrospectModel: ObservableObject {
             return ""
         }
         return trimmed
+    }
+
+    private var wakeThresholdSetting: String {
+        String(format: "%.3f", locale: Locale(identifier: "en_US_POSIX"), clampedWakeCustomThreshold)
     }
 
     private func writeJSON(_ object: Any, to url: URL) throws {
