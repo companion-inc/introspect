@@ -1,3 +1,30 @@
+# Trigger Reflector Run — 2026-06-19 23:04 PDT
+
+## Batch Summary
+- 1 classifier wake event fired from one Codex transcript scan.
+- Optional review terms were metadata only.
+- Runs showed prompt version `8e76be2` at 1 trigger / 16 Runs, below the recent grant/proposal prompt versions. This was not an `AGENTS.md` regression, so this reflector run updated the close product-surface skill instead of reverting or adding a global rule.
+
+## Classification
+- Change target: `skill_update`
+- Updated `product-surface-polish`.
+
+## Evidence
+- Classifier wake event 1 was a real grant-packet budget failure: the agent finalized and verified a one-page budget attachment, then the user had to ask what parts were needed and point out that the hardware budget was not researched enough.
+- The follow-up turn confirmed the missing step: once corrected, the agent created `research/headset_bom_budget`, searched parts/pricing sources, and reframed the $18k hardware line around rigs, backups, displays, phones/connectivity, mounts, instruments, materials, and replacements.
+- The current skill already covered grant requirements, optional award resources, and research-vs-product framing; it did not yet require a source-backed BOM or cost model before compressing budget lines into the final attachment.
+
+## Change
+- Product-surface grant work now treats budgets as part of the surface contract.
+- Grant budgets now require a source-backed cost model before finalization: parts or services, quantities, unit prices or ranges, vendor/source class, and why the compressed one-page line item matches the project.
+- Added a gotcha that one-page budget format is not permission to invent a round hardware or services number.
+
+## Probe
+- Positive: "What parts are needed for this grant budget? You did not research the hardware line." Expected route: `product-surface-polish`; build the BOM/cost model first, then compress it into the grant attachment.
+- Near miss: "Change the backend limit for automations from 10 to 20." Expected route: no product-surface skill; this is backend logic, not grant budget or product-surface work.
+
+---
+
 # Trigger Reflector Run — 2026-06-19 16:35 PDT
 
 ## Batch Summary
