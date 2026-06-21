@@ -4357,7 +4357,7 @@ enum WakeSensitivity: String, CaseIterable, Identifiable {
         case .quiet:
             0.80
         case .sensitive:
-            0.50
+            0.40
         case .balanced, .custom:
             nil
         }

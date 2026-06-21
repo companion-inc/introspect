@@ -137,15 +137,25 @@ shadow = value("INTROSPECT_WAKE_SHADOW_MODELS")
 shadow_count = len([item for item in shadow.split(",") if item.strip()])
 sensitivity = value("INTROSPECT_WAKE_SENSITIVITY", "balanced")
 threshold = value("INTROSPECT_WAKE_THRESHOLD")
-threshold_text = threshold.strip() if threshold.strip() else "model"
+configured_threshold = threshold.strip() if threshold.strip() else "model"
+if sensitivity == "sensitive":
+    effective_threshold = "0.40"
+elif sensitivity == "quiet":
+    effective_threshold = "0.80"
+elif sensitivity == "custom":
+    effective_threshold = configured_threshold
+else:
+    effective_threshold = "model"
 parts = [
     f"runner={runner}",
     f"claude_model={claude}",
     f"codex_model={codex}",
     f"sensitivity={sensitivity}",
-    f"threshold={threshold_text}",
+    f"effective_threshold={effective_threshold}",
     f"shadow_models={shadow_count}",
 ]
+if sensitivity == "custom":
+    parts.insert(-1, f"configured_threshold={configured_threshold}")
 if fallback:
     parts.insert(3, f"claude_cli_fallback_model={fallback}")
 print(" ".join(parts))
@@ -363,9 +373,10 @@ print(
 )
 if events:
     latest_event = max(events, key=lambda event: str(event.get("observed_at") or event.get("ts") or ""))
+    latest_observed_at = latest_event.get("observed_at") or latest_event.get("ts")
     print(
         "latest event: "
-        f"observed_at={latest_event.get('observed_at')} "
+        f"observed_at={latest_observed_at} "
         f"ts={latest_event.get('ts')} "
         f"triggered={latest_event.get('triggered')} "
         f"backfilled={bool(latest_event.get('backfilled'))}"

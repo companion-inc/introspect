@@ -290,6 +290,10 @@ def run_shadow_model_case() -> None:
 def run_sensitivity_case() -> None:
     classifier = load_intent_module()
     prompt = "you are not listening, keep going and fix it"
+    real_frustration_prompt = (
+        'ARE U SURE ITS OWRKING BTW I SAY A LOT OF BAD WORDS AND IT DOESN"T TRIGGER '
+        "ALSO SHOWING OLD LOGO IN NOTIFICATIONS"
+    )
     old_env = os.environ.copy()
     try:
         os.environ.pop("INTROSPECT_WAKE_THRESHOLD", None)
@@ -299,6 +303,7 @@ def run_sensitivity_case() -> None:
 
         os.environ["INTROSPECT_WAKE_SENSITIVITY"] = "sensitive"
         sensitive = classifier.score_prompt(prompt, source="codex")
+        sensitive_real_frustration = classifier.score_prompt(real_frustration_prompt, source="codex")
 
         os.environ["INTROSPECT_WAKE_SENSITIVITY"] = "quiet"
         quiet = classifier.score_prompt(prompt, source="codex")
@@ -312,8 +317,10 @@ def run_sensitivity_case() -> None:
 
     if balanced.get("triggered"):
         raise AssertionError(f"balanced sensitivity should preserve the model threshold: {balanced}")
-    if not sensitive.get("triggered") or sensitive.get("threshold") != 0.50:
+    if not sensitive.get("triggered") or sensitive.get("threshold") != 0.40:
         raise AssertionError(f"sensitive threshold did not wake the borderline prompt: {sensitive}")
+    if not sensitive_real_frustration.get("triggered") or sensitive_real_frustration.get("threshold") != 0.40:
+        raise AssertionError(f"sensitive threshold did not wake the real frustration prompt: {sensitive_real_frustration}")
     if quiet.get("triggered") or quiet.get("threshold") != 0.80:
         raise AssertionError(f"quiet threshold should suppress the borderline prompt: {quiet}")
     if not custom.get("triggered") or custom.get("threshold") != 0.30:

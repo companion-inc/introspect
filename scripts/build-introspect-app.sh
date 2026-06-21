@@ -21,27 +21,27 @@ CODESIGN_FLAGS=(--force --deep --sign "$SIGN_IDENTITY")
 if [ "$SIGN_IDENTITY" != "-" ]; then
   CODESIGN_FLAGS=(--force --deep --options runtime --timestamp --sign "$SIGN_IDENTITY")
 fi
+BUNDLE_SHORT_VERSION="${INTROSPECT_BUNDLE_SHORT_VERSION:-0.1.1}"
+BUNDLE_VERSION="${INTROSPECT_BUNDLE_VERSION:-$(git rev-list --count HEAD 2>/dev/null || date +%s)}"
 
 cd "$REPO"
 swift build -c release
 
 ICON="$REPO/assets/AppIcon.icns"
-if [ ! -f "$ICON" ]; then
-  echo "Rendering app icon..."
-  ICON_TMP="$(mktemp -d)"
-  swiftc -O -o "$ICON_TMP/render-icon" "$REPO/scripts/render-app-icon.swift"
-  "$ICON_TMP/render-icon" "$ICON_TMP/AppIcon-1024.png"
-  mkdir -p "$ICON_TMP/AppIcon.iconset"
-  cp "$ICON_TMP/AppIcon-1024.png" "$ICON_TMP/AppIcon.iconset/icon_512x512@2x.png"
-  for s in 16 32 128 256 512; do
-    sips -z "$s" "$s" "$ICON_TMP/AppIcon-1024.png" --out "$ICON_TMP/AppIcon.iconset/icon_${s}x${s}.png" >/dev/null
-    d=$((s * 2))
-    sips -z "$d" "$d" "$ICON_TMP/AppIcon-1024.png" --out "$ICON_TMP/AppIcon.iconset/icon_${s}x${s}@2x.png" >/dev/null
-  done
-  mkdir -p "$REPO/assets"
-  iconutil -c icns "$ICON_TMP/AppIcon.iconset" -o "$ICON"
-  rm -rf "$ICON_TMP"
-fi
+echo "Rendering app icon..."
+ICON_TMP="$(mktemp -d)"
+swiftc -O -o "$ICON_TMP/render-icon" "$REPO/scripts/render-app-icon.swift"
+"$ICON_TMP/render-icon" "$ICON_TMP/AppIcon-1024.png"
+mkdir -p "$ICON_TMP/AppIcon.iconset"
+cp "$ICON_TMP/AppIcon-1024.png" "$ICON_TMP/AppIcon.iconset/icon_512x512@2x.png"
+for s in 16 32 128 256 512; do
+  sips -z "$s" "$s" "$ICON_TMP/AppIcon-1024.png" --out "$ICON_TMP/AppIcon.iconset/icon_${s}x${s}.png" >/dev/null
+  d=$((s * 2))
+  sips -z "$d" "$d" "$ICON_TMP/AppIcon-1024.png" --out "$ICON_TMP/AppIcon.iconset/icon_${s}x${s}@2x.png" >/dev/null
+done
+mkdir -p "$REPO/assets"
+iconutil -c icns "$ICON_TMP/AppIcon.iconset" -o "$ICON"
+rm -rf "$ICON_TMP"
 
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
@@ -58,7 +58,7 @@ done
 find "$APP/Contents/Resources" -type d -name '__pycache__' -prune -exec rm -rf {} +
 find "$APP/Contents/Resources" -type f \( -name '*.pyc' -o -name '*.pyo' -o -name '.DS_Store' \) -delete
 
-cat > "$APP/Contents/Info.plist" <<'PLIST'
+cat > "$APP/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -80,9 +80,9 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
   <key>LSApplicationCategoryType</key>
   <string>public.app-category.developer-tools</string>
   <key>CFBundleShortVersionString</key>
-  <string>0.1.0</string>
+  <string>$BUNDLE_SHORT_VERSION</string>
   <key>CFBundleVersion</key>
-  <string>1</string>
+  <string>$BUNDLE_VERSION</string>
   <key>LSMinimumSystemVersion</key>
   <string>14.0</string>
 </dict>

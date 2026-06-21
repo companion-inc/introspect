@@ -87,7 +87,7 @@ INTROSPECT_SKILLS_DIR="$PWD/skills" ./scripts/validate-skills.py
 
 1. Claude Code or Codex submits a user prompt.
 2. `hooks/trigger-reflect.sh` logs prompt metadata to the active feedback directory. Installed apps use `~/.introspect/feedback`; checkout/dev installs use `feedback/` in the repo.
-3. The hook scores wake intent with the exportable local classifier at `~/.introspect/models/wake-logreg-v2-round4.json` unless `INTROSPECT_WAKE_CLASSIFIER=0`. The production wake threshold is `0.675`; lower scores down to the review threshold are logged for audit but do not wake the reflector.
+3. The hook scores wake intent with the exportable local classifier at `~/.introspect/models/wake-logreg-v2-round4.json` unless `INTROSPECT_WAKE_CLASSIFIER=0`. Balanced mode uses the model's production threshold, sensitive mode wakes earlier at `0.40`, and lower scores down to the review threshold are logged for audit but do not wake the reflector.
 4. `~/.introspect/trigger-words.txt` is optional review metadata only. Introspect does not install defaults; word fallback is disabled unless `INTROSPECT_TRIGGER_WORD_FALLBACK=1`.
 5. If the classifier says the prompt is a foreground wake, the hook appends it to `trigger-queue.jsonl` in the active feedback directory with the event id, message locator, prompt hash, classifier score, optional review-term matches, snippet, and transcript identity fields available from the hook input.
 6. In immediate mode, the hook kicks `hooks/trigger-worker.py --kick`. In nightly mode, the LaunchAgent runs `hooks/trigger-worker.py --nightly`.

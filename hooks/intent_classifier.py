@@ -21,7 +21,7 @@ DEFAULT_MODEL_PATH = Path(
 )
 TOKEN_RE = re.compile(r"(?u)\b\w\w+\b")
 WAKE_SENSITIVITY_THRESHOLDS = {
-    "sensitive": 0.50,
+    "sensitive": 0.40,
     "quiet": 0.80,
 }
 WAKE_SENSITIVITY_VALUES = {"quiet", "balanced", "sensitive", "custom"}
