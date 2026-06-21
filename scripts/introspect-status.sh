@@ -357,12 +357,19 @@ print(
     "classifier: "
     f"{len(classifier_events)} scored, "
     f"{len(shadow_events)} shadow-scored, "
-    f"{shadow_backfilled} backfilled, "
+    f"{shadow_backfilled} alternate-score backfilled, "
     f"{len(shadow_models)} candidate model(s), "
     f"sensitivities={','.join(sensitivities) if sensitivities else 'unknown'}"
 )
 if events:
-    print(f"latest event: {events[-1].get('ts')} triggered={events[-1].get('triggered')}")
+    latest_event = max(events, key=lambda event: str(event.get("observed_at") or event.get("ts") or ""))
+    print(
+        "latest event: "
+        f"observed_at={latest_event.get('observed_at')} "
+        f"ts={latest_event.get('ts')} "
+        f"triggered={latest_event.get('triggered')} "
+        f"backfilled={bool(latest_event.get('backfilled'))}"
+    )
 if triggered:
     words = Counter(
         word
@@ -406,9 +413,19 @@ if scan_state_path.exists():
     print(
         "codex scanner: "
         f"last_scan={scan_state.get('last_scan_at')} "
+        f"mode={scan_state.get('last_scan_mode', 'incremental')} "
         f"new={scan_state.get('last_new_events')} "
         f"triggered={scan_state.get('last_triggered_events')}"
     )
+    if scan_state.get("last_backfill_at"):
+        print(
+            "history backfill: "
+            f"last_backfill={scan_state.get('last_backfill_at')} "
+            f"days={scan_state.get('last_backfill_days')} "
+            f"new={scan_state.get('last_backfill_new_events')} "
+            f"triggered={scan_state.get('last_backfill_triggered_events')} "
+            f"max_events={scan_state.get('last_backfill_max_events')}"
+        )
 else:
     print("codex scanner: never ran")
 

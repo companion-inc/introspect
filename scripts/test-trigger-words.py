@@ -429,6 +429,96 @@ def run_codex_scanner_case() -> None:
             raise AssertionError(f"scanner expected one queued event, got {len(queue)}")
 
 
+def run_history_backfill_scanner_case() -> None:
+    with tempfile.TemporaryDirectory(prefix="agent-loop-history-backfill-") as tmp_raw:
+        tmp = Path(tmp_raw)
+        codex_sessions = tmp / "codex" / "sessions" / "2026" / "06" / "20"
+        claude_projects = tmp / "claude" / "projects" / "test-project"
+        codex_sessions.mkdir(parents=True)
+        claude_projects.mkdir(parents=True)
+        rollout = codex_sessions / "rollout-2026-06-20T00-00-00-backfill.jsonl"
+        claude_session = claude_projects / "backfill-claude.jsonl"
+        timestamp = time.strftime("%Y-%m-%dT%H:%M:%S.000Z", time.gmtime())
+
+        codex_rows = [
+            {
+                "timestamp": timestamp,
+                "type": "session_meta",
+                "payload": {"id": "backfill-codex-session", "cwd": str(REPO)},
+            },
+            {
+                "timestamp": timestamp,
+                "type": "response_item",
+                "payload": {
+                    "type": "message",
+                    "role": "user",
+                    "content": [{"type": "input_text", "text": "codex backfill plain history prompt"}],
+                },
+            },
+        ]
+        claude_rows = [
+            {
+                "timestamp": timestamp,
+                "type": "user",
+                "sessionId": "backfill-claude-session",
+                "message": {
+                    "role": "user",
+                    "content": "you did not backfill the local claude history after install",
+                },
+            },
+        ]
+        rollout.write_text("\n".join(json.dumps(row) for row in codex_rows) + "\n")
+        claude_session.write_text("\n".join(json.dumps(row) for row in claude_rows) + "\n")
+        now = time.time()
+        os.utime(rollout, (now, now))
+        os.utime(claude_session, (now, now))
+
+        env = os.environ.copy()
+        env.update(
+            {
+                "INTROSPECT_REPO": str(REPO),
+                "INTROSPECT_FEEDBACK_DIR": str(tmp / "feedback"),
+                "INTROSPECT_CODEX_SESSIONS_DIR": str(tmp / "codex" / "sessions"),
+                "INTROSPECT_CLAUDE_PROJECTS_DIR": str(tmp / "claude" / "projects"),
+                "INTROSPECT_REFLECT_MODE": "nightly",
+                "INTROSPECT_WAKE_MODEL": str(WAKE_MODEL),
+            }
+        )
+        subprocess.run(
+            [
+                sys.executable,
+                str(SCANNER),
+                "--backfill",
+                "--since-days",
+                "1",
+                "--max-events",
+                "10",
+                "--no-queue",
+                "--no-kick",
+            ],
+            text=True,
+            env=env,
+            cwd=REPO,
+            check=True,
+            timeout=10,
+        )
+
+        events = read_jsonl(tmp / "feedback" / "events.jsonl")
+        queue = read_jsonl(tmp / "feedback" / "trigger-queue.jsonl")
+        state = json.loads((tmp / "feedback" / "codex-transcript-scan-state.json").read_text())
+        if len(events) != 2:
+            raise AssertionError(f"backfill expected 2 prompt events, got {len(events)}")
+        if not all(event.get("backfilled") for event in events):
+            raise AssertionError(f"backfill did not mark all events: {events}")
+        sources = {event.get("source") for event in events}
+        if sources != {"codex_transcript_backfill", "claude_transcript_backfill"}:
+            raise AssertionError(f"backfill sources were wrong: {sources}")
+        if queue:
+            raise AssertionError(f"backfill should not queue old history, got {queue}")
+        if state.get("last_scan_mode") != "backfill" or state.get("last_backfill_new_events") != 2:
+            raise AssertionError(f"backfill state was not recorded: {state}")
+
+
 def run_worker_notification_summary_case() -> None:
     worker = load_worker_module("trigger_worker_summary")
 
@@ -502,10 +592,11 @@ def main() -> int:
     run_shadow_model_case()
     run_sensitivity_case()
     run_codex_scanner_case()
+    run_history_backfill_scanner_case()
     run_worker_notification_summary_case()
     run_worker_command_model_case()
     run_worker_retry_policy_case()
-    print(f"test-trigger-words: ok ({len(cases) + 9} cases)")
+    print(f"test-trigger-words: ok ({len(cases) + 10} cases)")
     return 0
 
 

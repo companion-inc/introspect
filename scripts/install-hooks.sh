@@ -27,6 +27,10 @@ REFLECTOR_CODEX_MODEL=""
 WAKE_SHADOW_MODELS="${INTROSPECT_WAKE_SHADOW_MODELS:-}"
 WAKE_SENSITIVITY="${INTROSPECT_WAKE_SENSITIVITY:-balanced}"
 WAKE_THRESHOLD="${INTROSPECT_WAKE_THRESHOLD:-}"
+BACKFILL_DAYS="${INTROSPECT_BACKFILL_DAYS:-7}"
+BACKFILL_MAX_EVENTS="${INTROSPECT_BACKFILL_MAX_EVENTS:-500}"
+BACKFILL_ENABLED="${INTROSPECT_BACKFILL_ENABLED:-1}"
+BACKFILL_FORCE="${INTROSPECT_FORCE_BACKFILL:-0}"
 LAUNCHD_PATH="$HOME/.npm-global/bin:$HOME/.local/bin:$HOME/.bun/bin:/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin"
 LAUNCH_LABEL="ai.companion.introspect.reflector"
 LAUNCH_PLIST="$HOME/Library/LaunchAgents/$LAUNCH_LABEL.plist"
@@ -39,7 +43,7 @@ DEFAULT_PROMPT_TEMPLATE="$REPO/templates/default-AGENTS.md"
 
 usage() {
   cat <<EOF
-Usage: $0 [--uninstall] [--prompt PATH] [--skills PATH] [--user-skills PATH] [--feedback-dir PATH] [--home PATH] [--agents-home PATH] [--reflect-mode immediate|nightly|off] [--nightly-hour H] [--nightly-minute M] [--runner default|claude|codex] [--claude-model MODEL] [--codex-model MODEL] [--wake-sensitivity quiet|balanced|sensitive|custom] [--wake-threshold DECIMAL]
+Usage: $0 [--uninstall] [--prompt PATH] [--skills PATH] [--user-skills PATH] [--feedback-dir PATH] [--home PATH] [--agents-home PATH] [--reflect-mode immediate|nightly|off] [--nightly-hour H] [--nightly-minute M] [--runner default|claude|codex] [--claude-model MODEL] [--codex-model MODEL] [--wake-sensitivity quiet|balanced|sensitive|custom] [--wake-threshold DECIMAL] [--backfill-days DAYS] [--backfill-max-events N] [--no-backfill] [--force-backfill]
 
 install          Link native Claude/Codex/OpenCode prompt files and configure hooks.
 --uninstall      Remove Introspect prompt links, hooks, scanner, monitor, and reflector LaunchAgents.
@@ -52,6 +56,11 @@ install          Link native Claude/Codex/OpenCode prompt files and configure ho
 --wake-sensitivity
                  Classifier wake sensitivity. balanced uses the model threshold.
 --wake-threshold Optional custom wake threshold, used when sensitivity=custom.
+--backfill-days One-time local Claude/Codex history backfill window on install. Default: 7.
+--backfill-max-events
+                 Max historical prompt events to score on install. Default: 500.
+--no-backfill    Skip the one-time local history backfill on install.
+--force-backfill Run the bounded history backfill again even when a previous backfill completed.
 EOF
 }
 
@@ -135,6 +144,22 @@ while [[ $# -gt 0 ]]; do
     --wake-threshold|--wake-custom-threshold)
       WAKE_THRESHOLD="${2:-}"
       shift 2
+      ;;
+    --backfill-days)
+      BACKFILL_DAYS="${2:-}"
+      shift 2
+      ;;
+    --backfill-max-events)
+      BACKFILL_MAX_EVENTS="${2:-}"
+      shift 2
+      ;;
+    --no-backfill)
+      BACKFILL_ENABLED="0"
+      shift
+      ;;
+    --force-backfill)
+      BACKFILL_FORCE="1"
+      shift
       ;;
     -h|--help)
       usage
@@ -701,6 +726,47 @@ PY
   reflector_model_summary
 }
 
+run_initial_backfill() {
+  if [[ "$REFLECT_MODE" == "off" || "$BACKFILL_ENABLED" == "0" || "${INTROSPECT_SKIP_BACKFILL:-0}" == "1" ]]; then
+    echo "skip: initial local agent history backfill"
+    return
+  fi
+  mkdir -p "$FEEDBACK_DIR"
+  if [[ "$BACKFILL_FORCE" != "1" ]] && "$SETUP_PYTHON" - "$FEEDBACK_DIR/codex-transcript-scan-state.json" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+path = Path(sys.argv[1])
+try:
+    state = json.loads(path.read_text())
+except Exception:
+    raise SystemExit(1)
+raise SystemExit(0 if state.get("last_backfill_at") else 1)
+PY
+  then
+    echo "skip: initial local agent history backfill already completed"
+    return
+  fi
+  if ! env \
+    PYTHONDONTWRITEBYTECODE=1 \
+    INTROSPECT_REFLECT_MODE="$REFLECT_MODE" \
+    INTROSPECT_REPO="$REPO" \
+    AGENTS_HOME="$AGENTS_HOME_DIR" \
+    INTROSPECT_PROMPT="$PROMPT" \
+    INTROSPECT_SKILLS_DIR="$SKILLS_DIR" \
+    INTROSPECT_USER_SKILLS_DIR="$USER_SKILLS_DIR" \
+    INTROSPECT_FEEDBACK_DIR="$FEEDBACK_DIR" \
+    INTROSPECT_HOME="$INTROSPECT_HOME_DIR" \
+    INTROSPECT_WAKE_MODEL="$INTROSPECT_HOME_DIR/models/wake-logreg-v2-round4.json" \
+    INTROSPECT_WAKE_SHADOW_MODELS="$WAKE_SHADOW_MODELS" \
+    INTROSPECT_WAKE_SENSITIVITY="$WAKE_SENSITIVITY" \
+    INTROSPECT_WAKE_THRESHOLD="$WAKE_THRESHOLD" \
+    "$SETUP_PYTHON" "$SCANNER" --backfill --since-days "$BACKFILL_DAYS" --max-events "$BACKFILL_MAX_EVENTS" --no-queue --no-kick; then
+    echo "warn: initial local agent history backfill failed; install continued" >&2
+  fi
+}
+
 uninstall_scan_agent() {
   if [[ "${INTROSPECT_SKIP_LAUNCHD:-0}" != "1" ]]; then
     launchctl bootout "gui/$(id -u)" "$SCAN_PLIST" >/dev/null 2>&1 || true
@@ -781,6 +847,7 @@ if [[ "$MODE" == "install" ]]; then
     echo "disabled Introspect hooks from $REPO"
   else
     install_scan_agent
+    run_initial_backfill
     echo "installed Introspect hooks from $REPO"
   fi
 else

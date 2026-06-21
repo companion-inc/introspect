@@ -11,7 +11,7 @@ HOME_DIR="$TMPDIR/home"
 INTROSPECT_HOME_DIR="$HOME_DIR/.introspect"
 AGENTS_HOME_DIR="$HOME_DIR/.agents"
 FEEDBACK_DIR="$INTROSPECT_HOME_DIR/feedback"
-mkdir -p "$HOME_DIR"
+mkdir -p "$HOME_DIR" "$TMPDIR/project"
 
 expect_link() {
   local link="$1"
@@ -49,6 +49,21 @@ if find "$APP_RESOURCES" \( -name '__pycache__' -o -name '*.pyc' -o -name '*.pyo
   exit 1
 fi
 
+SESSION_DIR="$HOME_DIR/.codex/sessions/2026/06/20"
+SESSION_FILE="$SESSION_DIR/rollout-2026-06-20T00-00-00-release-backfill.jsonl"
+CLAUDE_SESSION_DIR="$HOME_DIR/.claude/projects/release-project"
+CLAUDE_SESSION_FILE="$CLAUDE_SESSION_DIR/release-backfill-claude.jsonl"
+SESSION_TS="$(date -u "+%Y-%m-%dT%H:%M:%S.000Z")"
+mkdir -p "$SESSION_DIR" "$CLAUDE_SESSION_DIR"
+cat > "$SESSION_FILE" <<JSONL
+{"timestamp":"$SESSION_TS","type":"session_meta","payload":{"id":"release-backfill-session","cwd":"$TMPDIR/project"}}
+{"timestamp":"$SESSION_TS","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"release backfill plain history prompt"}]}}
+{"timestamp":"$SESSION_TS","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"you did not test the release backfill after I asked you to test it"}]}}
+JSONL
+cat > "$CLAUDE_SESSION_FILE" <<JSONL
+{"timestamp":"$SESSION_TS","type":"user","sessionId":"release-claude-backfill","message":{"role":"user","content":"release claude backfill prompt"}}
+JSONL
+
 HOME="$HOME_DIR" \
 PYTHONDONTWRITEBYTECODE=1 \
 INTROSPECT_HOME="$INTROSPECT_HOME_DIR" \
@@ -63,6 +78,41 @@ expect_absent "$AGENTS_HOME_DIR/AGENTS.md"
 expect_link "$HOME_DIR/.claude/CLAUDE.md" "$SOURCE_PROMPT"
 expect_link "$HOME_DIR/.codex/AGENTS.md" "$SOURCE_PROMPT"
 expect_link "$HOME_DIR/.config/opencode/AGENTS.md" "$SOURCE_PROMPT"
+python3 - "$FEEDBACK_DIR/events.jsonl" "$FEEDBACK_DIR/trigger-queue.jsonl" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+events_path = Path(sys.argv[1])
+queue_path = Path(sys.argv[2])
+events = [json.loads(line) for line in events_path.read_text().splitlines() if line.strip()]
+backfilled = [event for event in events if event.get("backfilled")]
+if len(backfilled) != 3:
+    raise SystemExit(f"test-release-e2e: expected 3 backfilled events, got {len(backfilled)}")
+sources = {event.get("source") for event in backfilled}
+if "claude_transcript_backfill" not in sources or "codex_transcript_backfill" not in sources:
+    raise SystemExit(f"test-release-e2e: missing backfill source coverage: {sorted(sources)}")
+if queue_path.exists() and queue_path.read_text().strip():
+    raise SystemExit("test-release-e2e: backfill queued old history into reflector")
+PY
+
+HOME="$HOME_DIR" \
+PYTHONDONTWRITEBYTECODE=1 \
+INTROSPECT_HOME="$INTROSPECT_HOME_DIR" \
+AGENTS_HOME="$AGENTS_HOME_DIR" \
+INTROSPECT_SKIP_LAUNCHD=1 \
+"$APP_BIN" --install > "$TMPDIR/reinstall.txt"
+grep -q "skip: initial local agent history backfill already completed" "$TMPDIR/reinstall.txt" || { cat "$TMPDIR/reinstall.txt" >&2; exit 1; }
+python3 - "$FEEDBACK_DIR/events.jsonl" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+events = [json.loads(line) for line in Path(sys.argv[1]).read_text().splitlines() if line.strip()]
+backfilled = [event for event in events if event.get("backfilled")]
+if len(backfilled) != 3:
+    raise SystemExit(f"test-release-e2e: second install changed backfill count to {len(backfilled)}")
+PY
 
 HOME="$HOME_DIR" \
 PYTHONDONTWRITEBYTECODE=1 \
@@ -73,8 +123,9 @@ grep -q "private home: $INTROSPECT_HOME_DIR" "$TMPDIR/status.txt" || { cat "$TMP
 grep -Eq "ok[[:space:]]+claude prompt -> $SOURCE_PROMPT" "$TMPDIR/status.txt" || { cat "$TMPDIR/status.txt" >&2; exit 1; }
 grep -Eq "ok[[:space:]]+codex prompt -> $SOURCE_PROMPT" "$TMPDIR/status.txt" || { cat "$TMPDIR/status.txt" >&2; exit 1; }
 grep -Eq "ok[[:space:]]+opencode prompt -> $SOURCE_PROMPT" "$TMPDIR/status.txt" || { cat "$TMPDIR/status.txt" >&2; exit 1; }
+grep -q "history backfill: " "$TMPDIR/status.txt" || { cat "$TMPDIR/status.txt" >&2; exit 1; }
 
-mkdir -p "$FEEDBACK_DIR" "$TMPDIR/project"
+mkdir -p "$FEEDBACK_DIR"
 cat > "$FEEDBACK_DIR/trigger-queue.jsonl" <<JSONL
 {"triggered":true,"ts":"2026-06-20T00:00:00+00:00","source":"release-e2e","session_id":"release-e2e","cwd":"$TMPDIR/project","matched":["release"],"snippet":"release e2e fake wake event"}
 JSONL

@@ -51,8 +51,13 @@ TRIGGER_WORDS_FILE = INTROSPECT_HOME / "trigger-words.txt"
 CODEX_SESSIONS_DIR = Path(
     os.path.expanduser(os.environ.get("INTROSPECT_CODEX_SESSIONS_DIR", "~/.codex/sessions"))
 )
+CLAUDE_PROJECTS_DIR = Path(
+    os.path.expanduser(os.environ.get("INTROSPECT_CLAUDE_PROJECTS_DIR", "~/.claude/projects"))
+)
 REFLECT_MODE = (os.environ.get("INTROSPECT_REFLECT_MODE") or "immediate").strip().lower()
 DEFAULT_SCAN_MINUTES = int(os.environ.get("INTROSPECT_CODEX_SCAN_MINUTES", "15"))
+DEFAULT_BACKFILL_DAYS = int(os.environ.get("INTROSPECT_BACKFILL_DAYS", "7"))
+DEFAULT_BACKFILL_MAX_EVENTS = int(os.environ.get("INTROSPECT_BACKFILL_MAX_EVENTS", "500"))
 MAX_STATE_KEYS = int(os.environ.get("INTROSPECT_CODEX_SCAN_STATE_KEYS", "5000"))
 
 
@@ -170,18 +175,39 @@ def event_key(path: Path, line_no: int, timestamp: str, text: str) -> str:
     return digest.hexdigest()
 
 
-def candidate_files(since_minutes: int) -> list[Path]:
-    if not CODEX_SESSIONS_DIR.exists():
+def file_mtime(path: Path) -> float:
+    try:
+        return path.stat().st_mtime
+    except OSError:
+        return 0.0
+
+
+def recent_files(root: Path, pattern: str, since_minutes: int, *, newest_first: bool = False) -> list[Path]:
+    if not root.exists():
         return []
     cutoff = time.time() - max(since_minutes, 1) * 60
     files: list[Path] = []
-    for path in CODEX_SESSIONS_DIR.rglob("rollout-*.jsonl"):
+    for path in root.rglob(pattern):
         try:
             if path.stat().st_mtime >= cutoff:
                 files.append(path)
         except OSError:
             continue
-    return sorted(files, key=lambda item: item.stat().st_mtime)
+    return sorted(files, key=file_mtime, reverse=newest_first)
+
+
+def candidate_files(since_minutes: int, *, newest_first: bool = False, include_claude: bool = False) -> list[tuple[str, Path]]:
+    files: list[tuple[str, Path]] = [
+        ("codex", path)
+        for path in recent_files(CODEX_SESSIONS_DIR, "rollout-*.jsonl", since_minutes, newest_first=newest_first)
+    ]
+    if include_claude:
+        files.extend(
+            ("claude", path)
+            for path in recent_files(CLAUDE_PROJECTS_DIR, "*.jsonl", since_minutes, newest_first=newest_first)
+        )
+        files.sort(key=lambda item: file_mtime(item[1]), reverse=newest_first)
+    return files
 
 
 def session_metadata(path: Path) -> tuple[str, str]:
@@ -207,7 +233,72 @@ def session_metadata(path: Path) -> tuple[str, str]:
     return session_id, cwd
 
 
+def source_name(kind: str, backfill: bool) -> str:
+    if kind == "claude":
+        return "claude_transcript_backfill" if backfill else "claude_transcript_scan"
+    return "codex_transcript_backfill" if backfill else "codex_transcript_scan"
+
+
+def build_event(
+    *,
+    kind: str,
+    path: Path,
+    line_no: int,
+    timestamp: str,
+    parsed_ts: dt.datetime,
+    prompt: str,
+    words: set[str],
+    version: str,
+    session_id: str,
+    cwd: str,
+    backfill: bool,
+) -> tuple[dict, bool, list[str]]:
+    key = event_key(path, line_no, timestamp, prompt)
+    matches = sorted({word for word in re.findall(r"[a-z]+", prompt.lower()) if word in words})
+    classifier = None
+    classifier_enabled = os.environ.get("INTROSPECT_WAKE_CLASSIFIER", "1") != "0"
+    if classifier_enabled and score_prompt is not None:
+        try:
+            classifier = score_prompt(
+                prompt,
+                source=kind,
+                old_trigger=bool(matches),
+                matched_words=matches,
+            )
+        except Exception as exc:
+            classifier = {"error": f"{type(exc).__name__}: {str(exc)[:160]}"}
+    classifier_available = bool(classifier and "score" in classifier)
+    triggered = bool(classifier.get("triggered")) if classifier_available else False
+    wake_reason = "classifier" if classifier_available else "classifier_unavailable"
+    event = {
+        "event_id": key,
+        "ts": parsed_ts.isoformat(timespec="seconds"),
+        "observed_at": iso_now(),
+        "source": source_name(kind, backfill),
+        "version": version,
+        "triggered": triggered,
+        "wake_reason": wake_reason,
+        "review_triggered": bool(matches) or bool(classifier and classifier.get("review")),
+        "session_id": session_id,
+        "cwd": cwd,
+        "transcript_path": str(path),
+        "transcript_line": line_no,
+        "message_locator": f"{path}:{line_no}",
+        "dedupe_key": key,
+    }
+    if backfill:
+        event["backfilled"] = True
+    if classifier:
+        event["classifier"] = classifier
+    if matches:
+        event["matched"] = matches
+    if matches or triggered or event.get("review_triggered"):
+        event["snippet"] = prompt[:300]
+    return event, triggered, matches
+
+
 def scan_file(
+    kind: str,
     path: Path,
     processed: dict[str, str],
     words: set[str],
@@ -215,8 +306,10 @@ def scan_file(
     cutoff_ts: dt.datetime,
     *,
     write_events: bool,
+    backfill: bool = False,
+    event_limit: int | None = None,
 ) -> tuple[int, int, list[dict]]:
-    session_id, cwd = session_metadata(path)
+    session_id, cwd = session_metadata(path) if kind == "codex" else (path.stem, "")
     new_events = 0
     triggered_events = 0
     queued: list[dict] = []
@@ -227,17 +320,27 @@ def scan_file(
         return 0, 0, []
 
     for line_no, raw in enumerate(lines, 1):
+        if event_limit is not None and new_events >= event_limit:
+            break
         try:
             row = json.loads(raw)
         except Exception:
             continue
-        if row.get("type") != "response_item":
-            continue
-        payload = row.get("payload")
-        if not isinstance(payload, dict):
-            continue
-        if payload.get("type") != "message" or payload.get("role") != "user":
-            continue
+        if kind == "claude":
+            if row.get("type") != "user":
+                continue
+            payload = row.get("message")
+            if not isinstance(payload, dict) or payload.get("role") != "user":
+                continue
+            session_id = str(row.get("sessionId") or session_id)
+        else:
+            if row.get("type") != "response_item":
+                continue
+            payload = row.get("payload")
+            if not isinstance(payload, dict):
+                continue
+            if payload.get("type") != "message" or payload.get("role") != "user":
+                continue
 
         prompt = prompt_text_from_content(payload.get("content"))
         if not prompt or is_codex_control_message(prompt):
@@ -250,44 +353,19 @@ def scan_file(
         if key in processed:
             continue
 
-        matches = sorted({word for word in re.findall(r"[a-z]+", prompt.lower()) if word in words})
-        classifier = None
-        classifier_enabled = os.environ.get("INTROSPECT_WAKE_CLASSIFIER", "1") != "0"
-        if classifier_enabled and score_prompt is not None:
-            try:
-                classifier = score_prompt(
-                    prompt,
-                    source="codex",
-                    old_trigger=bool(matches),
-                    matched_words=matches,
-                )
-            except Exception as exc:
-                classifier = {"error": f"{type(exc).__name__}: {str(exc)[:160]}"}
-        classifier_available = bool(classifier and "score" in classifier)
-        triggered = bool(classifier.get("triggered")) if classifier_available else False
-        wake_reason = "classifier" if classifier_available else "classifier_unavailable"
-        event = {
-            "event_id": key,
-            "ts": parsed_ts.isoformat(timespec="seconds"),
-            "observed_at": iso_now(),
-            "source": "codex_transcript_scan",
-            "version": version,
-            "triggered": triggered,
-            "wake_reason": wake_reason,
-            "review_triggered": bool(matches) or bool(classifier and classifier.get("review")),
-            "session_id": session_id,
-            "cwd": cwd,
-            "transcript_path": str(path),
-            "transcript_line": line_no,
-            "message_locator": f"{path}:{line_no}",
-            "dedupe_key": key,
-        }
-        if classifier:
-            event["classifier"] = classifier
-        if matches:
-            event["matched"] = matches
-        if matches or triggered or event.get("review_triggered"):
-            event["snippet"] = prompt[:300]
+        event, triggered, _matches = build_event(
+            kind=kind,
+            path=path,
+            line_no=line_no,
+            timestamp=timestamp,
+            parsed_ts=parsed_ts,
+            prompt=prompt,
+            words=words,
+            version=version,
+            session_id=session_id,
+            cwd=cwd,
+            backfill=backfill,
+        )
         if triggered:
             queued_event = dict(event)
             queued_event["prompt"] = prompt[:4000]
@@ -335,8 +413,12 @@ def trim_processed(processed: dict[str, str]) -> dict[str, str]:
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--since-minutes", type=int, default=DEFAULT_SCAN_MINUTES)
+    parser.add_argument("--since-minutes", type=int)
+    parser.add_argument("--backfill", action="store_true")
+    parser.add_argument("--since-days", type=int, default=DEFAULT_BACKFILL_DAYS)
+    parser.add_argument("--max-events", type=int, default=DEFAULT_BACKFILL_MAX_EVENTS)
     parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument("--no-queue", action="store_true")
     parser.add_argument("--no-kick", action="store_true")
     args = parser.parse_args()
 
@@ -347,47 +429,68 @@ def main() -> int:
 
     words = active_trigger_words()
     version = git_version()
-    cutoff_ts = utc_now() - dt.timedelta(minutes=max(args.since_minutes, 1))
-    files = candidate_files(args.since_minutes)
+    since_minutes = args.since_minutes
+    if since_minutes is None:
+        since_minutes = max(args.since_days, 1) * 24 * 60 if args.backfill else DEFAULT_SCAN_MINUTES
+    cutoff_ts = utc_now() - dt.timedelta(minutes=max(since_minutes, 1))
+    files = candidate_files(since_minutes, newest_first=args.backfill, include_claude=args.backfill)
+    max_events = max(args.max_events, 0) if args.backfill else 0
+    remaining_events = max_events if args.backfill else None
     new_events = 0
     triggered_events = 0
     queued_events: list[dict] = []
 
     if args.dry_run:
         dry_processed = dict(processed)
-        for path in files:
+        for kind, path in files:
             new_count, triggered_count, queued = scan_file(
+                kind,
                 path,
                 dry_processed,
                 words,
                 version,
                 cutoff_ts,
                 write_events=False,
+                backfill=args.backfill,
+                event_limit=remaining_events,
             )
             new_events += new_count
             triggered_events += triggered_count
             queued_events.extend(queued)
+            if remaining_events is not None:
+                remaining_events -= new_count
+                if remaining_events <= 0:
+                    break
         print(
             "codex-transcript-scan: "
             f"files={len(files)} new_events={new_events} triggered={triggered_events} "
-            f"queued={len(queued_events)} dry_run=True"
+            f"queued={0 if args.no_queue or args.backfill else len(queued_events)} "
+            f"backfill={args.backfill} dry_run=True"
         )
         return 0
 
-    for path in files:
+    for kind, path in files:
         new_count, triggered_count, queued = scan_file(
+            kind,
             path,
             processed,
             words,
             version,
             cutoff_ts,
             write_events=True,
+            backfill=args.backfill,
+            event_limit=remaining_events,
         )
         new_events += new_count
         triggered_events += triggered_count
         queued_events.extend(queued)
+        if remaining_events is not None:
+            remaining_events -= new_count
+            if remaining_events <= 0:
+                break
 
-    if queued_events and REFLECT_MODE != "off":
+    queue_enabled = not args.no_queue and not args.backfill
+    if queued_events and queue_enabled and REFLECT_MODE != "off":
         for event in queued_events:
             append_json(QUEUE, event)
         if not args.no_kick:
@@ -398,12 +501,21 @@ def main() -> int:
     state["last_scan_files"] = len(files)
     state["last_new_events"] = new_events
     state["last_triggered_events"] = triggered_events
+    state["last_scan_mode"] = "backfill" if args.backfill else "incremental"
+    if args.backfill:
+        state["last_backfill_at"] = state["last_scan_at"]
+        state["last_backfill_files"] = len(files)
+        state["last_backfill_new_events"] = new_events
+        state["last_backfill_triggered_events"] = triggered_events
+        state["last_backfill_days"] = max(args.since_days, 1)
+        state["last_backfill_max_events"] = max_events
     write_json(STATE, state)
 
     print(
         "codex-transcript-scan: "
         f"files={len(files)} new_events={new_events} triggered={triggered_events} "
-        f"queued={len(queued_events) if REFLECT_MODE != 'off' else 0}"
+        f"queued={len(queued_events) if queue_enabled and REFLECT_MODE != 'off' else 0} "
+        f"backfill={args.backfill}"
     )
     return 0
 

@@ -202,7 +202,7 @@ fi
 
 if [[ "$needs_repair" == "1" ]]; then
   echo "$(timestamp) repair: ${reasons[*]}"
-  INTROSPECT_SKIP_MONITOR_BOOTSTRAP=1 INTROSPECT_WAKE_SHADOW_MODELS="$shadow_models" "$REPO/scripts/install-hooks.sh" \
+  INTROSPECT_SKIP_MONITOR_BOOTSTRAP=1 INTROSPECT_SKIP_BACKFILL=1 INTROSPECT_WAKE_SHADOW_MODELS="$shadow_models" "$REPO/scripts/install-hooks.sh" \
     --reflect-mode "$mode" \
     --nightly-hour "$hour" \
     --nightly-minute "$minute" \
