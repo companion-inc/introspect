@@ -1226,20 +1226,30 @@ struct HooksSection: View {
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
 
-            if model.wakeSensitivity == .custom {
-                Divider()
-                HStack(spacing: 12) {
-                    Stepper(value: $model.wakeCustomThreshold, in: 0.05...0.95, step: 0.01) {
-                        Text("Threshold \(model.wakeCustomThresholdText)")
-                            .font(.system(.body, design: .monospaced))
-                    }
+            Divider()
 
-                    Button("Apply", systemImage: "checkmark.circle") {
-                        Task { await model.saveWakeSensitivitySettings() }
+            HStack(spacing: 12) {
+                Text("Threshold")
+                    .foregroundStyle(.secondary)
+                    .frame(width: 92, alignment: .leading)
+
+                Slider(
+                    value: wakeThreshold,
+                    in: WakeSensitivity.thresholdRange,
+                    step: 0.01,
+                    onEditingChanged: { editing in
+                        if !editing {
+                            Task { await model.saveWakeSensitivitySettings() }
+                        }
                     }
-                    .buttonStyle(.borderedProminent)
-                    .disabled(model.isApplyingConfiguration)
-                }
+                )
+                .accessibilityLabel("Wake threshold")
+                .accessibilityValue(model.wakeThresholdSliderText)
+
+                Text(model.wakeThresholdSliderText)
+                    .font(.system(.body, design: .monospaced))
+                    .monospacedDigit()
+                    .frame(width: 48, alignment: .trailing)
             }
         }
 
@@ -1322,6 +1332,14 @@ struct HooksSection: View {
             model.wakeSensitivity
         } set: { sensitivity in
             Task { await model.setWakeSensitivity(sensitivity) }
+        }
+    }
+
+    private var wakeThreshold: Binding<Double> {
+        Binding {
+            model.wakeThresholdSliderValue
+        } set: { threshold in
+            model.setWakeThresholdDraft(threshold)
         }
     }
 
@@ -4328,6 +4346,9 @@ enum WakeSensitivity: String, CaseIterable, Identifiable {
     case sensitive
     case custom
 
+    static let modelDefaultThreshold = 0.64
+    static let thresholdRange = 0.05...0.95
+
     var id: String { rawValue }
 
     var title: String {
@@ -4363,10 +4384,21 @@ enum WakeSensitivity: String, CaseIterable, Identifiable {
         }
     }
 
+    func thresholdValue(customThreshold: Double) -> Double {
+        switch self {
+        case .balanced:
+            Self.modelDefaultThreshold
+        case .custom:
+            customThreshold
+        case .quiet, .sensitive:
+            fixedThreshold ?? customThreshold
+        }
+    }
+
     func thresholdSummary(customThreshold: Double) -> String {
         switch self {
         case .balanced:
-            "threshold: model default"
+            String(format: "threshold: %.2f", Self.modelDefaultThreshold)
         case .custom:
             String(format: "threshold: %.2f", customThreshold)
         case .quiet, .sensitive:
@@ -5297,6 +5329,14 @@ final class IntrospectModel: ObservableObject {
         String(format: "%.2f", clampedWakeCustomThreshold)
     }
 
+    var wakeThresholdSliderValue: Double {
+        wakeSensitivity.thresholdValue(customThreshold: clampedWakeCustomThreshold)
+    }
+
+    var wakeThresholdSliderText: String {
+        String(format: "%.2f", wakeThresholdSliderValue)
+    }
+
     var wakeSensitivityDetail: String {
         "\(wakeSensitivity.helpText) \(wakeSensitivity.thresholdSummary(customThreshold: clampedWakeCustomThreshold))"
     }
@@ -5638,9 +5678,15 @@ final class IntrospectModel: ObservableObject {
 
     func setWakeSensitivity(_ newSensitivity: WakeSensitivity) async {
         guard wakeSensitivity != newSensitivity else { return }
+        let currentThreshold = clampedWakeCustomThreshold
         wakeSensitivity = newSensitivity
-        wakeCustomThreshold = clampedWakeCustomThreshold
+        wakeCustomThreshold = newSensitivity.thresholdValue(customThreshold: currentThreshold)
         await applyConfigurationChange()
+    }
+
+    func setWakeThresholdDraft(_ threshold: Double) {
+        wakeCustomThreshold = min(max(threshold, WakeSensitivity.thresholdRange.lowerBound), WakeSensitivity.thresholdRange.upperBound)
+        wakeSensitivity = .custom
     }
 
     func saveReflectorAgentSettings() async {
