@@ -65,6 +65,7 @@ cat > "$CLAUDE_SESSION_FILE" <<JSONL
 JSONL
 
 HOME="$HOME_DIR" \
+GIT_CONFIG_GLOBAL="$TMPDIR/missing-global-gitconfig" \
 PYTHONDONTWRITEBYTECODE=1 \
 INTROSPECT_HOME="$INTROSPECT_HOME_DIR" \
 AGENTS_HOME="$AGENTS_HOME_DIR" \
@@ -78,17 +79,22 @@ expect_absent "$AGENTS_HOME_DIR/AGENTS.md"
 expect_link "$HOME_DIR/.claude/CLAUDE.md" "$SOURCE_PROMPT"
 expect_link "$HOME_DIR/.codex/AGENTS.md" "$SOURCE_PROMPT"
 expect_link "$HOME_DIR/.config/opencode/AGENTS.md" "$SOURCE_PROMPT"
-python3 - "$FEEDBACK_DIR/events.jsonl" "$FEEDBACK_DIR/trigger-queue.jsonl" <<'PY'
+HOME_PROMPT_VERSION="$(git -C "$INTROSPECT_HOME_DIR" rev-parse --short HEAD)"
+python3 - "$FEEDBACK_DIR/events.jsonl" "$FEEDBACK_DIR/trigger-queue.jsonl" "$HOME_PROMPT_VERSION" <<'PY'
 import json
 import sys
 from pathlib import Path
 
 events_path = Path(sys.argv[1])
 queue_path = Path(sys.argv[2])
+expected_version = sys.argv[3]
 events = [json.loads(line) for line in events_path.read_text().splitlines() if line.strip()]
 backfilled = [event for event in events if event.get("backfilled")]
 if len(backfilled) != 3:
     raise SystemExit(f"test-release-e2e: expected 3 backfilled events, got {len(backfilled)}")
+versions = {event.get("version") for event in backfilled}
+if versions != {expected_version}:
+    raise SystemExit(f"test-release-e2e: expected prompt version {expected_version}, got {versions}")
 sources = {event.get("source") for event in backfilled}
 if "claude_transcript_backfill" not in sources or "codex_transcript_backfill" not in sources:
     raise SystemExit(f"test-release-e2e: missing backfill source coverage: {sorted(sources)}")
@@ -112,6 +118,39 @@ events = [json.loads(line) for line in Path(sys.argv[1]).read_text().splitlines(
 backfilled = [event for event in events if event.get("backfilled")]
 if len(backfilled) != 3:
     raise SystemExit(f"test-release-e2e: second install changed backfill count to {len(backfilled)}")
+PY
+
+python3 - "$FEEDBACK_DIR/codex-transcript-scan-state.json" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+path = Path(sys.argv[1])
+state = json.loads(path.read_text())
+state["last_backfill_schema_version"] = 1
+path.write_text(json.dumps(state, indent=2, sort_keys=True) + "\n")
+PY
+HOME="$HOME_DIR" \
+PYTHONDONTWRITEBYTECODE=1 \
+INTROSPECT_HOME="$INTROSPECT_HOME_DIR" \
+AGENTS_HOME="$AGENTS_HOME_DIR" \
+INTROSPECT_SKIP_LAUNCHD=1 \
+"$APP_BIN" --install > "$TMPDIR/schema-reinstall.txt"
+if grep -q "skip: initial local agent history backfill already completed" "$TMPDIR/schema-reinstall.txt"; then
+  cat "$TMPDIR/schema-reinstall.txt" >&2
+  exit 1
+fi
+python3 - "$FEEDBACK_DIR/codex-transcript-scan-state.json" "$FEEDBACK_DIR/events.jsonl" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+state = json.loads(Path(sys.argv[1]).read_text())
+events = [json.loads(line) for line in Path(sys.argv[2]).read_text().splitlines() if line.strip()]
+if state.get("last_backfill_schema_version") != 2:
+    raise SystemExit(f"test-release-e2e: schema reinstall did not update version: {state}")
+if len([event for event in events if event.get("backfilled")]) != 3:
+    raise SystemExit("test-release-e2e: schema reinstall duplicated backfilled events")
 PY
 
 HOME="$HOME_DIR" \

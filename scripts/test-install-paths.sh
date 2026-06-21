@@ -49,6 +49,8 @@ grep -q "PYTHONDONTWRITEBYTECODE=1" "$HOME_DIR/.claude/settings.json"
 grep -q "PYTHONDONTWRITEBYTECODE=1" "$HOME_DIR/.codex/hooks.json"
 /usr/libexec/PlistBuddy -c "Print :EnvironmentVariables:PYTHONDONTWRITEBYTECODE" "$HOME_DIR/Library/LaunchAgents/ai.companion.introspect.codex-scanner.plist" | grep -qx "1"
 /usr/libexec/PlistBuddy -c "Print :EnvironmentVariables:PYTHONDONTWRITEBYTECODE" "$HOME_DIR/Library/LaunchAgents/ai.companion.introspect.health.plist" | grep -qx "1"
+grep -q "$HOME_DIR/.codex/sessions" "$HOME_DIR/Library/LaunchAgents/ai.companion.introspect.codex-scanner.plist"
+grep -q "$HOME_DIR/.claude/projects" "$HOME_DIR/Library/LaunchAgents/ai.companion.introspect.codex-scanner.plist"
 
 HOME="$HOME_DIR" INTROSPECT_SKIP_LAUNCHD=1 "$REPO/scripts/install-hooks.sh" --uninstall >/dev/null
 

@@ -31,6 +31,7 @@ BACKFILL_DAYS="${INTROSPECT_BACKFILL_DAYS:-7}"
 BACKFILL_MAX_EVENTS="${INTROSPECT_BACKFILL_MAX_EVENTS:-500}"
 BACKFILL_ENABLED="${INTROSPECT_BACKFILL_ENABLED:-1}"
 BACKFILL_FORCE="${INTROSPECT_FORCE_BACKFILL:-0}"
+BACKFILL_SCHEMA_VERSION=2
 LAUNCHD_PATH="$HOME/.npm-global/bin:$HOME/.local/bin:$HOME/.bun/bin:/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin"
 LAUNCH_LABEL="ai.companion.introspect.reflector"
 LAUNCH_PLIST="$HOME/Library/LaunchAgents/$LAUNCH_LABEL.plist"
@@ -347,6 +348,12 @@ PY
   done
   if [[ ! -d "$INTROSPECT_HOME_DIR/.git" ]]; then
     git init "$INTROSPECT_HOME_DIR" >/dev/null
+  fi
+  if [[ -z "$(git -C "$INTROSPECT_HOME_DIR" config --local user.name 2>/dev/null || true)" ]]; then
+    git -C "$INTROSPECT_HOME_DIR" config --local user.name "Introspect"
+  fi
+  if [[ -z "$(git -C "$INTROSPECT_HOME_DIR" config --local user.email 2>/dev/null || true)" ]]; then
+    git -C "$INTROSPECT_HOME_DIR" config --local user.email "introspect@local"
   fi
 }
 
@@ -697,13 +704,14 @@ data = {
         "INTROSPECT_CODEX_SCAN_MINUTES": "20",
         "PATH": launchd_path,
     },
-    # Event-driven, not polled: launchd wakes the scanner only when Codex
-    # actually writes (a new prompt appends to history.jsonl; a new session
-    # adds a rollout file). Codex's own hook is unreliable, so this is the
-    # backstop that catches the triggers it drops — without a timer.
+    # Event-driven, not polled: launchd wakes the scanner when Codex writes
+    # session history or Claude writes project history. Codex's own hook can
+    # be skipped, and assistant-output failures never pass through user-prompt
+    # hooks, so the transcript scanner is the backstop without a timer.
     "WatchPaths": [
         str(Path.home() / ".codex" / "history.jsonl"),
         str(Path.home() / ".codex" / "sessions"),
+        str(Path.home() / ".claude" / "projects"),
     ],
     "RunAtLoad": True,
     "StandardOutPath": str(Path(feedback_dir) / "codex-scanner.out.log"),
@@ -713,13 +721,13 @@ Path(plist_path).write_bytes(plistlib.dumps(data, sort_keys=False))
 os._exit(0)
 PY
   if [[ "${INTROSPECT_SKIP_LAUNCHD:-0}" == "1" ]]; then
-    echo "wrote Codex transcript scanner: $SCAN_PLIST (launchd bootstrap skipped)"
+    echo "wrote transcript scanner: $SCAN_PLIST (launchd bootstrap skipped)"
     return
   fi
   launchctl bootout "gui/$(id -u)" "$SCAN_PLIST" >/dev/null 2>&1 || true
   launchctl bootstrap "gui/$(id -u)" "$SCAN_PLIST"
   launchctl enable "gui/$(id -u)/$SCAN_LABEL" >/dev/null 2>&1 || true
-  echo "installed Codex transcript scanner: $SCAN_PLIST (event-driven on Codex writes; no polling)"
+  echo "installed transcript scanner: $SCAN_PLIST (event-driven on Codex/Claude writes; no polling)"
   if [[ -n "$WAKE_SHADOW_MODELS" ]]; then
     echo "shadow candidate models: $WAKE_SHADOW_MODELS"
   fi
@@ -732,17 +740,22 @@ run_initial_backfill() {
     return
   fi
   mkdir -p "$FEEDBACK_DIR"
-  if [[ "$BACKFILL_FORCE" != "1" ]] && "$SETUP_PYTHON" - "$FEEDBACK_DIR/codex-transcript-scan-state.json" <<'PY'
+  if [[ "$BACKFILL_FORCE" != "1" ]] && "$SETUP_PYTHON" - "$FEEDBACK_DIR/codex-transcript-scan-state.json" "$BACKFILL_SCHEMA_VERSION" <<'PY'
 import json
 import sys
 from pathlib import Path
 
 path = Path(sys.argv[1])
+expected = int(sys.argv[2])
 try:
     state = json.loads(path.read_text())
 except Exception:
     raise SystemExit(1)
-raise SystemExit(0 if state.get("last_backfill_at") else 1)
+try:
+    actual = int(state.get("last_backfill_schema_version") or 1)
+except Exception:
+    actual = 1
+raise SystemExit(0 if state.get("last_backfill_at") and actual >= expected else 1)
 PY
   then
     echo "skip: initial local agent history backfill already completed"

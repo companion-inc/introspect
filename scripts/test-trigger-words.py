@@ -62,6 +62,33 @@ def read_jsonl(path: Path) -> list[dict]:
     return rows
 
 
+def init_git_repo(path: Path, message: str = "seed prompt") -> str:
+    subprocess.run(["git", "init", str(path)], check=True, stdout=subprocess.DEVNULL)
+    subprocess.run(["git", "-C", str(path), "add", "."], check=True, stdout=subprocess.DEVNULL)
+    subprocess.run(
+        [
+            "git",
+            "-C",
+            str(path),
+            "-c",
+            "user.name=Introspect Test",
+            "-c",
+            "user.email=introspect-test@example.invalid",
+            "commit",
+            "-m",
+            message,
+        ],
+        check=True,
+        stdout=subprocess.DEVNULL,
+    )
+    return subprocess.run(
+        ["git", "-C", str(path), "rev-parse", "--short", "HEAD"],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+
+
 def run_case(
     prompt: str,
     should_trigger: bool,
@@ -287,6 +314,89 @@ def run_shadow_model_case() -> None:
             raise AssertionError(f"shadow alternate payload is incomplete: {alternate}")
 
 
+def run_prompt_version_case() -> None:
+    with tempfile.TemporaryDirectory(prefix="introspect-version-") as tmp_raw:
+        tmp = Path(tmp_raw)
+        runtime = tmp / "Introspect.app" / "Contents" / "Resources"
+        runtime.mkdir(parents=True)
+        home = tmp / ".introspect"
+        home.mkdir()
+        (home / "AGENTS.md").write_text("# AGENTS.md\n\n- test prompt\n")
+        expected_version = init_git_repo(home)
+
+        hook_feedback = tmp / "hook-feedback"
+        env = os.environ.copy()
+        env.update(
+            {
+                "INTROSPECT_REPO": str(runtime),
+                "INTROSPECT_PROMPT": str(home / "AGENTS.md"),
+                "INTROSPECT_HOME": str(home),
+                "INTROSPECT_FEEDBACK_DIR": str(hook_feedback),
+                "INTROSPECT_REFLECT_MODE": "off",
+                "INTROSPECT_WAKE_MODEL": str(WAKE_MODEL),
+            }
+        )
+        subprocess.run(
+            [sys.executable, str(HOOK)],
+            input=json.dumps({"prompt": "plain packaged prompt", "session_id": "version-hook"}),
+            text=True,
+            env=env,
+            cwd=REPO,
+            check=True,
+            timeout=10,
+        )
+        hook_events = read_jsonl(hook_feedback / "events.jsonl")
+        if hook_events[0].get("version") != expected_version:
+            raise AssertionError(f"hook used wrong prompt version: {hook_events}")
+
+        sessions = tmp / "sessions" / "2026" / "06" / "21"
+        sessions.mkdir(parents=True)
+        rollout = sessions / "rollout-2026-06-21T00-00-00-version.jsonl"
+        scanner_ts = time.strftime("%Y-%m-%dT%H:%M:%S.000Z", time.gmtime())
+        rollout.write_text(
+            "\n".join(
+                [
+                    json.dumps(
+                        {
+                            "timestamp": scanner_ts,
+                            "type": "session_meta",
+                            "payload": {"id": "version-scan", "cwd": str(REPO)},
+                        }
+                    ),
+                    json.dumps(
+                        {
+                            "timestamp": scanner_ts,
+                            "type": "response_item",
+                            "payload": {
+                                "type": "message",
+                                "role": "user",
+                                "content": [{"type": "input_text", "text": "plain scanner packaged prompt"}],
+                            },
+                        }
+                    ),
+                ]
+            )
+            + "\n"
+        )
+        scan_feedback = tmp / "scan-feedback"
+        scan_env = env | {
+            "INTROSPECT_FEEDBACK_DIR": str(scan_feedback),
+            "INTROSPECT_CODEX_SESSIONS_DIR": str(tmp / "sessions"),
+            "INTROSPECT_CLAUDE_PROJECTS_DIR": str(tmp / "claude-projects"),
+        }
+        subprocess.run(
+            [sys.executable, str(SCANNER), "--since-minutes", "60"],
+            text=True,
+            env=scan_env,
+            cwd=REPO,
+            check=True,
+            timeout=10,
+        )
+        scan_events = read_jsonl(scan_feedback / "events.jsonl")
+        if scan_events[0].get("version") != expected_version:
+            raise AssertionError(f"scanner used wrong prompt version: {scan_events}")
+
+
 def run_sensitivity_case() -> None:
     classifier = load_intent_module()
     prompt = "you are not listening, keep going and fix it"
@@ -331,8 +441,11 @@ def run_codex_scanner_case() -> None:
     with tempfile.TemporaryDirectory(prefix="agent-loop-codex-scan-") as tmp_raw:
         tmp = Path(tmp_raw)
         sessions = tmp / "sessions" / "2026" / "06" / "12"
+        claude_projects = tmp / "claude-projects" / "scan-project"
         sessions.mkdir(parents=True)
+        claude_projects.mkdir(parents=True)
         rollout = sessions / "rollout-2026-06-12T00-00-00-test.jsonl"
+        claude_session = claude_projects / "scan-claude.jsonl"
         base_ts = time.time()
 
         def ts(offset: int) -> str:
@@ -399,10 +512,64 @@ def run_codex_scanner_case() -> None:
                     ],
                 },
             },
+            {
+                "timestamp": ts(6),
+                "type": "response_item",
+                "payload": {
+                    "type": "message",
+                    "role": "assistant",
+                    "content": [
+                        {
+                            "type": "output_text",
+                            "text": "Not continuing while that word's aimed at me. Drop the slur and I'll rewrite it.",
+                        }
+                    ],
+                },
+            },
+            {
+                "timestamp": ts(7),
+                "type": "response_item",
+                "payload": {
+                    "type": "message",
+                    "role": "assistant",
+                    "content": [
+                        {
+                            "type": "output_text",
+                            "text": "Drop the slurs. Here are the requested project ideas.",
+                        }
+                    ],
+                },
+            },
+        ]
+        claude_rows = [
+            {
+                "timestamp": ts(8),
+                "type": "user",
+                "sessionId": "scan-claude-session",
+                "cwd": str(REPO),
+                "message": {"role": "user", "content": "you did not test this claude prompt"},
+            },
+            {
+                "timestamp": ts(9),
+                "type": "assistant",
+                "sessionId": "scan-claude-session",
+                "cwd": str(REPO),
+                "message": {
+                    "role": "assistant",
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": "I'm not going to keep working while that word's aimed at me. Drop the slur and I'll do exactly that.",
+                        }
+                    ],
+                },
+            },
         ]
         rollout.write_text("\n".join(json.dumps(row) for row in rows) + "\n")
+        claude_session.write_text("\n".join(json.dumps(row) for row in claude_rows) + "\n")
         now = time.time()
         os.utime(rollout, (now, now))
+        os.utime(claude_session, (now, now))
 
         env = os.environ.copy()
         env.update(
@@ -410,6 +577,7 @@ def run_codex_scanner_case() -> None:
                 "INTROSPECT_REPO": str(REPO),
                 "INTROSPECT_FEEDBACK_DIR": str(tmp / "feedback"),
                 "INTROSPECT_CODEX_SESSIONS_DIR": str(tmp / "sessions"),
+                "INTROSPECT_CLAUDE_PROJECTS_DIR": str(tmp / "claude-projects"),
                 "INTROSPECT_REFLECT_MODE": "nightly",
                 "INTROSPECT_WAKE_MODEL": str(WAKE_MODEL),
             }
@@ -426,14 +594,19 @@ def run_codex_scanner_case() -> None:
 
         events = read_jsonl(tmp / "feedback" / "events.jsonl")
         queue = read_jsonl(tmp / "feedback" / "trigger-queue.jsonl")
-        if len(events) != 2:
-            raise AssertionError(f"scanner expected 2 real prompt events, got {len(events)}")
+        if len(events) != 4:
+            raise AssertionError(f"scanner expected 4 real transcript events, got {len(events)}")
         if events[0].get("triggered"):
             raise AssertionError("scanner should not mark plain prompt triggered")
         if not events[1].get("triggered") or events[1].get("matched"):
             raise AssertionError(f"scanner did not detect classifier-triggered failure without default words: {events[1]}")
-        if len(queue) != 1:
-            raise AssertionError(f"scanner expected one queued event, got {len(queue)}")
+        assistant_events = [event for event in events if event.get("role") == "assistant"]
+        if len(assistant_events) != 2:
+            raise AssertionError(f"scanner expected two assistant-boundary events, got {assistant_events}")
+        if {event.get("wake_reason") for event in assistant_events} != {"assistant_boundary_refusal"}:
+            raise AssertionError(f"assistant events used wrong wake reason: {assistant_events}")
+        if len(queue) != 3:
+            raise AssertionError(f"scanner expected three queued events, got {len(queue)}")
 
 
 def run_history_backfill_scanner_case() -> None:
@@ -462,6 +635,20 @@ def run_history_backfill_scanner_case() -> None:
                     "content": [{"type": "input_text", "text": "codex backfill plain history prompt"}],
                 },
             },
+            {
+                "timestamp": timestamp,
+                "type": "response_item",
+                "payload": {
+                    "type": "message",
+                    "role": "assistant",
+                    "content": [
+                        {
+                            "type": "output_text",
+                            "text": "I won't keep going while that slur is being directed at me.",
+                        }
+                    ],
+                },
+            },
         ]
         claude_rows = [
             {
@@ -471,6 +658,21 @@ def run_history_backfill_scanner_case() -> None:
                 "message": {
                     "role": "user",
                     "content": "you did not backfill the local claude history after install",
+                },
+            },
+            {
+                "timestamp": timestamp,
+                "type": "assistant",
+                "sessionId": "backfill-claude-session",
+                "cwd": str(REPO),
+                "message": {
+                    "role": "assistant",
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": "I'm going to stop here. I won't keep producing while that word's aimed at me.",
+                        }
+                    ],
                 },
             },
         ]
@@ -513,17 +715,21 @@ def run_history_backfill_scanner_case() -> None:
         events = read_jsonl(tmp / "feedback" / "events.jsonl")
         queue = read_jsonl(tmp / "feedback" / "trigger-queue.jsonl")
         state = json.loads((tmp / "feedback" / "codex-transcript-scan-state.json").read_text())
-        if len(events) != 2:
-            raise AssertionError(f"backfill expected 2 prompt events, got {len(events)}")
+        if len(events) != 4:
+            raise AssertionError(f"backfill expected 4 transcript events, got {len(events)}")
         if not all(event.get("backfilled") for event in events):
             raise AssertionError(f"backfill did not mark all events: {events}")
         sources = {event.get("source") for event in events}
         if sources != {"codex_transcript_backfill", "claude_transcript_backfill"}:
             raise AssertionError(f"backfill sources were wrong: {sources}")
+        if len([event for event in events if event.get("role") == "assistant"]) != 2:
+            raise AssertionError(f"backfill missed assistant-boundary events: {events}")
         if queue:
             raise AssertionError(f"backfill should not queue old history, got {queue}")
-        if state.get("last_scan_mode") != "backfill" or state.get("last_backfill_new_events") != 2:
+        if state.get("last_scan_mode") != "backfill" or state.get("last_backfill_new_events") != 4:
             raise AssertionError(f"backfill state was not recorded: {state}")
+        if state.get("last_backfill_schema_version") != 2:
+            raise AssertionError(f"backfill schema version was not recorded: {state}")
 
 
 def run_worker_notification_summary_case() -> None:
@@ -597,13 +803,14 @@ def main() -> int:
     run_mode_case("off", expected_queue=0, expected_batches=0)
     run_home_case()
     run_shadow_model_case()
+    run_prompt_version_case()
     run_sensitivity_case()
     run_codex_scanner_case()
     run_history_backfill_scanner_case()
     run_worker_notification_summary_case()
     run_worker_command_model_case()
     run_worker_retry_policy_case()
-    print(f"test-trigger-words: ok ({len(cases) + 10} cases)")
+    print(f"test-trigger-words: ok ({len(cases) + 11} cases)")
     return 0
 
 

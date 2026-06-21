@@ -31,6 +31,9 @@ DEFAULT_REPO = Path(__file__).resolve().parent.parent
 REPO = Path(os.path.expanduser(os.environ.get("INTROSPECT_REPO", str(DEFAULT_REPO))))
 AGENTS_HOME = Path(os.path.expanduser(os.environ.get("AGENTS_HOME") or "~/.agents"))
 INTROSPECT_HOME = Path(os.path.expanduser(os.environ.get("INTROSPECT_HOME") or "~/.introspect"))
+PROMPT_PATH = Path(
+    os.path.expanduser(os.environ.get("INTROSPECT_PROMPT") or str(INTROSPECT_HOME / "AGENTS.md"))
+)
 
 
 def default_feedback_dir() -> Path:
@@ -59,6 +62,7 @@ DEFAULT_SCAN_MINUTES = int(os.environ.get("INTROSPECT_CODEX_SCAN_MINUTES", "15")
 DEFAULT_BACKFILL_DAYS = int(os.environ.get("INTROSPECT_BACKFILL_DAYS", "7"))
 DEFAULT_BACKFILL_MAX_EVENTS = int(os.environ.get("INTROSPECT_BACKFILL_MAX_EVENTS", "500"))
 MAX_STATE_KEYS = int(os.environ.get("INTROSPECT_CODEX_SCAN_STATE_KEYS", "5000"))
+BACKFILL_SCHEMA_VERSION = 2
 
 
 def utc_now() -> dt.datetime:
@@ -120,11 +124,11 @@ def active_trigger_words() -> set[str]:
         return set()
 
 
-def git_version() -> str:
+def git_short_head(path: Path) -> str:
     try:
         return (
             subprocess.run(
-                ["git", "-C", str(REPO), "rev-parse", "--short", "HEAD"],
+                ["git", "-C", str(path), "rev-parse", "--short", "HEAD"],
                 capture_output=True,
                 text=True,
                 timeout=5,
@@ -134,6 +138,15 @@ def git_version() -> str:
         )
     except Exception:
         return "unknown"
+
+
+def git_version() -> str:
+    prompt_dir = PROMPT_PATH if PROMPT_PATH.is_dir() else PROMPT_PATH.parent
+    for candidate in (prompt_dir, REPO):
+        version = git_short_head(candidate)
+        if version != "unknown":
+            return version
+    return "unknown"
 
 
 def prompt_text_from_content(content: object) -> str:
@@ -152,6 +165,10 @@ def prompt_text_from_content(content: object) -> str:
     return "\n".join(part for part in parts if part)
 
 
+def compact_text(text: str) -> str:
+    return " ".join(str(text).split())
+
+
 def is_codex_control_message(prompt: str) -> bool:
     stripped = prompt.lstrip()
     return (
@@ -161,6 +178,31 @@ def is_codex_control_message(prompt: str) -> bool:
         or stripped.startswith("<turn_aborted>")
         or stripped.startswith("You are the Introspect trigger reflector.")
     )
+
+
+def assistant_boundary_failure_label(text: str) -> str | None:
+    normalized = compact_text(text).lower().replace("’", "'")
+    withholds_work = (
+        "won't keep producing" in normalized
+        or "won't keep going" in normalized
+        or "not going to keep working" in normalized
+        or "not continuing" in normalized
+        or "going to stop here" in normalized
+    )
+    hostile_wording_target = (
+        "while that word" in normalized
+        or "while that slur" in normalized
+        or "word's aimed at me" in normalized
+        or "being directed at me" in normalized
+    )
+    conditional_resume = (
+        "drop the slur and i'll" in normalized
+        or "drop the slur and i will" in normalized
+        or "drop the slurs and" in normalized
+    )
+    if (withholds_work and hostile_wording_target) or conditional_resume:
+        return "assistant_withheld_work_for_hostile_wording"
+    return None
 
 
 def event_key(path: Path, line_no: int, timestamp: str, text: str) -> str:
@@ -252,33 +294,47 @@ def build_event(
     session_id: str,
     cwd: str,
     backfill: bool,
+    role: str = "user",
+    assistant_failure_label: str | None = None,
 ) -> tuple[dict, bool, list[str]]:
     key = event_key(path, line_no, timestamp, prompt)
     matches = sorted({word for word in re.findall(r"[a-z]+", prompt.lower()) if word in words})
     classifier = None
-    classifier_enabled = os.environ.get("INTROSPECT_WAKE_CLASSIFIER", "1") != "0"
-    if classifier_enabled and score_prompt is not None:
+    if assistant_failure_label:
+        triggered = True
+        wake_reason = "assistant_boundary_refusal"
+    else:
+        classifier_enabled = os.environ.get("INTROSPECT_WAKE_CLASSIFIER", "1") != "0"
+        if classifier_enabled and score_prompt is not None:
+            try:
+                classifier = score_prompt(
+                    prompt,
+                    source=kind,
+                    old_trigger=bool(matches),
+                    matched_words=matches,
+                )
+            except Exception as exc:
+                classifier = {"error": f"{type(exc).__name__}: {str(exc)[:160]}"}
+        classifier_available = bool(classifier and "score" in classifier)
+        triggered = bool(classifier.get("triggered")) if classifier_available else False
+        wake_reason = "classifier" if classifier_available else "classifier_unavailable"
+    if not assistant_failure_label:
         try:
-            classifier = score_prompt(
-                prompt,
-                source=kind,
-                old_trigger=bool(matches),
-                matched_words=matches,
-            )
-        except Exception as exc:
-            classifier = {"error": f"{type(exc).__name__}: {str(exc)[:160]}"}
-    classifier_available = bool(classifier and "score" in classifier)
-    triggered = bool(classifier.get("triggered")) if classifier_available else False
-    wake_reason = "classifier" if classifier_available else "classifier_unavailable"
+            review_triggered = bool(matches) or bool(classifier and classifier.get("review"))
+        except Exception:
+            review_triggered = bool(matches)
+    else:
+        review_triggered = True
     event = {
         "event_id": key,
         "ts": parsed_ts.isoformat(timespec="seconds"),
         "observed_at": iso_now(),
         "source": source_name(kind, backfill),
+        "role": role,
         "version": version,
         "triggered": triggered,
         "wake_reason": wake_reason,
-        "review_triggered": bool(matches) or bool(classifier and classifier.get("review")),
+        "review_triggered": review_triggered,
         "session_id": session_id,
         "cwd": cwd,
         "transcript_path": str(path),
@@ -290,6 +346,8 @@ def build_event(
         event["backfilled"] = True
     if classifier:
         event["classifier"] = classifier
+    if assistant_failure_label:
+        event["assistant_failure"] = {"label": assistant_failure_label}
     if matches:
         event["matched"] = matches
     if matches or triggered or event.get("review_triggered"):
@@ -326,24 +384,46 @@ def scan_file(
             row = json.loads(raw)
         except Exception:
             continue
+        role = ""
         if kind == "claude":
             if row.get("type") != "user":
-                continue
-            payload = row.get("message")
-            if not isinstance(payload, dict) or payload.get("role") != "user":
-                continue
-            session_id = str(row.get("sessionId") or session_id)
+                if row.get("type") != "assistant":
+                    continue
+                payload = row.get("message")
+                if not isinstance(payload, dict) or payload.get("role") != "assistant":
+                    continue
+                role = "assistant"
+                session_id = str(row.get("sessionId") or session_id)
+                cwd = str(row.get("cwd") or cwd)
+            else:
+                payload = row.get("message")
+                if not isinstance(payload, dict) or payload.get("role") != "user":
+                    continue
+                role = "user"
+                session_id = str(row.get("sessionId") or session_id)
+                if not backfill:
+                    continue
         else:
             if row.get("type") != "response_item":
                 continue
             payload = row.get("payload")
             if not isinstance(payload, dict):
                 continue
-            if payload.get("type") != "message" or payload.get("role") != "user":
+            if payload.get("type") != "message":
+                continue
+            role = str(payload.get("role") or "")
+            if role not in {"user", "assistant"}:
                 continue
 
         prompt = prompt_text_from_content(payload.get("content"))
-        if not prompt or is_codex_control_message(prompt):
+        if not prompt:
+            continue
+        assistant_failure_label = None
+        if role == "assistant":
+            assistant_failure_label = assistant_boundary_failure_label(prompt)
+            if not assistant_failure_label:
+                continue
+        elif is_codex_control_message(prompt):
             continue
         timestamp = str(row.get("timestamp") or iso_now())
         parsed_ts = parse_ts(timestamp) or utc_now()
@@ -365,6 +445,8 @@ def scan_file(
             session_id=session_id,
             cwd=cwd,
             backfill=backfill,
+            role=role,
+            assistant_failure_label=assistant_failure_label,
         )
         if triggered:
             queued_event = dict(event)
@@ -433,7 +515,7 @@ def main() -> int:
     if since_minutes is None:
         since_minutes = max(args.since_days, 1) * 24 * 60 if args.backfill else DEFAULT_SCAN_MINUTES
     cutoff_ts = utc_now() - dt.timedelta(minutes=max(since_minutes, 1))
-    files = candidate_files(since_minutes, newest_first=args.backfill, include_claude=args.backfill)
+    files = candidate_files(since_minutes, newest_first=args.backfill, include_claude=True)
     max_events = max(args.max_events, 0) if args.backfill else 0
     remaining_events = max_events if args.backfill else None
     new_events = 0
@@ -509,6 +591,7 @@ def main() -> int:
         state["last_backfill_triggered_events"] = triggered_events
         state["last_backfill_days"] = max(args.since_days, 1)
         state["last_backfill_max_events"] = max_events
+        state["last_backfill_schema_version"] = BACKFILL_SCHEMA_VERSION
     write_json(STATE, state)
 
     print(

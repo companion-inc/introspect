@@ -165,8 +165,10 @@ PY
 cd "$RUNTIME_REPO" 2>/dev/null || cd "$REPO"
 printf "Introspect status\n"
 printf "repo: %s\n" "$RUNTIME_REPO"
-printf "commit: "
+printf "runtime commit: "
 git rev-parse --short HEAD 2>/dev/null || printf "unknown\n"
+printf "prompt commit: "
+git -C "$INTROSPECT_HOME_DIR" rev-parse --short HEAD 2>/dev/null || printf "unknown\n"
 
 printf "private home: %s\n" "$INTROSPECT_HOME_DIR"
 printf "skill export root: %s/skills\n" "$AGENTS_HOME_DIR"

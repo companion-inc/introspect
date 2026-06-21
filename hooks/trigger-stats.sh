@@ -13,6 +13,11 @@ DEFAULT_REPO = str(Path(__file__).resolve().parent.parent)
 REPO = os.path.expanduser(os.environ.get("INTROSPECT_REPO", DEFAULT_REPO))
 AGENTS_HOME = os.path.expanduser(os.environ.get("AGENTS_HOME") or "~/.agents")
 INTROSPECT_HOME = os.path.expanduser(os.environ.get("INTROSPECT_HOME") or "~/.introspect")
+PROMPT_PATH = Path(
+    os.path.expanduser(
+        os.environ.get("INTROSPECT_PROMPT") or os.path.join(INTROSPECT_HOME, "AGENTS.md")
+    )
+)
 
 
 def default_feedback_dir():
@@ -23,6 +28,31 @@ def default_feedback_dir():
 
 EVENTS = os.path.expanduser(os.environ.get("INTROSPECT_FEEDBACK_DIR", default_feedback_dir()))
 EVENTS = os.path.join(EVENTS, "events.jsonl")
+
+
+def git_output(repo, *args):
+    try:
+        return subprocess.run(
+            ["git", "-C", str(repo), *args],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=False,
+        ).stdout.strip()
+    except Exception:
+        return ""
+
+
+def prompt_repo():
+    prompt_dir = PROMPT_PATH if PROMPT_PATH.is_dir() else PROMPT_PATH.parent
+    for candidate in (prompt_dir, Path(REPO)):
+        top = git_output(candidate, "rev-parse", "--show-toplevel")
+        if top:
+            return top
+    return REPO
+
+
+PROMPT_REPO = prompt_repo()
 
 if not os.path.exists(EVENTS):
     print("No events logged yet.")
@@ -46,13 +76,9 @@ for line in open(EVENTS):
 
 
 def subject(version):
-    try:
-        return subprocess.run(
-            ["git", "-C", REPO, "log", "-1", "--format=%s", version],
-            capture_output=True, text=True, timeout=5,
-        ).stdout.strip()[:60]
-    except Exception:
+    if version == "unknown":
         return ""
+    return git_output(PROMPT_REPO, "log", "-1", "--format=%s", version)[:60]
 
 
 print(f"{'version':<10} {'prompts':>7} {'trig':>6} {'rate':>6}  first..last (UTC)        commit subject")
@@ -60,11 +86,14 @@ best = None
 for v in order:
     p, f, first, last = stats[v]
     rate = f / p if p else 0.0
-    if p >= 5 and (best is None or rate < best[1]):
+    if v != "unknown" and p >= 5 and (best is None or rate < best[1]):
         best = (v, rate)
     span = f"{first[5:16]}..{last[5:16]}"
     print(f"{v:<10} {p:>7} {f:>6} {rate:>6.1%}  {span:<24}  {subject(v)}")
 
 if best:
-    print(f"\nBest version with >=5 prompts: {best[0]} ({best[1]:.1%}). "
-          f"To revert AGENTS.md to it: git -C {REPO} checkout {best[0]} -- AGENTS.md")
+    print(f"\nBest version with >=5 prompts: {best[0]} ({best[1]:.1%}).")
+    if best[0] != "unknown":
+        print(f"To revert AGENTS.md to it: git -C {PROMPT_REPO} checkout {best[0]} -- AGENTS.md")
+elif "unknown" in stats:
+    print("\nNo versioned prompt bucket has at least 5 prompts yet; unknown is legacy unversioned telemetry.")

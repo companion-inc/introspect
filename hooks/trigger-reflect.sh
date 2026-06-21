@@ -36,6 +36,11 @@ DEFAULT_REPO = str(Path(__file__).resolve().parent.parent)
 REPO = os.path.expanduser(os.environ.get("INTROSPECT_REPO", DEFAULT_REPO))
 AGENTS_HOME = os.path.expanduser(os.environ.get("AGENTS_HOME") or "~/.agents")
 INTROSPECT_HOME = os.path.expanduser(os.environ.get("INTROSPECT_HOME") or "~/.introspect")
+PROMPT_PATH = Path(
+    os.path.expanduser(
+        os.environ.get("INTROSPECT_PROMPT") or str(Path(INTROSPECT_HOME) / "AGENTS.md")
+    )
+)
 
 
 def default_feedback_dir():
@@ -100,13 +105,32 @@ classifier_available = bool(classifier and "score" in classifier)
 triggered = classifier_triggered if classifier_available else False
 wake_reason = "classifier" if classifier_available else "classifier_unavailable"
 
-try:
-    version = subprocess.run(
-        ["git", "-C", REPO, "rev-parse", "--short", "HEAD"],
-        capture_output=True, text=True, timeout=5,
-    ).stdout.strip() or "unknown"
-except Exception:
-    version = "unknown"
+def git_short_head(path) -> str:
+    try:
+        return (
+            subprocess.run(
+                ["git", "-C", str(path), "rev-parse", "--short", "HEAD"],
+                capture_output=True,
+                text=True,
+                timeout=5,
+                check=False,
+            ).stdout.strip()
+            or "unknown"
+        )
+    except Exception:
+        return "unknown"
+
+
+def prompt_version() -> str:
+    prompt_dir = PROMPT_PATH if PROMPT_PATH.is_dir() else PROMPT_PATH.parent
+    for candidate in (prompt_dir, Path(REPO)):
+        version = git_short_head(candidate)
+        if version != "unknown":
+            return version
+    return "unknown"
+
+
+version = prompt_version()
 
 
 def json_append(path, obj):
