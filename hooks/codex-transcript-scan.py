@@ -27,16 +27,26 @@ try:
 except Exception:
     score_prompt = None
 
-REPO = Path(os.path.expanduser(os.environ.get("INTROSPECT_REPO", "~/Companion/Code/introspect")))
+DEFAULT_REPO = Path(__file__).resolve().parent.parent
+REPO = Path(os.path.expanduser(os.environ.get("INTROSPECT_REPO", str(DEFAULT_REPO))))
+AGENTS_HOME = Path(os.path.expanduser(os.environ.get("AGENTS_HOME") or "~/.agents"))
+INTROSPECT_HOME = Path(os.path.expanduser(os.environ.get("INTROSPECT_HOME") or "~/.introspect"))
+
+
+def default_feedback_dir() -> Path:
+    if str(REPO).endswith(".app/Contents/Resources"):
+        return INTROSPECT_HOME / "feedback"
+    return REPO / "feedback"
+
+
 FEEDBACK_DIR = Path(
-    os.path.expanduser(os.environ.get("INTROSPECT_FEEDBACK_DIR", str(REPO / "feedback")))
+    os.path.expanduser(os.environ.get("INTROSPECT_FEEDBACK_DIR", str(default_feedback_dir())))
 )
 EVENTS = FEEDBACK_DIR / "events.jsonl"
 QUEUE = FEEDBACK_DIR / "trigger-queue.jsonl"
 STATE = FEEDBACK_DIR / "codex-transcript-scan-state.json"
 WORKER = REPO / "hooks" / "trigger-worker.py"
 HOOK = REPO / "hooks" / "trigger-reflect.sh"
-INTROSPECT_HOME = Path(os.path.expanduser(os.environ.get("INTROSPECT_HOME") or "~/.introspect"))
 TRIGGER_WORDS_FILE = INTROSPECT_HOME / "trigger-words.txt"
 CODEX_SESSIONS_DIR = Path(
     os.path.expanduser(os.environ.get("INTROSPECT_CODEX_SESSIONS_DIR", "~/.codex/sessions"))
@@ -140,8 +150,9 @@ def prompt_text_from_content(content: object) -> str:
 def is_codex_control_message(prompt: str) -> bool:
     stripped = prompt.lstrip()
     return (
-        stripped.startswith("# AGENTS.md instructions for ")
+        stripped.startswith("# AGENTS.md instructions")
         or stripped.startswith("<codex_internal_context ")
+        or stripped.startswith("<INSTRUCTIONS>")
         or stripped.startswith("<turn_aborted>")
         or stripped.startswith("You are the Introspect trigger reflector.")
     )

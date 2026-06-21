@@ -2,21 +2,91 @@
 set -euo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
-FEEDBACK_DIR="${INTROSPECT_FEEDBACK_DIR:-$REPO/feedback}"
+AGENTS_HOME_DIR="${AGENTS_HOME:-$HOME/.agents}"
 INTROSPECT_HOME_DIR="${INTROSPECT_HOME:-$HOME/.introspect}"
 HOME_SETTINGS="$INTROSPECT_HOME_DIR/settings.json"
-BUILT_NOTIFICATION_HELPER="$REPO/.build/Introspect.app/Contents/MacOS/Introspect"
-INSTALLED_NOTIFICATION_HELPER="/Applications/Introspect.app/Contents/MacOS/Introspect"
-NOTIFICATION_HELPER="$BUILT_NOTIFICATION_HELPER"
-if [[ -x "$INSTALLED_NOTIFICATION_HELPER" ]]; then
-  NOTIFICATION_HELPER="$INSTALLED_NOTIFICATION_HELPER"
-fi
+PROMPT="$INTROSPECT_HOME_DIR/AGENTS.md"
+SETUP_PYTHON="${INTROSPECT_SETUP_PYTHON:-/usr/bin/python3}"
 LAUNCH_LABEL="ai.companion.introspect.reflector"
 LAUNCH_PLIST="$HOME/Library/LaunchAgents/$LAUNCH_LABEL.plist"
 SCAN_LABEL="ai.companion.introspect.codex-scanner"
 SCAN_PLIST="$HOME/Library/LaunchAgents/$SCAN_LABEL.plist"
 MONITOR_LABEL="ai.companion.introspect.health"
 MONITOR_PLIST="$HOME/Library/LaunchAgents/$MONITOR_LABEL.plist"
+
+configured_env_value() {
+  local key="$1"
+  "$SETUP_PYTHON" - "$key" "$HOME/.claude/settings.json" "$HOME/.codex/hooks.json" "$SCAN_PLIST" <<'PY'
+import json
+import plistlib
+import shlex
+import sys
+from pathlib import Path
+
+key = sys.argv[1]
+
+def value_from_command(command):
+    try:
+        tokens = shlex.split(command)
+    except ValueError:
+        tokens = command.split()
+    for token in tokens:
+        if token.startswith(key + "="):
+            return token.split("=", 1)[1]
+    return ""
+
+for raw in sys.argv[2:4]:
+    path = Path(raw)
+    if not path.exists():
+        continue
+    try:
+        data = json.loads(path.read_text())
+    except Exception:
+        continue
+    groups = data.get("hooks", {}).get("UserPromptSubmit", [])
+    for group in groups if isinstance(groups, list) else []:
+        for hook in group.get("hooks", []) if isinstance(group, dict) else []:
+            command = hook.get("command") if isinstance(hook, dict) else ""
+            value = value_from_command(command)
+            if value:
+                print(value)
+                raise SystemExit(0)
+
+plist = Path(sys.argv[4])
+if plist.exists():
+    try:
+        data = plistlib.loads(plist.read_bytes())
+    except Exception:
+        data = {}
+    value = data.get("EnvironmentVariables", {}).get(key, "")
+    if isinstance(value, str) and value:
+        print(value)
+PY
+}
+
+CONFIGURED_REPO="$(configured_env_value INTROSPECT_REPO || true)"
+CONFIGURED_FEEDBACK_DIR="$(configured_env_value INTROSPECT_FEEDBACK_DIR || true)"
+RUNTIME_REPO="${INTROSPECT_REPO:-${CONFIGURED_REPO:-$REPO}}"
+if [[ -n "${INTROSPECT_FEEDBACK_DIR:-}" ]]; then
+  FEEDBACK_DIR="$INTROSPECT_FEEDBACK_DIR"
+elif [[ -n "$CONFIGURED_FEEDBACK_DIR" ]]; then
+  FEEDBACK_DIR="$CONFIGURED_FEEDBACK_DIR"
+else
+  case "$RUNTIME_REPO" in
+    *.app/Contents/Resources)
+      FEEDBACK_DIR="$INTROSPECT_HOME_DIR/feedback"
+      ;;
+    *)
+      FEEDBACK_DIR="$RUNTIME_REPO/feedback"
+      ;;
+  esac
+fi
+BUILT_NOTIFICATION_HELPER="$REPO/.build/Introspect.app/Contents/MacOS/Introspect"
+INSTALLED_NOTIFICATION_HELPER="/Applications/Introspect.app/Contents/MacOS/Introspect"
+NOTIFICATION_HELPER="$BUILT_NOTIFICATION_HELPER"
+if [[ -x "$INSTALLED_NOTIFICATION_HELPER" ]]; then
+  NOTIFICATION_HELPER="$INSTALLED_NOTIFICATION_HELPER"
+fi
 
 check_link() {
   local label="$1"
@@ -34,7 +104,7 @@ check_link() {
 check_hook() {
   local label="$1"
   local path="$2"
-  if [[ -f "$path" ]] && grep -q "$REPO/hooks/trigger-reflect.sh" "$path"; then
+  if [[ -f "$path" ]] && grep -Fq "$RUNTIME_REPO/hooks/trigger-reflect.sh" "$path"; then
     printf "ok   %s hook installed\n" "$label"
   else
     printf "bad  %s hook missing from %s\n" "$label" "$path"
@@ -43,7 +113,7 @@ check_hook() {
 
 reflector_env_summary() {
   local plist="$1"
-  python3 - "$plist" <<'PY'
+  "$SETUP_PYTHON" - "$plist" <<'PY'
 import plistlib
 import sys
 from pathlib import Path
@@ -61,32 +131,41 @@ def model(raw):
 
 runner = value("INTROSPECT_REFLECTOR_RUNNER", "default")
 claude = model(value("INTROSPECT_REFLECTOR_CLAUDE_MODEL"))
-fallback = model(value("INTROSPECT_REFLECTOR_CLAUDE_FALLBACK_MODEL"))
+fallback = value("INTROSPECT_REFLECTOR_CLAUDE_FALLBACK_MODEL").strip()
 codex = model(value("INTROSPECT_REFLECTOR_CODEX_MODEL"))
 shadow = value("INTROSPECT_WAKE_SHADOW_MODELS")
 shadow_count = len([item for item in shadow.split(",") if item.strip()])
 sensitivity = value("INTROSPECT_WAKE_SENSITIVITY", "balanced")
 threshold = value("INTROSPECT_WAKE_THRESHOLD")
 threshold_text = threshold.strip() if threshold.strip() else "model"
-print(
-    f"runner={runner} claude_model={claude} claude_fallback={fallback} "
-    f"codex_model={codex} sensitivity={sensitivity} threshold={threshold_text} "
-    f"shadow_models={shadow_count}"
-)
+parts = [
+    f"runner={runner}",
+    f"claude_model={claude}",
+    f"codex_model={codex}",
+    f"sensitivity={sensitivity}",
+    f"threshold={threshold_text}",
+    f"shadow_models={shadow_count}",
+]
+if fallback:
+    parts.insert(3, f"claude_cli_fallback_model={fallback}")
+print(" ".join(parts))
 PY
 }
 
-cd "$REPO"
+cd "$RUNTIME_REPO" 2>/dev/null || cd "$REPO"
 printf "Introspect status\n"
-printf "repo: %s\n" "$REPO"
+printf "repo: %s\n" "$RUNTIME_REPO"
 printf "commit: "
-git rev-parse --short HEAD
+git rev-parse --short HEAD 2>/dev/null || printf "unknown\n"
 
-check_link "claude prompt" "$HOME/.claude/CLAUDE.md" "$INTROSPECT_HOME_DIR/AGENTS.md"
-check_link "codex prompt" "$HOME/.codex/AGENTS.md" "$INTROSPECT_HOME_DIR/AGENTS.md"
+printf "private home: %s\n" "$INTROSPECT_HOME_DIR"
+printf "skill export root: %s/skills\n" "$AGENTS_HOME_DIR"
+check_link "claude prompt" "$HOME/.claude/CLAUDE.md" "$PROMPT"
+check_link "codex prompt" "$HOME/.codex/AGENTS.md" "$PROMPT"
+check_link "opencode prompt" "$HOME/.config/opencode/AGENTS.md" "$PROMPT"
 check_hook "claude" "$HOME/.claude/settings.json"
 check_hook "codex" "$HOME/.codex/hooks.json"
-mode="$(python3 - "$HOME/.claude/settings.json" "$HOME/.codex/hooks.json" <<'PY'
+mode="$("$SETUP_PYTHON" - "$HOME/.claude/settings.json" "$HOME/.codex/hooks.json" <<'PY'
 import json
 import re
 import sys
@@ -122,7 +201,7 @@ else
   printf "warn unknown reflector mode: %s\n" "$mode"
 fi
 if [[ "$mode" == "nightly" ]]; then
-  if [[ -f "$LAUNCH_PLIST" ]] && grep -q "$REPO/hooks/trigger-worker.py" "$LAUNCH_PLIST"; then
+  if [[ -f "$LAUNCH_PLIST" ]] && grep -Fq "$RUNTIME_REPO/hooks/trigger-worker.py" "$LAUNCH_PLIST"; then
     printf "ok   nightly LaunchAgent installed -> %s\n" "$LAUNCH_PLIST"
   else
     printf "bad  nightly LaunchAgent missing -> %s\n" "$LAUNCH_PLIST"
@@ -138,7 +217,7 @@ if [[ "$mode" == "off" ]]; then
   else
     printf "off  Codex transcript scanner disabled\n"
   fi
-elif [[ -f "$SCAN_PLIST" ]] && grep -q "$REPO/hooks/codex-transcript-scan.py" "$SCAN_PLIST"; then
+elif [[ -f "$SCAN_PLIST" ]] && grep -Fq "$RUNTIME_REPO/hooks/codex-transcript-scan.py" "$SCAN_PLIST"; then
   if launchctl print "gui/$(id -u)/$SCAN_LABEL" >/dev/null 2>&1; then
     printf "ok   Codex transcript scanner loaded -> %s\n" "$SCAN_PLIST"
   else
@@ -153,7 +232,7 @@ elif [[ -f "$SCAN_PLIST" ]] && grep -q "$REPO/hooks/codex-transcript-scan.py" "$
 else
   printf "bad  Codex transcript scanner missing -> %s\n" "$SCAN_PLIST"
 fi
-if [[ -f "$MONITOR_PLIST" ]] && grep -q "$REPO/scripts/introspect-healthcheck.sh" "$MONITOR_PLIST"; then
+if [[ -f "$MONITOR_PLIST" ]] && grep -Fq "$RUNTIME_REPO/scripts/introspect-healthcheck.sh" "$MONITOR_PLIST"; then
   if launchctl print "gui/$(id -u)/$MONITOR_LABEL" >/dev/null 2>&1; then
     printf "ok   health monitor loaded -> %s\n" "$MONITOR_PLIST"
   else
@@ -174,7 +253,7 @@ if [[ -f "$LAUNCH_PLIST" ]]; then
   fi
   printf "\n"
 fi
-notify_setting="$(python3 - "$HOME_SETTINGS" <<'PY'
+notify_setting="$("$SETUP_PYTHON" - "$HOME_SETTINGS" <<'PY'
 import json
 import sys
 from pathlib import Path
@@ -216,11 +295,11 @@ else
 fi
 
 printf "\nskills:\n"
-"$REPO/scripts/validate-skills.py"
+"$RUNTIME_REPO/scripts/validate-skills.py"
 
 printf "\nfeedback:\n"
 if [[ -f "$FEEDBACK_DIR/events.jsonl" ]]; then
-  python3 - "$FEEDBACK_DIR" "$INTROSPECT_HOME_DIR" <<'PY'
+  "$SETUP_PYTHON" - "$FEEDBACK_DIR" "$INTROSPECT_HOME_DIR" <<'PY'
 import json
 import re
 import sys

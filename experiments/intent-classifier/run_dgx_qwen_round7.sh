@@ -3,7 +3,7 @@ set -euo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd -P)"
 REMOTE_HOST="${INTROSPECT_DGX_HOST:-dgx}"
-REMOTE_DIR="${INTROSPECT_DGX_REPO:-/home/advaitpaliwal/introspect}"
+REMOTE_DIR="${INTROSPECT_DGX_REPO:-/home/introspect/introspect}"
 MODEL_ID="${INTROSPECT_INTENT_MODEL_ID:-Qwen/Qwen3-30B-A3B-Instruct-2507}"
 HOLDOUT_PATTERN="${INTROSPECT_INTENT_HOLDOUT_PATTERN:-*round8*.jsonl}"
 RUN_NAME="${INTROSPECT_INTENT_RUN_NAME:-qwen3-30b-round8-teacher}"

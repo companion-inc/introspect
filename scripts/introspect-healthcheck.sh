@@ -2,12 +2,22 @@
 set -euo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
-FEEDBACK_DIR="${INTROSPECT_FEEDBACK_DIR:-$REPO/feedback}"
+AGENTS_HOME_DIR="${AGENTS_HOME:-$HOME/.agents}"
 INTROSPECT_HOME_DIR="${INTROSPECT_HOME:-$HOME/.introspect}"
+case "$REPO" in
+  *.app/Contents/Resources)
+    DEFAULT_FEEDBACK_DIR="$INTROSPECT_HOME_DIR/feedback"
+    ;;
+  *)
+    DEFAULT_FEEDBACK_DIR="$REPO/feedback"
+    ;;
+esac
+FEEDBACK_DIR="${INTROSPECT_FEEDBACK_DIR:-$DEFAULT_FEEDBACK_DIR}"
 SETTINGS="$INTROSPECT_HOME_DIR/settings.json"
 PROMPT="$INTROSPECT_HOME_DIR/AGENTS.md"
 LOG="$FEEDBACK_DIR/healthcheck.log"
 LATEST="$FEEDBACK_DIR/health-status.latest"
+SETUP_PYTHON="${INTROSPECT_SETUP_PYTHON:-/usr/bin/python3}"
 
 mkdir -p "$FEEDBACK_DIR"
 exec >>"$LOG" 2>&1
@@ -19,7 +29,7 @@ timestamp() {
 setting() {
   local key="$1"
   local fallback="$2"
-  python3 - "$SETTINGS" "$key" "$fallback" <<'PY'
+  "$SETUP_PYTHON" - "$SETTINGS" "$key" "$fallback" <<'PY'
 import json
 import sys
 from pathlib import Path
@@ -46,7 +56,7 @@ plist_env_value() {
   local plist="$1"
   local key="$2"
   local fallback="$3"
-  python3 - "$plist" "$key" "$fallback" <<'PY'
+  "$SETUP_PYTHON" - "$plist" "$key" "$fallback" <<'PY'
 import plistlib
 import sys
 from pathlib import Path
@@ -96,9 +106,9 @@ discover_shadow_models() {
     return
   fi
   local specs=()
-  local r8="$REPO/feedback/intent-classifier/wake-logreg-v2-round8-holdout-selected.json"
-  local r9="$REPO/feedback/intent-classifier/wake-logreg-v2-round9-holdout-selected.json"
-  local r8r9="$REPO/feedback/intent-classifier/wake-logreg-v2-round8-after-round9-selected.json"
+  local r8="$FEEDBACK_DIR/intent-classifier/wake-logreg-v2-round8-holdout-selected.json"
+  local r9="$FEEDBACK_DIR/intent-classifier/wake-logreg-v2-round9-holdout-selected.json"
+  local r8r9="$FEEDBACK_DIR/intent-classifier/wake-logreg-v2-round8-after-round9-selected.json"
   if [[ -f "$r8" ]]; then
     specs+=("r8-retrain=$r8")
   fi
@@ -109,7 +119,7 @@ discover_shadow_models() {
     specs+=("r8-r9=$r8r9")
   fi
   local IFS=,
-  shadow_models="${specs[*]}"
+  shadow_models="${specs[*]-}"
 }
 
 discover_shadow_models
@@ -123,6 +133,17 @@ fi
 if [[ "$(readlink "$HOME/.codex/AGENTS.md" 2>/dev/null || true)" != "$PROMPT" ]]; then
   needs_repair=1
   reasons+=("Codex prompt link drifted")
+fi
+if [[ "$(readlink "$HOME/.config/opencode/AGENTS.md" 2>/dev/null || true)" != "$PROMPT" ]]; then
+  needs_repair=1
+  reasons+=("OpenCode prompt link drifted")
+fi
+
+if [[ -f "$REPO/scripts/sync-user-skills.sh" ]]; then
+  INTROSPECT_HOME="$INTROSPECT_HOME_DIR" INTROSPECT_USER_SKILLS_DIR="$INTROSPECT_HOME_DIR/skills" /bin/bash "$REPO/scripts/sync-user-skills.sh" || {
+    needs_repair=1
+    reasons+=("skill links drifted")
+  }
 fi
 
 if [[ "$mode" == "off" ]]; then
@@ -150,12 +171,14 @@ elif [[ ! -f "$scan_plist" ]] || ! grep -q "$REPO/hooks/codex-transcript-scan.py
 else
   check_plist_env "$scan_plist" "INTROSPECT_REFLECT_MODE" "$mode" "scanner reflect mode"
   check_plist_env "$scan_plist" "INTROSPECT_REFLECTOR_RUNNER" "$runner" "scanner runner"
-  check_plist_env "$scan_plist" "INTROSPECT_REFLECTOR_CLAUDE_MODEL" "$claude_model" "scanner Claude model"
-  check_plist_env "$scan_plist" "INTROSPECT_REFLECTOR_CLAUDE_FALLBACK_MODEL" "$claude_fallback_model" "scanner Claude fallback model"
-  check_plist_env "$scan_plist" "INTROSPECT_REFLECTOR_CODEX_MODEL" "$codex_model" "scanner Codex model"
-  check_plist_env "$scan_plist" "INTROSPECT_WAKE_SHADOW_MODELS" "$shadow_models" "scanner shadow models"
-  check_plist_env "$scan_plist" "INTROSPECT_WAKE_SENSITIVITY" "$wake_sensitivity" "scanner wake sensitivity"
-  check_plist_env "$scan_plist" "INTROSPECT_WAKE_THRESHOLD" "$wake_threshold" "scanner wake threshold"
+      check_plist_env "$scan_plist" "AGENTS_HOME" "$AGENTS_HOME_DIR" "scanner agents home"
+      check_plist_env "$scan_plist" "INTROSPECT_REFLECTOR_CLAUDE_MODEL" "$claude_model" "scanner Claude model"
+      check_plist_env "$scan_plist" "INTROSPECT_REFLECTOR_CLAUDE_FALLBACK_MODEL" "$claude_fallback_model" "scanner Claude CLI fallback model"
+      check_plist_env "$scan_plist" "INTROSPECT_REFLECTOR_CODEX_MODEL" "$codex_model" "scanner Codex model"
+      check_plist_env "$scan_plist" "INTROSPECT_WAKE_MODEL" "$INTROSPECT_HOME_DIR/models/wake-logreg-v2-round4.json" "scanner wake model"
+      check_plist_env "$scan_plist" "INTROSPECT_WAKE_SHADOW_MODELS" "$shadow_models" "scanner shadow models"
+      check_plist_env "$scan_plist" "INTROSPECT_WAKE_SENSITIVITY" "$wake_sensitivity" "scanner wake sensitivity"
+      check_plist_env "$scan_plist" "INTROSPECT_WAKE_THRESHOLD" "$wake_threshold" "scanner wake threshold"
 fi
 
 if [[ "$mode" == "nightly" ]]; then
@@ -164,9 +187,11 @@ if [[ "$mode" == "nightly" ]]; then
     reasons+=("nightly reflector missing or unloaded")
   else
     check_plist_env "$reflector_plist" "INTROSPECT_REFLECTOR_RUNNER" "$runner" "nightly runner"
+    check_plist_env "$reflector_plist" "AGENTS_HOME" "$AGENTS_HOME_DIR" "nightly agents home"
     check_plist_env "$reflector_plist" "INTROSPECT_REFLECTOR_CLAUDE_MODEL" "$claude_model" "nightly Claude model"
-    check_plist_env "$reflector_plist" "INTROSPECT_REFLECTOR_CLAUDE_FALLBACK_MODEL" "$claude_fallback_model" "nightly Claude fallback model"
+    check_plist_env "$reflector_plist" "INTROSPECT_REFLECTOR_CLAUDE_FALLBACK_MODEL" "$claude_fallback_model" "nightly Claude CLI fallback model"
     check_plist_env "$reflector_plist" "INTROSPECT_REFLECTOR_CODEX_MODEL" "$codex_model" "nightly Codex model"
+    check_plist_env "$reflector_plist" "INTROSPECT_WAKE_MODEL" "$INTROSPECT_HOME_DIR/models/wake-logreg-v2-round4.json" "nightly wake model"
     check_plist_env "$reflector_plist" "INTROSPECT_WAKE_SENSITIVITY" "$wake_sensitivity" "nightly wake sensitivity"
     check_plist_env "$reflector_plist" "INTROSPECT_WAKE_THRESHOLD" "$wake_threshold" "nightly wake threshold"
   fi
@@ -188,6 +213,7 @@ if [[ "$needs_repair" == "1" ]]; then
     --wake-sensitivity "$wake_sensitivity" \
     --wake-threshold "$wake_threshold" \
     --home "$INTROSPECT_HOME_DIR" \
+    --agents-home "$AGENTS_HOME_DIR" \
     --feedback-dir "$FEEDBACK_DIR"
 else
   echo "$(timestamp) no repair needed"

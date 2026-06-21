@@ -1,4 +1,9 @@
 feedback/
 .build/
 __pycache__/
+*.pyc
+*.pyo
+.DS_Store
+*.log
+.scratch_*.py
 CLAUDE.local.md

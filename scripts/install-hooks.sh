@@ -6,6 +6,7 @@ HOOK="$REPO/hooks/trigger-reflect.sh"
 WORKER="$REPO/hooks/trigger-worker.py"
 SCANNER="$REPO/hooks/codex-transcript-scan.py"
 MONITOR="$REPO/scripts/introspect-healthcheck.sh"
+SKILL_SYNC="$REPO/scripts/sync-user-skills.sh"
 STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
 export STAMP
 
@@ -14,6 +15,7 @@ PROMPT=""
 SKILLS_DIR=""
 USER_SKILLS_DIR=""
 FEEDBACK_DIR=""
+AGENTS_HOME_DIR="${AGENTS_HOME:-$HOME/.agents}"
 INTROSPECT_HOME_DIR="${INTROSPECT_HOME:-$HOME/.introspect}"
 REFLECT_MODE="immediate"
 NIGHTLY_HOUR=3
@@ -32,19 +34,20 @@ SCAN_LABEL="ai.companion.introspect.codex-scanner"
 SCAN_PLIST="$HOME/Library/LaunchAgents/$SCAN_LABEL.plist"
 MONITOR_LABEL="ai.companion.introspect.health"
 MONITOR_PLIST="$HOME/Library/LaunchAgents/$MONITOR_LABEL.plist"
+SETUP_PYTHON="${INTROSPECT_SETUP_PYTHON:-/usr/bin/python3}"
+DEFAULT_PROMPT_TEMPLATE="$REPO/templates/default-AGENTS.md"
 
 usage() {
   cat <<EOF
-Usage: $0 [--uninstall] [--prompt PATH] [--skills PATH] [--user-skills PATH] [--feedback-dir PATH] [--home PATH] [--reflect-mode immediate|nightly|off] [--nightly-hour H] [--nightly-minute M] [--runner default|claude|codex] [--claude-model MODEL] [--claude-fallback-model MODEL] [--codex-model MODEL] [--wake-sensitivity quiet|balanced|sensitive|custom] [--wake-threshold DECIMAL]
+Usage: $0 [--uninstall] [--prompt PATH] [--skills PATH] [--user-skills PATH] [--feedback-dir PATH] [--home PATH] [--agents-home PATH] [--reflect-mode immediate|nightly|off] [--nightly-hour H] [--nightly-minute M] [--runner default|claude|codex] [--claude-model MODEL] [--codex-model MODEL] [--wake-sensitivity quiet|balanced|sensitive|custom] [--wake-threshold DECIMAL]
 
-install          Link ~/.introspect/AGENTS.md and configure Claude/Codex hooks.
+install          Link native Claude/Codex/OpenCode prompt files and configure hooks.
 --uninstall      Remove Introspect prompt links, hooks, scanner, monitor, and reflector LaunchAgents.
---home           Introspect home. Default: ~/.introspect.
+--home           Introspect private home. Default: ~/.introspect.
+--agents-home    Agent-compatible skill export home. Default: ~/.agents.
 --reflect-mode   immediate kicks the locked worker after trigger; nightly queues for the LaunchAgent; off removes hooks but keeps prompt links.
 --runner         Reflector runner. default picks the installed agent with the most recent local usage; claude/codex force one.
 --claude-model   Optional Claude model alias/id for reflector runs. Blank/default/auto uses Claude CLI default.
---claude-fallback-model
-                 Optional Claude fallback model list for reflector runs.
 --codex-model    Optional Codex model id for reflector runs. Blank/default/auto uses Codex CLI default.
 --wake-sensitivity
                  Classifier wake sensitivity. balanced uses the model threshold.
@@ -80,6 +83,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --home|--introspect-home)
       INTROSPECT_HOME_DIR="${2:-}"
+      shift 2
+      ;;
+    --agents-home)
+      AGENTS_HOME_DIR="${2:-}"
       shift 2
       ;;
     --reflect-mode|--mode)
@@ -141,7 +148,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 expand_path() {
-  python3 - "$1" <<'PY'
+  "$SETUP_PYTHON" - "$1" <<'PY'
 import os
 import sys
 print(os.path.abspath(os.path.expanduser(sys.argv[1])))
@@ -151,174 +158,6 @@ PY
 quote() {
   printf "%q" "$1"
 }
-
-case "$WAKE_SENSITIVITY" in
-  quiet|balanced|sensitive|custom) ;;
-  *)
-    echo "invalid wake sensitivity: $WAKE_SENSITIVITY" >&2
-    exit 2
-    ;;
-esac
-
-prepend_tool_dir_to_launchd_path() {
-  local tool="$1"
-  local tool_path
-  tool_path="$(command -v "$tool" 2>/dev/null || true)"
-  if [[ -z "$tool_path" ]]; then
-    return
-  fi
-  local tool_dir
-  tool_dir="$(dirname "$tool_path")"
-  case ":$LAUNCHD_PATH:" in
-    *":$tool_dir:"*) ;;
-    *) LAUNCHD_PATH="$tool_dir:$LAUNCHD_PATH" ;;
-  esac
-}
-
-prepend_tool_dir_to_launchd_path codex
-prepend_tool_dir_to_launchd_path claude
-
-INTROSPECT_HOME_DIR="$(expand_path "$INTROSPECT_HOME_DIR")"
-
-ensure_home_files() {
-  mkdir -p "$INTROSPECT_HOME_DIR/skills" "$INTROSPECT_HOME_DIR/memory" "$INTROSPECT_HOME_DIR/runs" "$INTROSPECT_HOME_DIR/proposals"
-  if [[ ! -f "$INTROSPECT_HOME_DIR/AGENTS.md" ]]; then
-    if [[ -f "$REPO/AGENTS.md" ]]; then
-      cp "$REPO/AGENTS.md" "$INTROSPECT_HOME_DIR/AGENTS.md"
-    else
-      printf '# AGENTS.md\n\n## Mission\n\n- Add global user-wide agent guidance here.\n' > "$INTROSPECT_HOME_DIR/AGENTS.md"
-    fi
-  fi
-  if [[ ! -f "$INTROSPECT_HOME_DIR/skills/index.json" ]]; then
-    printf '{\n  "version": 1,\n  "skills": []\n}\n' > "$INTROSPECT_HOME_DIR/skills/index.json"
-  fi
-  if [[ ! -f "$INTROSPECT_HOME_DIR/settings.json" ]]; then
-    cat > "$INTROSPECT_HOME_DIR/settings.json" <<JSON
-{
-  "notifications_enabled": true,
-  "reflect_mode": "$REFLECT_MODE",
-  "reflector_runner": "$REFLECTOR_RUNNER",
-  "reflector_claude_model": "",
-  "reflector_claude_fallback_model": "",
-  "reflector_codex_model": "",
-  "wake_sensitivity": "$WAKE_SENSITIVITY",
-  "wake_custom_threshold": ${WAKE_THRESHOLD:-0.64},
-  "nightly_hour": $NIGHTLY_HOUR,
-  "nightly_minute": $NIGHTLY_MINUTE
-}
-JSON
-  fi
-  if [[ ! -f "$INTROSPECT_HOME_DIR/README.md" ]]; then
-    cat > "$INTROSPECT_HOME_DIR/README.md" <<'MD'
-# Introspect Home
-
-This repository is private local state for Introspect:
-
-- `AGENTS.md`: the canonical user-wide prompt linked into Claude and Codex.
-- `trigger-words.txt`: optional review terms, one lowercase word per line. Introspect does not install defaults.
-- `settings.json`: local app preferences such as notification delivery.
-- `skills/`: private user skills.
-- `memory/`: durable user and machine facts.
-- `runs/`: local run artifacts.
-- `proposals/`: reflector proposals before they are accepted.
-
-Commit changes locally when you want a checkpoint.
-MD
-  fi
-  if [[ ! -d "$INTROSPECT_HOME_DIR/.git" ]]; then
-    git init "$INTROSPECT_HOME_DIR" >/dev/null
-  fi
-}
-
-ensure_home_files
-git -C "$INTROSPECT_HOME_DIR" add . >/dev/null 2>&1 || true
-if [[ -d "$INTROSPECT_HOME_DIR/.git" ]] && [[ -n "$(git -C "$INTROSPECT_HOME_DIR" status --porcelain 2>/dev/null || true)" ]]; then
-  git -C "$INTROSPECT_HOME_DIR" commit -m "Update Introspect home" >/dev/null 2>&1 || true
-fi
-
-if [[ -z "$PROMPT" ]]; then
-  PROMPT="$INTROSPECT_HOME_DIR/AGENTS.md"
-fi
-
-PROMPT="$(expand_path "$PROMPT")"
-if [[ -z "$SKILLS_DIR" ]]; then
-  SKILLS_DIR="$REPO/skills"
-fi
-SKILLS_DIR="$(expand_path "$SKILLS_DIR")"
-if [[ -z "$USER_SKILLS_DIR" ]]; then
-  USER_SKILLS_DIR="$INTROSPECT_HOME_DIR/skills"
-fi
-USER_SKILLS_DIR="$(expand_path "$USER_SKILLS_DIR")"
-if [[ -z "$FEEDBACK_DIR" ]]; then
-  FEEDBACK_DIR="$REPO/feedback"
-fi
-FEEDBACK_DIR="$(expand_path "$FEEDBACK_DIR")"
-
-discover_shadow_models() {
-  if [[ -n "$WAKE_SHADOW_MODELS" ]]; then
-    return
-  fi
-  local specs=()
-  local r8="$REPO/feedback/intent-classifier/wake-logreg-v2-round8-holdout-selected.json"
-  local r9="$REPO/feedback/intent-classifier/wake-logreg-v2-round9-holdout-selected.json"
-  local r8r9="$REPO/feedback/intent-classifier/wake-logreg-v2-round8-after-round9-selected.json"
-  if [[ -f "$r8" ]]; then
-    specs+=("r8-retrain=$r8")
-  fi
-  if [[ -f "$r9" ]]; then
-    specs+=("r9-retrain=$r9")
-  fi
-  if [[ -f "$r8r9" ]]; then
-    specs+=("r8-r9=$r8r9")
-  fi
-  local IFS=,
-  WAKE_SHADOW_MODELS="${specs[*]}"
-}
-
-discover_shadow_models
-
-if [[ ! -f "$PROMPT" ]]; then
-  echo "missing prompt: $PROMPT" >&2
-  exit 1
-fi
-if [[ ! -f "$HOOK" ]]; then
-  echo "missing hook: $HOOK" >&2
-  exit 1
-fi
-if [[ ! -f "$SCANNER" ]]; then
-  echo "missing scanner: $SCANNER" >&2
-  exit 1
-fi
-if [[ ! -f "$MONITOR" ]]; then
-  echo "missing health monitor: $MONITOR" >&2
-  exit 1
-fi
-if [[ "$REFLECTOR_RUNNER" == "auto" || "$REFLECTOR_RUNNER" == "most-used" || "$REFLECTOR_RUNNER" == "most_used" ]]; then
-  REFLECTOR_RUNNER="default"
-fi
-if [[ "$REFLECTOR_RUNNER" != "default" && "$REFLECTOR_RUNNER" != "claude" && "$REFLECTOR_RUNNER" != "codex" ]]; then
-  echo "invalid --runner: $REFLECTOR_RUNNER" >&2
-  exit 2
-fi
-normalize_model_setting() {
-  case "$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')" in
-    ""|"default"|"auto")
-      printf ''
-      ;;
-    *)
-      printf '%s' "$1"
-      ;;
-  esac
-}
-REFLECTOR_CLAUDE_MODEL="$(normalize_model_setting "$REFLECTOR_CLAUDE_MODEL")"
-REFLECTOR_CLAUDE_FALLBACK_MODEL="$(normalize_model_setting "$REFLECTOR_CLAUDE_FALLBACK_MODEL")"
-REFLECTOR_CODEX_MODEL="$(normalize_model_setting "$REFLECTOR_CODEX_MODEL")"
-if [[ "$REFLECT_MODE" != "immediate" && "$REFLECT_MODE" != "nightly" && "$REFLECT_MODE" != "off" ]]; then
-  echo "invalid --reflect-mode: $REFLECT_MODE" >&2
-  exit 2
-fi
-
-chmod +x "$HOOK" "$WORKER" "$SCANNER" "$MONITOR" "$REPO/hooks/trigger-stats.sh" "$REPO/scripts/introspect-status.sh" "$REPO/scripts/test-trigger-words.py"
 
 install_link() {
   local target="$1"
@@ -347,21 +186,278 @@ uninstall_link() {
   fi
 }
 
+reflector_model_summary() {
+  local summary="reflector models: claude=${REFLECTOR_CLAUDE_MODEL:-default} codex=${REFLECTOR_CODEX_MODEL:-default}"
+  if [[ -n "$REFLECTOR_CLAUDE_FALLBACK_MODEL" ]]; then
+    summary="$summary claude_cli_fallback_model=$REFLECTOR_CLAUDE_FALLBACK_MODEL"
+  fi
+  echo "$summary"
+}
+
+case "$WAKE_SENSITIVITY" in
+  quiet|balanced|sensitive|custom) ;;
+  *)
+    echo "invalid wake sensitivity: $WAKE_SENSITIVITY" >&2
+    exit 2
+    ;;
+esac
+
+prepend_tool_dir_to_launchd_path() {
+  local tool="$1"
+  local tool_path
+  tool_path="$(command -v "$tool" 2>/dev/null || true)"
+  if [[ -z "$tool_path" ]]; then
+    return
+  fi
+  local tool_dir
+  tool_dir="$(dirname "$tool_path")"
+  case ":$LAUNCHD_PATH:" in
+    *":$tool_dir:"*) ;;
+    *) LAUNCHD_PATH="$tool_dir:$LAUNCHD_PATH" ;;
+  esac
+}
+
+prepend_tool_dir_to_launchd_path codex
+prepend_tool_dir_to_launchd_path claude
+
+AGENTS_HOME_DIR="$(expand_path "$AGENTS_HOME_DIR")"
+INTROSPECT_HOME_DIR="$(expand_path "$INTROSPECT_HOME_DIR")"
+OLD_AGENTS_INTROSPECT_HOME="$(expand_path "$AGENTS_HOME_DIR/introspect")"
+
+migrate_previous_home() {
+  if [[ "$INTROSPECT_HOME_DIR" == "$OLD_AGENTS_INTROSPECT_HOME" ]]; then
+    return
+  fi
+  if [[ ! -e "$INTROSPECT_HOME_DIR" && -d "$OLD_AGENTS_INTROSPECT_HOME" ]]; then
+    mkdir -p "$(dirname "$INTROSPECT_HOME_DIR")"
+    mv "$OLD_AGENTS_INTROSPECT_HOME" "$INTROSPECT_HOME_DIR"
+    echo "migrated private home: $OLD_AGENTS_INTROSPECT_HOME -> $INTROSPECT_HOME_DIR"
+  fi
+}
+
+remove_old_agents_prompt_bridge() {
+  local link="$AGENTS_HOME_DIR/AGENTS.md"
+  local target=""
+  target="$(readlink "$link" 2>/dev/null || true)"
+  case "$target" in
+    "$INTROSPECT_HOME_DIR/AGENTS.md"|"$OLD_AGENTS_INTROSPECT_HOME/AGENTS.md")
+      rm "$link"
+      echo "removed old public bridge: $link"
+      ;;
+  esac
+}
+
+ensure_home_files() {
+  mkdir -p "$AGENTS_HOME_DIR" "$INTROSPECT_HOME_DIR/skills" "$INTROSPECT_HOME_DIR/memory" "$INTROSPECT_HOME_DIR/models" "$INTROSPECT_HOME_DIR/feedback" "$INTROSPECT_HOME_DIR/runs" "$INTROSPECT_HOME_DIR/proposals"
+  if [[ ! -f "$INTROSPECT_HOME_DIR/AGENTS.md" ]]; then
+    if [[ -f "$DEFAULT_PROMPT_TEMPLATE" ]]; then
+      cp "$DEFAULT_PROMPT_TEMPLATE" "$INTROSPECT_HOME_DIR/AGENTS.md"
+    else
+      printf '# AGENTS.md\n\n## Mission\n\n- Add global user-wide agent guidance here.\n' > "$INTROSPECT_HOME_DIR/AGENTS.md"
+    fi
+  fi
+  if [[ ! -f "$INTROSPECT_HOME_DIR/skills/index.json" ]]; then
+    printf '{\n  "version": 1,\n  "skills": []\n}\n' > "$INTROSPECT_HOME_DIR/skills/index.json"
+  fi
+  if [[ ! -f "$INTROSPECT_HOME_DIR/models/wake-logreg-v2-round4.json" && -f "$REPO/models/wake-logreg-v2-round4.json" ]]; then
+    cp "$REPO/models/wake-logreg-v2-round4.json" "$INTROSPECT_HOME_DIR/models/wake-logreg-v2-round4.json"
+  fi
+  if [[ ! -f "$INTROSPECT_HOME_DIR/settings.json" ]]; then
+    cat > "$INTROSPECT_HOME_DIR/settings.json" <<JSON
+{
+  "notifications_enabled": true,
+  "reflect_mode": "$REFLECT_MODE",
+  "reflector_runner": "$REFLECTOR_RUNNER",
+  "reflector_claude_model": "",
+  "reflector_claude_fallback_model": "",
+  "reflector_codex_model": "",
+  "wake_sensitivity": "$WAKE_SENSITIVITY",
+  "wake_custom_threshold": ${WAKE_THRESHOLD:-0.64},
+  "nightly_hour": $NIGHTLY_HOUR,
+  "nightly_minute": $NIGHTLY_MINUTE
+}
+JSON
+  fi
+  if [[ ! -f "$INTROSPECT_HOME_DIR/README.md" ]]; then
+    cat > "$INTROSPECT_HOME_DIR/README.md" <<'MD'
+# Introspect Home
+
+This repository is private local state for Introspect:
+
+- `AGENTS.md`: the Git-tracked source for the user-wide prompt linked into each agent's native prompt file.
+- `trigger-words.txt`: optional review terms, one lowercase word per line. Introspect does not install defaults.
+- `settings.json`: local app preferences such as notification delivery.
+- `skills/`: private user skills.
+- `memory/`: durable user and machine facts.
+- `feedback/`: ignored local trigger queues, logs, and run artifacts.
+- `runs/`: ignored local run artifacts.
+- `proposals/`: reflector proposals before they are accepted.
+- `models/`: ignored local model artifacts seeded or produced by Introspect.
+
+Durable prompt, settings, skill, and memory changes are Git-tracked. Runtime artifacts stay local and ignored.
+MD
+  fi
+  "$SETUP_PYTHON" - "$INTROSPECT_HOME_DIR/README.md" <<'PY'
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+try:
+    text = path.read_text()
+except OSError:
+    raise SystemExit(0)
+updated = text.replace("~/.agents/introspect", "~/.introspect")
+updated = updated.replace(
+    "the Git-tracked source for the user-wide prompt exposed at `~/.agents/AGENTS.md`",
+    "the Git-tracked source for the user-wide prompt linked into each agent's native prompt file",
+)
+if updated != text:
+    path.write_text(updated)
+PY
+  touch "$INTROSPECT_HOME_DIR/.gitignore"
+  for entry in "feedback/" "runs/" "proposals/" "models/*.json" "models/*.json.*"; do
+    if ! grep -Fxq "$entry" "$INTROSPECT_HOME_DIR/.gitignore"; then
+      printf '%s\n' "$entry" >> "$INTROSPECT_HOME_DIR/.gitignore"
+    fi
+  done
+  if [[ ! -d "$INTROSPECT_HOME_DIR/.git" ]]; then
+    git init "$INTROSPECT_HOME_DIR" >/dev/null
+  fi
+}
+
 if [[ "$MODE" == "install" ]]; then
+  migrate_previous_home
+  ensure_home_files
+  git -C "$INTROSPECT_HOME_DIR" add . >/dev/null 2>&1 || true
+  if [[ -d "$INTROSPECT_HOME_DIR/.git" ]] && [[ -n "$(git -C "$INTROSPECT_HOME_DIR" status --porcelain 2>/dev/null || true)" ]]; then
+    git -C "$INTROSPECT_HOME_DIR" commit -m "Update Introspect home" >/dev/null 2>&1 || true
+  fi
+fi
+
+if [[ -z "$PROMPT" ]]; then
+  PROMPT="$INTROSPECT_HOME_DIR/AGENTS.md"
+fi
+
+PROMPT="$(expand_path "$PROMPT")"
+if [[ -z "$SKILLS_DIR" ]]; then
+  SKILLS_DIR="$REPO/skills"
+fi
+SKILLS_DIR="$(expand_path "$SKILLS_DIR")"
+if [[ -z "$USER_SKILLS_DIR" ]]; then
+  USER_SKILLS_DIR="$INTROSPECT_HOME_DIR/skills"
+fi
+USER_SKILLS_DIR="$(expand_path "$USER_SKILLS_DIR")"
+if [[ -z "$FEEDBACK_DIR" ]]; then
+  case "$REPO" in
+    *.app/Contents/Resources)
+      FEEDBACK_DIR="$INTROSPECT_HOME_DIR/feedback"
+      ;;
+    *)
+      FEEDBACK_DIR="$REPO/feedback"
+      ;;
+  esac
+fi
+FEEDBACK_DIR="$(expand_path "$FEEDBACK_DIR")"
+
+discover_shadow_models() {
+  if [[ -n "$WAKE_SHADOW_MODELS" ]]; then
+    return
+  fi
+  local specs=()
+  local r8="$FEEDBACK_DIR/intent-classifier/wake-logreg-v2-round8-holdout-selected.json"
+  local r9="$FEEDBACK_DIR/intent-classifier/wake-logreg-v2-round9-holdout-selected.json"
+  local r8r9="$FEEDBACK_DIR/intent-classifier/wake-logreg-v2-round8-after-round9-selected.json"
+  if [[ -f "$r8" ]]; then
+    specs+=("r8-retrain=$r8")
+  fi
+  if [[ -f "$r9" ]]; then
+    specs+=("r9-retrain=$r9")
+  fi
+  if [[ -f "$r8r9" ]]; then
+    specs+=("r8-r9=$r8r9")
+  fi
+  local IFS=,
+  WAKE_SHADOW_MODELS="${specs[*]-}"
+}
+
+discover_shadow_models
+
+if [[ ! -f "$PROMPT" ]]; then
+  echo "missing prompt: $PROMPT" >&2
+  exit 1
+fi
+if [[ ! -f "$HOOK" ]]; then
+  echo "missing hook: $HOOK" >&2
+  exit 1
+fi
+if [[ ! -f "$SCANNER" ]]; then
+  echo "missing scanner: $SCANNER" >&2
+  exit 1
+fi
+if [[ ! -f "$MONITOR" ]]; then
+  echo "missing health monitor: $MONITOR" >&2
+  exit 1
+fi
+if [[ ! -f "$SKILL_SYNC" ]]; then
+  echo "missing skill sync: $SKILL_SYNC" >&2
+  exit 1
+fi
+if [[ "$REFLECTOR_RUNNER" == "auto" || "$REFLECTOR_RUNNER" == "most-used" || "$REFLECTOR_RUNNER" == "most_used" ]]; then
+  REFLECTOR_RUNNER="default"
+fi
+if [[ "$REFLECTOR_RUNNER" != "default" && "$REFLECTOR_RUNNER" != "claude" && "$REFLECTOR_RUNNER" != "codex" ]]; then
+  echo "invalid --runner: $REFLECTOR_RUNNER" >&2
+  exit 2
+fi
+normalize_model_setting() {
+  case "$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')" in
+    ""|"default"|"auto")
+      printf ''
+      ;;
+    *)
+      printf '%s' "$1"
+      ;;
+  esac
+}
+REFLECTOR_CLAUDE_MODEL="$(normalize_model_setting "$REFLECTOR_CLAUDE_MODEL")"
+REFLECTOR_CLAUDE_FALLBACK_MODEL="$(normalize_model_setting "$REFLECTOR_CLAUDE_FALLBACK_MODEL")"
+REFLECTOR_CODEX_MODEL="$(normalize_model_setting "$REFLECTOR_CODEX_MODEL")"
+if [[ "$REFLECT_MODE" != "immediate" && "$REFLECT_MODE" != "nightly" && "$REFLECT_MODE" != "off" ]]; then
+  echo "invalid --reflect-mode: $REFLECT_MODE" >&2
+  exit 2
+fi
+
+case "$REPO" in
+  *.app/Contents/Resources)
+    ;;
+  *)
+    chmod +x "$HOOK" "$WORKER" "$SCANNER" "$MONITOR" "$SKILL_SYNC" "$REPO/hooks/trigger-stats.sh" "$REPO/scripts/introspect-status.sh" "$REPO/scripts/test-trigger-words.py" "$REPO/scripts/test-surface-scopes.py" "$REPO/scripts/test-reflector-prompt-contract.py" "$REPO/scripts/test-user-skill-sync.sh" "$REPO/scripts/test-install-paths.sh"
+    ;;
+esac
+
+if [[ "$MODE" == "install" ]]; then
+  remove_old_agents_prompt_bridge
   install_link "$PROMPT" "$HOME/.claude/CLAUDE.md"
   install_link "$PROMPT" "$HOME/.codex/AGENTS.md"
+  install_link "$PROMPT" "$HOME/.config/opencode/AGENTS.md"
+  echo "configured private home: $INTROSPECT_HOME_DIR"
+  echo "configured native prompt links: ~/.claude/CLAUDE.md ~/.codex/AGENTS.md ~/.config/opencode/AGENTS.md"
+  INTROSPECT_HOME="$INTROSPECT_HOME_DIR" INTROSPECT_USER_SKILLS_DIR="$USER_SKILLS_DIR" /bin/bash "$SKILL_SYNC"
 else
   uninstall_link "$PROMPT" "$HOME/.claude/CLAUDE.md"
   uninstall_link "$PROMPT" "$HOME/.codex/AGENTS.md"
+  uninstall_link "$PROMPT" "$HOME/.config/opencode/AGENTS.md"
+  remove_old_agents_prompt_bridge
+  INTROSPECT_HOME="$INTROSPECT_HOME_DIR" INTROSPECT_USER_SKILLS_DIR="$USER_SKILLS_DIR" /bin/bash "$SKILL_SYNC" --unlink
 fi
 
-HOOK_COMMAND="env INTROSPECT_REFLECT_MODE=$(quote "$REFLECT_MODE") INTROSPECT_REPO=$(quote "$REPO") INTROSPECT_PROMPT=$(quote "$PROMPT") INTROSPECT_SKILLS_DIR=$(quote "$SKILLS_DIR") INTROSPECT_USER_SKILLS_DIR=$(quote "$USER_SKILLS_DIR") INTROSPECT_FEEDBACK_DIR=$(quote "$FEEDBACK_DIR") INTROSPECT_HOME=$(quote "$INTROSPECT_HOME_DIR") INTROSPECT_WAKE_SHADOW_MODELS=$(quote "$WAKE_SHADOW_MODELS") INTROSPECT_WAKE_SENSITIVITY=$(quote "$WAKE_SENSITIVITY") INTROSPECT_WAKE_THRESHOLD=$(quote "$WAKE_THRESHOLD") $(quote "$HOOK")"
+HOOK_COMMAND="env PYTHONDONTWRITEBYTECODE=1 INTROSPECT_REFLECT_MODE=$(quote "$REFLECT_MODE") INTROSPECT_REPO=$(quote "$REPO") AGENTS_HOME=$(quote "$AGENTS_HOME_DIR") INTROSPECT_PROMPT=$(quote "$PROMPT") INTROSPECT_SKILLS_DIR=$(quote "$SKILLS_DIR") INTROSPECT_USER_SKILLS_DIR=$(quote "$USER_SKILLS_DIR") INTROSPECT_FEEDBACK_DIR=$(quote "$FEEDBACK_DIR") INTROSPECT_HOME=$(quote "$INTROSPECT_HOME_DIR") INTROSPECT_WAKE_MODEL=$(quote "$INTROSPECT_HOME_DIR/models/wake-logreg-v2-round4.json") INTROSPECT_WAKE_SHADOW_MODELS=$(quote "$WAKE_SHADOW_MODELS") INTROSPECT_WAKE_SENSITIVITY=$(quote "$WAKE_SENSITIVITY") INTROSPECT_WAKE_THRESHOLD=$(quote "$WAKE_THRESHOLD") $(quote "$HOOK")"
 HOOK_MODE="$MODE"
 if [[ "$MODE" == "install" && "$REFLECT_MODE" == "off" ]]; then
   HOOK_MODE="uninstall"
 fi
 
-python3 - "$HOOK_MODE" "$HOOK_COMMAND" "$HOME/.claude/settings.json" "$HOME/.codex/hooks.json" <<'PY'
+"$SETUP_PYTHON" - "$HOOK_MODE" "$HOOK_COMMAND" "$HOME/.claude/settings.json" "$HOME/.codex/hooks.json" <<'PY'
 import json
 import os
 import sys
@@ -479,24 +575,28 @@ PY
 
 install_launch_agent() {
   mkdir -p "$HOME/Library/LaunchAgents" "$FEEDBACK_DIR"
-  python3 - "$LAUNCH_LABEL" "$REPO" "$WORKER" "$PROMPT" "$SKILLS_DIR" "$USER_SKILLS_DIR" "$FEEDBACK_DIR" "$INTROSPECT_HOME_DIR" "$NIGHTLY_HOUR" "$NIGHTLY_MINUTE" "$REFLECTOR_RUNNER" "$REFLECTOR_CLAUDE_MODEL" "$REFLECTOR_CLAUDE_FALLBACK_MODEL" "$REFLECTOR_CODEX_MODEL" "$WAKE_SENSITIVITY" "$WAKE_THRESHOLD" "$LAUNCHD_PATH" "$LAUNCH_PLIST" <<'PY'
+  "$SETUP_PYTHON" - "$LAUNCH_LABEL" "$REPO" "$WORKER" "$PROMPT" "$SKILLS_DIR" "$USER_SKILLS_DIR" "$FEEDBACK_DIR" "$AGENTS_HOME_DIR" "$INTROSPECT_HOME_DIR" "$NIGHTLY_HOUR" "$NIGHTLY_MINUTE" "$REFLECTOR_RUNNER" "$REFLECTOR_CLAUDE_MODEL" "$REFLECTOR_CLAUDE_FALLBACK_MODEL" "$REFLECTOR_CODEX_MODEL" "$WAKE_SENSITIVITY" "$WAKE_THRESHOLD" "$LAUNCHD_PATH" "$LAUNCH_PLIST" <<'PY'
 import plistlib
+import os
 import sys
 from pathlib import Path
 
-label, repo, worker, prompt, skills_dir, user_skills_dir, feedback_dir, home_dir, hour, minute, runner, claude_model, claude_fallback_model, codex_model, wake_sensitivity, wake_threshold, launchd_path, plist_path = sys.argv[1:]
+label, repo, worker, prompt, skills_dir, user_skills_dir, feedback_dir, agents_home_dir, home_dir, hour, minute, runner, claude_model, claude_fallback_model, codex_model, wake_sensitivity, wake_threshold, launchd_path, plist_path = sys.argv[1:]
 data = {
     "Label": label,
     "ProgramArguments": ["/usr/bin/env", "python3", worker, "--nightly"],
     "WorkingDirectory": repo,
     "EnvironmentVariables": {
+        "PYTHONDONTWRITEBYTECODE": "1",
         "INTROSPECT_REFLECT_MODE": "nightly",
         "INTROSPECT_REPO": repo,
+        "AGENTS_HOME": agents_home_dir,
         "INTROSPECT_PROMPT": prompt,
         "INTROSPECT_SKILLS_DIR": skills_dir,
         "INTROSPECT_USER_SKILLS_DIR": user_skills_dir,
         "INTROSPECT_FEEDBACK_DIR": feedback_dir,
         "INTROSPECT_HOME": home_dir,
+        "INTROSPECT_WAKE_MODEL": str(Path(home_dir) / "models" / "wake-logreg-v2-round4.json"),
         "INTROSPECT_REFLECTOR_RUNNER": runner,
         "INTROSPECT_REFLECTOR_CLAUDE_MODEL": claude_model,
         "INTROSPECT_REFLECTOR_CLAUDE_FALLBACK_MODEL": claude_fallback_model,
@@ -513,16 +613,23 @@ data = {
     "StandardErrorPath": str(Path(feedback_dir) / "launchd.err.log"),
 }
 Path(plist_path).write_bytes(plistlib.dumps(data, sort_keys=False))
+os._exit(0)
 PY
+  if [[ "${INTROSPECT_SKIP_LAUNCHD:-0}" == "1" ]]; then
+    echo "wrote nightly reflector: $LAUNCH_PLIST (launchd bootstrap skipped)"
+    return
+  fi
   launchctl bootout "gui/$(id -u)" "$LAUNCH_PLIST" >/dev/null 2>&1 || true
   launchctl bootstrap "gui/$(id -u)" "$LAUNCH_PLIST"
   launchctl enable "gui/$(id -u)/$LAUNCH_LABEL" >/dev/null 2>&1 || true
   echo "installed nightly reflector: $LAUNCH_PLIST at $(printf '%02d:%02d' "$NIGHTLY_HOUR" "$NIGHTLY_MINUTE") local, runner=$REFLECTOR_RUNNER"
-  echo "reflector models: claude=${REFLECTOR_CLAUDE_MODEL:-default} fallback=${REFLECTOR_CLAUDE_FALLBACK_MODEL:-none} codex=${REFLECTOR_CODEX_MODEL:-default}"
+  reflector_model_summary
 }
 
 uninstall_launch_agent() {
-  launchctl bootout "gui/$(id -u)" "$LAUNCH_PLIST" >/dev/null 2>&1 || true
+  if [[ "${INTROSPECT_SKIP_LAUNCHD:-0}" != "1" ]]; then
+    launchctl bootout "gui/$(id -u)" "$LAUNCH_PLIST" >/dev/null 2>&1 || true
+  fi
   if [[ -f "$LAUNCH_PLIST" ]]; then
     rm "$LAUNCH_PLIST"
     echo "removed nightly reflector: $LAUNCH_PLIST"
@@ -533,24 +640,28 @@ uninstall_launch_agent() {
 
 install_scan_agent() {
   mkdir -p "$HOME/Library/LaunchAgents" "$FEEDBACK_DIR"
-  python3 - "$SCAN_LABEL" "$REPO" "$SCANNER" "$PROMPT" "$SKILLS_DIR" "$USER_SKILLS_DIR" "$FEEDBACK_DIR" "$INTROSPECT_HOME_DIR" "$REFLECT_MODE" "$REFLECTOR_RUNNER" "$REFLECTOR_CLAUDE_MODEL" "$REFLECTOR_CLAUDE_FALLBACK_MODEL" "$REFLECTOR_CODEX_MODEL" "$WAKE_SHADOW_MODELS" "$WAKE_SENSITIVITY" "$WAKE_THRESHOLD" "$LAUNCHD_PATH" "$SCAN_PLIST" <<'PY'
+  "$SETUP_PYTHON" - "$SCAN_LABEL" "$REPO" "$SCANNER" "$PROMPT" "$SKILLS_DIR" "$USER_SKILLS_DIR" "$FEEDBACK_DIR" "$AGENTS_HOME_DIR" "$INTROSPECT_HOME_DIR" "$REFLECT_MODE" "$REFLECTOR_RUNNER" "$REFLECTOR_CLAUDE_MODEL" "$REFLECTOR_CLAUDE_FALLBACK_MODEL" "$REFLECTOR_CODEX_MODEL" "$WAKE_SHADOW_MODELS" "$WAKE_SENSITIVITY" "$WAKE_THRESHOLD" "$LAUNCHD_PATH" "$SCAN_PLIST" <<'PY'
 import plistlib
+import os
 import sys
 from pathlib import Path
 
-label, repo, scanner, prompt, skills_dir, user_skills_dir, feedback_dir, home_dir, reflect_mode, runner, claude_model, claude_fallback_model, codex_model, wake_shadow_models, wake_sensitivity, wake_threshold, launchd_path, plist_path = sys.argv[1:]
+label, repo, scanner, prompt, skills_dir, user_skills_dir, feedback_dir, agents_home_dir, home_dir, reflect_mode, runner, claude_model, claude_fallback_model, codex_model, wake_shadow_models, wake_sensitivity, wake_threshold, launchd_path, plist_path = sys.argv[1:]
 data = {
     "Label": label,
     "ProgramArguments": ["/usr/bin/env", "python3", scanner],
     "WorkingDirectory": repo,
     "EnvironmentVariables": {
+        "PYTHONDONTWRITEBYTECODE": "1",
         "INTROSPECT_REFLECT_MODE": reflect_mode,
         "INTROSPECT_REPO": repo,
+        "AGENTS_HOME": agents_home_dir,
         "INTROSPECT_PROMPT": prompt,
         "INTROSPECT_SKILLS_DIR": skills_dir,
         "INTROSPECT_USER_SKILLS_DIR": user_skills_dir,
         "INTROSPECT_FEEDBACK_DIR": feedback_dir,
         "INTROSPECT_HOME": home_dir,
+        "INTROSPECT_WAKE_MODEL": str(Path(home_dir) / "models" / "wake-logreg-v2-round4.json"),
         "INTROSPECT_REFLECTOR_RUNNER": runner,
         "INTROSPECT_REFLECTOR_CLAUDE_MODEL": claude_model,
         "INTROSPECT_REFLECTOR_CLAUDE_FALLBACK_MODEL": claude_fallback_model,
@@ -574,7 +685,12 @@ data = {
     "StandardErrorPath": str(Path(feedback_dir) / "codex-scanner.err.log"),
 }
 Path(plist_path).write_bytes(plistlib.dumps(data, sort_keys=False))
+os._exit(0)
 PY
+  if [[ "${INTROSPECT_SKIP_LAUNCHD:-0}" == "1" ]]; then
+    echo "wrote Codex transcript scanner: $SCAN_PLIST (launchd bootstrap skipped)"
+    return
+  fi
   launchctl bootout "gui/$(id -u)" "$SCAN_PLIST" >/dev/null 2>&1 || true
   launchctl bootstrap "gui/$(id -u)" "$SCAN_PLIST"
   launchctl enable "gui/$(id -u)/$SCAN_LABEL" >/dev/null 2>&1 || true
@@ -582,11 +698,13 @@ PY
   if [[ -n "$WAKE_SHADOW_MODELS" ]]; then
     echo "shadow candidate models: $WAKE_SHADOW_MODELS"
   fi
-  echo "reflector models: claude=${REFLECTOR_CLAUDE_MODEL:-default} fallback=${REFLECTOR_CLAUDE_FALLBACK_MODEL:-none} codex=${REFLECTOR_CODEX_MODEL:-default}"
+  reflector_model_summary
 }
 
 uninstall_scan_agent() {
-  launchctl bootout "gui/$(id -u)" "$SCAN_PLIST" >/dev/null 2>&1 || true
+  if [[ "${INTROSPECT_SKIP_LAUNCHD:-0}" != "1" ]]; then
+    launchctl bootout "gui/$(id -u)" "$SCAN_PLIST" >/dev/null 2>&1 || true
+  fi
   if [[ -f "$SCAN_PLIST" ]]; then
     rm "$SCAN_PLIST"
     echo "removed Codex transcript scanner: $SCAN_PLIST"
@@ -601,8 +719,9 @@ install_monitor_agent() {
     return
   fi
   mkdir -p "$HOME/Library/LaunchAgents" "$FEEDBACK_DIR"
-  python3 - "$MONITOR_LABEL" "$REPO" "$MONITOR" "$FEEDBACK_DIR" "$INTROSPECT_HOME_DIR" "$LAUNCHD_PATH" "$MONITOR_PLIST" <<'PY'
+  "$SETUP_PYTHON" - "$MONITOR_LABEL" "$REPO" "$MONITOR" "$FEEDBACK_DIR" "$INTROSPECT_HOME_DIR" "$LAUNCHD_PATH" "$MONITOR_PLIST" <<'PY'
 import plistlib
+import os
 import sys
 from pathlib import Path
 
@@ -612,6 +731,7 @@ data = {
     "ProgramArguments": ["/bin/bash", monitor],
     "WorkingDirectory": repo,
     "EnvironmentVariables": {
+        "PYTHONDONTWRITEBYTECODE": "1",
         "INTROSPECT_REPO": repo,
         "INTROSPECT_FEEDBACK_DIR": feedback_dir,
         "INTROSPECT_HOME": home_dir,
@@ -624,7 +744,12 @@ data = {
     "StandardErrorPath": str(Path(feedback_dir) / "healthcheck.err.log"),
 }
 Path(plist_path).write_bytes(plistlib.dumps(data, sort_keys=False))
+os._exit(0)
 PY
+  if [[ "${INTROSPECT_SKIP_LAUNCHD:-0}" == "1" ]]; then
+    echo "wrote Introspect health monitor: $MONITOR_PLIST (launchd bootstrap skipped)"
+    return
+  fi
   launchctl bootout "gui/$(id -u)" "$MONITOR_PLIST" >/dev/null 2>&1 || true
   launchctl bootstrap "gui/$(id -u)" "$MONITOR_PLIST"
   launchctl enable "gui/$(id -u)/$MONITOR_LABEL" >/dev/null 2>&1 || true
@@ -632,7 +757,9 @@ PY
 }
 
 uninstall_monitor_agent() {
-  launchctl bootout "gui/$(id -u)" "$MONITOR_PLIST" >/dev/null 2>&1 || true
+  if [[ "${INTROSPECT_SKIP_LAUNCHD:-0}" != "1" ]]; then
+    launchctl bootout "gui/$(id -u)" "$MONITOR_PLIST" >/dev/null 2>&1 || true
+  fi
   if [[ -f "$MONITOR_PLIST" ]]; then
     rm "$MONITOR_PLIST"
     echo "removed Introspect health monitor: $MONITOR_PLIST"

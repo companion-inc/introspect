@@ -4,8 +4,8 @@
 
 Evidence:
 
-- The installed Codex scanner LaunchAgent has `RunAtLoad` and `WatchPaths`, not `StartInterval`. Source: `/Users/advaitpaliwal/Library/LaunchAgents/ai.companion.introspect.codex-scanner.plist:42-52`.
-- The health LaunchAgent has `RunAtLoad`, not `StartInterval`. Source: `/Users/advaitpaliwal/Library/LaunchAgents/ai.companion.introspect.health.plist:25-30`.
+- The installed Codex scanner LaunchAgent has `RunAtLoad` and `WatchPaths`, not `StartInterval`. Source: `~/Library/LaunchAgents/ai.companion.introspect.codex-scanner.plist:42-52`.
+- The health LaunchAgent has `RunAtLoad`, not `StartInterval`. Source: `~/Library/LaunchAgents/ai.companion.introspect.health.plist:25-30`.
 - `launchctl print` showed the scanner as `not running` with an FSEvents `WatchPaths` event trigger, not a resident loop. Source: command output in this run.
 - The same current prompt was captured through the foreground hook and the Codex transcript scanner, producing four trigger records. Source: `feedback/events.jsonl:4714-4717`.
 - The reflector log shows duplicate worker starts exiting under the lock and then one batch running. Source: `feedback/reflector.log:12782-12789`.

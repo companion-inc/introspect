@@ -32,16 +32,24 @@ if os.environ.get("INTROSPECT_REFLECTOR") == "1":
     # the reflector recursively trigger itself.
     sys.exit(0)
 
-REPO = os.path.expanduser(os.environ.get("INTROSPECT_REPO", "~/Companion/Code/introspect"))
+DEFAULT_REPO = str(Path(__file__).resolve().parent.parent)
+REPO = os.path.expanduser(os.environ.get("INTROSPECT_REPO", DEFAULT_REPO))
+AGENTS_HOME = os.path.expanduser(os.environ.get("AGENTS_HOME") or "~/.agents")
+INTROSPECT_HOME = os.path.expanduser(os.environ.get("INTROSPECT_HOME") or "~/.introspect")
+
+
+def default_feedback_dir():
+    if REPO.endswith(".app/Contents/Resources"):
+        return os.path.join(INTROSPECT_HOME, "feedback")
+    return os.path.join(REPO, "feedback")
+
+
 FEEDBACK_DIR = os.path.expanduser(
-    os.environ.get("INTROSPECT_FEEDBACK_DIR", os.path.join(REPO, "feedback"))
+    os.environ.get("INTROSPECT_FEEDBACK_DIR", default_feedback_dir())
 )
 EVENTS = os.path.join(FEEDBACK_DIR, "events.jsonl")
 QUEUE = os.path.join(FEEDBACK_DIR, "trigger-queue.jsonl")
 WORKER = os.path.join(REPO, "hooks", "trigger-worker.py")
-INTROSPECT_HOME = os.path.expanduser(
-    os.environ.get("INTROSPECT_HOME") or "~/.introspect"
-)
 TRIGGER_WORDS_FILE = os.path.join(INTROSPECT_HOME, "trigger-words.txt")
 REFLECT_MODE = (
     os.environ.get("INTROSPECT_REFLECT_MODE") or "immediate"

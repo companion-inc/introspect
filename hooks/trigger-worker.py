@@ -24,14 +24,32 @@ import time
 from pathlib import Path
 
 
-REPO = Path(os.path.expanduser(os.environ.get("INTROSPECT_REPO", "~/Companion/Code/introspect")))
+DEFAULT_REPO = Path(__file__).resolve().parent.parent
+REPO = Path(os.path.expanduser(os.environ.get("INTROSPECT_REPO", str(DEFAULT_REPO))))
 SKILLS_DIR = Path(os.path.expanduser(os.environ.get("INTROSPECT_SKILLS_DIR", str(REPO / "skills"))))
+AGENTS_HOME = Path(os.path.expanduser(os.environ.get("AGENTS_HOME", "~/.agents")))
 INTROSPECT_HOME = Path(os.path.expanduser(os.environ.get("INTROSPECT_HOME", "~/.introspect")))
+PROMPT_PATH = Path(os.path.expanduser(os.environ.get("INTROSPECT_PROMPT", str(INTROSPECT_HOME / "AGENTS.md"))))
 USER_SKILLS_DIR = Path(
     os.path.expanduser(os.environ.get("INTROSPECT_USER_SKILLS_DIR", str(INTROSPECT_HOME / "skills")))
 )
+
+
+def is_packaged_runtime(path: Path) -> bool:
+    return str(path).endswith(".app/Contents/Resources")
+
+
+REFLECTOR_CWD = INTROSPECT_HOME
+
+
+def default_feedback_dir() -> Path:
+    if is_packaged_runtime(REPO):
+        return INTROSPECT_HOME / "feedback"
+    return REPO / "feedback"
+
+
 FEEDBACK_DIR = Path(
-    os.path.expanduser(os.environ.get("INTROSPECT_FEEDBACK_DIR", str(REPO / "feedback")))
+    os.path.expanduser(os.environ.get("INTROSPECT_FEEDBACK_DIR", str(default_feedback_dir())))
 )
 HOME_SETTINGS = INTROSPECT_HOME / "settings.json"
 QUEUE = FEEDBACK_DIR / "trigger-queue.jsonl"
@@ -48,6 +66,7 @@ GLOBAL_COOLDOWN_SECONDS = float(os.environ.get("TRIGGER_COOLDOWN_SECONDS", "300"
 SESSION_COOLDOWN_SECONDS = float(os.environ.get("TRIGGER_SESSION_COOLDOWN_SECONDS", "900"))
 STALE_LOCK_SECONDS = float(os.environ.get("TRIGGER_STALE_LOCK_SECONDS", "1800"))
 REFLECTOR_TIMEOUT_SECONDS = float(os.environ.get("TRIGGER_REFLECTOR_TIMEOUT_SECONDS", "600"))
+MAX_REFLECTOR_ATTEMPTS = int(os.environ.get("TRIGGER_MAX_REFLECTOR_ATTEMPTS", "2"))
 DRY_RUN = os.environ.get("TRIGGER_REFLECTOR_DRY_RUN") == "1"
 DISABLE_SCHEDULE = os.environ.get("TRIGGER_DISABLE_SCHEDULE") == "1"
 REFLECTOR_RUNNER = os.environ.get("INTROSPECT_REFLECTOR_RUNNER", "default").strip().lower() or "default"
@@ -63,6 +82,12 @@ RUNNER_ALIASES = {
     "most-used": "default",
     "most_used": "default",
 }
+NONRETRYABLE_REFLECTOR_FAILURE = 75
+NONRETRYABLE_RUNNER_MARKERS = (
+    "failed to authenticate",
+    "invalid authentication credentials",
+    "api error: 401",
+)
 SKIPPED_SURFACE_DIRS = {
     ".build",
     ".cache",
@@ -134,6 +159,20 @@ def log(message: str) -> None:
     LOG.parent.mkdir(parents=True, exist_ok=True)
     with LOG.open("a") as f:
         f.write(f"{iso_now()} {message}\n")
+
+
+def read_log_since(offset: int) -> str:
+    try:
+        with LOG.open("r", errors="replace") as f:
+            f.seek(offset)
+            return f.read()
+    except OSError:
+        return ""
+
+
+def is_nonretryable_runner_output(text: str) -> bool:
+    lowered = text.lower()
+    return any(marker in lowered for marker in NONRETRYABLE_RUNNER_MARKERS)
 
 
 def notifications_enabled() -> bool:
@@ -241,12 +280,13 @@ def trigger_words_text(events: list[dict]) -> str:
 
 def surface_scan_roots(events: list[dict] | None = None) -> list[Path]:
     home = Path.home()
-    roots = [
-        REPO,
+    runtime_roots = [] if is_packaged_runtime(REPO) else [REPO]
+    roots = runtime_roots + [
         INTROSPECT_HOME,
         home / ".codex",
         home / ".claude",
         home / ".agents",
+        home / ".config" / "opencode",
     ]
     for event in events or []:
         cwd = event.get("cwd")
@@ -267,6 +307,10 @@ def surface_scan_roots(events: list[dict] | None = None) -> list[Path]:
         seen.add(key)
         existing.append(resolved)
     return existing
+
+
+def should_skip_surface_directory(entry: Path) -> bool:
+    return entry.expanduser().resolve(strict=False) == Path.home().joinpath(".codex", "skills").resolve(strict=False)
 
 
 def path_contains(path: Path, parts: tuple[str, ...]) -> bool:
@@ -357,7 +401,7 @@ def snapshot_agent_surfaces(events: list[dict] | None = None) -> dict[str, dict]
                 except OSError:
                     continue
                 if is_dir:
-                    if entry.name in SKIPPED_SURFACE_DIRS:
+                    if entry.name in SKIPPED_SURFACE_DIRS or should_skip_surface_directory(entry):
                         continue
                     stack.append((entry, depth + 1))
                     continue
@@ -464,7 +508,7 @@ def prompt_text_from_codex_content(content) -> str:
 def is_codex_control_message(prompt: str) -> bool:
     stripped = prompt.lstrip()
     return (
-        stripped.startswith("# AGENTS.md instructions for ")
+        stripped.startswith("# AGENTS.md instructions")
         or stripped.startswith("<codex_internal_context ")
         or stripped.startswith("<turn_aborted>")
     )
@@ -588,6 +632,19 @@ def select_reflector_runner() -> tuple[str, str]:
     return runner, path
 
 
+def reflector_runner_attempts(primary_runner: str, primary_path: str) -> list[tuple[str, str]]:
+    attempts = [(primary_runner, primary_path)]
+    runner_mode = RUNNER_ALIASES.get(REFLECTOR_RUNNER, REFLECTOR_RUNNER)
+    if runner_mode != "default":
+        return attempts
+    runners = available_reflector_runners()
+    for name in ("codex", "claude"):
+        path = runners.get(name)
+        if name != primary_runner and path:
+            attempts.append((name, path))
+    return attempts
+
+
 def build_reflector_command(runner: str, runner_path: str, prompt: str, allowed_tools: str) -> list[str]:
     if runner == "claude":
         cmd = [
@@ -616,7 +673,7 @@ def build_reflector_command(runner: str, runner_path: str, prompt: str, allowed_
             "exec",
             "--dangerously-bypass-approvals-and-sandbox",
             "-C",
-            str(REPO),
+            str(REFLECTOR_CWD),
         ]
         model = selected_model_for_runner(runner)
         if model:
@@ -724,6 +781,45 @@ def requeue(events: list[dict]) -> None:
         append_json(QUEUE, event)
 
 
+def events_with_next_reflector_attempt(events: list[dict]) -> list[dict]:
+    updated: list[dict] = []
+    for event in events:
+        copy = dict(event)
+        try:
+            current = int(copy.get("reflector_attempts") or 0)
+        except (TypeError, ValueError):
+            current = 0
+        copy["reflector_attempts"] = current + 1
+        copy["last_reflector_failure_at"] = iso_now()
+        updated.append(copy)
+    return updated
+
+
+def max_reflector_attempt(events: list[dict]) -> int:
+    attempts: list[int] = []
+    for event in events:
+        try:
+            attempts.append(int(event.get("reflector_attempts") or 0))
+        except (TypeError, ValueError):
+            attempts.append(0)
+    return max(attempts) if attempts else 0
+
+
+def requeue_or_drop_failed_batch(events: list[dict], state: dict, nightly: bool, reason: str) -> bool:
+    retry_events = events_with_next_reflector_attempt(events)
+    attempt = max_reflector_attempt(retry_events)
+    if attempt >= MAX_REFLECTOR_ATTEMPTS:
+        log(f"{reason}; dropping batch after {attempt} failed reflector attempt(s)")
+        update_state_after_run(state, events)
+        return False
+
+    log(f"{reason}; requeueing batch attempt {attempt}/{MAX_REFLECTOR_ATTEMPTS}")
+    requeue(retry_events)
+    if not nightly:
+        schedule_retry(GLOBAL_COOLDOWN_SECONDS, state)
+    return True
+
+
 def session_key(event: dict) -> str:
     return (
         event.get("session_id")
@@ -782,7 +878,7 @@ def schedule_retry(delay: float, state: dict) -> None:
     env["INTROSPECT_REFLECTOR"] = "1"
     subprocess.Popen(
         ["/bin/sh", "-c", command],
-        cwd=REPO,
+        cwd=REFLECTOR_CWD,
         env=env,
         stdin=subprocess.DEVNULL,
         stdout=subprocess.DEVNULL,
@@ -824,34 +920,40 @@ Queued events:
 {chr(10).join(event_lines)}
 
 Transcript paths to inspect:
-{transcript_block}
+    {transcript_block}
 
-Agent loop repo:
-- {REPO}
+    Introspect runtime repo (read-only when packaged):
+    - {REPO}
 
-Skills directory:
-- {SKILLS_DIR}
+    Live global prompt:
+    - {PROMPT_PATH}
 
-User skill directory:
+    Introspect home Git repo:
+    - {INTROSPECT_HOME}
+
+    Built-in skills directory:
+    - {SKILLS_DIR}
+
+    User skill directory:
 - {USER_SKILLS_DIR}
 
-Codex thread tools:
-- Resolve a codex://threads/<id> link with: python3 /Users/advaitpaliwal/.claude/skills/read-codex-threads/scripts/resolve-codex-thread.py <link-or-id>
-- Parse the resolved rollout with: python3 /Users/advaitpaliwal/.claude/skills/read-codex-threads/scripts/parse-codex-thread.py <rollout-or-id> --messages-only
+Codex thread evidence:
+- Prefer supplied transcript_path and transcript_line because they are direct local evidence.
+- If only a codex://threads/<id> link is supplied, resolve it with locally installed Codex-history tooling when present; otherwise classify from the queued event metadata and log the missing resolver.
 
 Workflow:
-1. Read the exact message identified by message_locator / transcript_path + transcript_line when present, then the surrounding recent turns for that transcript/session. Identify the agent behavior that caused the trigger, not the wording of the user's message. The snippet is only a preview. A codex://threads/<id> link is local evidence, not an inaccessible external URL; resolve and parse it before classifying the event.
+1. Read the exact message identified by message_locator / transcript_path + transcript_line when present, then the surrounding recent turns for that transcript/session. Identify the agent behavior that caused the trigger, not the wording of the user's message. The snippet is only a preview. A codex://threads/<id> link is local evidence, not an inaccessible external URL; use available local tooling to resolve it, and log the missing resolver when no resolver exists.
 2. Run {REPO}/hooks/trigger-stats.sh and compare the current prompt version against prior versions.
 3. Classify the change target as exactly one of: no_change, core_prompt, project_prompt, home_memory, skill_new, skill_update, project_skill_new, project_skill_update, skill_prune.
-4. Use core_prompt only for an always-loaded invariant that should apply across nearly every task. Before editing AGENTS.md, read skills/agent-md-creator/SKILL.md for placement and skills/writing-agent-prompt/SKILL.md for wording, then verify with a realistic response probe drawn from the failure transcript.
-5. Use project_prompt for repo-specific behavior. Create or update the target repo's AGENTS.md for shared guidance. Create CLAUDE.md as a symlink to AGENTS.md when no Claude-only additions exist; use a real CLAUDE.md with @AGENTS.md only when Claude needs extra project guidance. Use CLAUDE.local.md for private project notes.
-6. Use home_memory for durable facts, preferences, user vocabulary, or machine/project state that should be remembered but should not change agent behavior globally. Write it under ~/.introspect only when it is directly supported by the transcript.
+    4. Use core_prompt only for an always-loaded invariant that should apply across nearly every task. Edit the live global prompt at {PROMPT_PATH}; do not edit packaged runtime files under {REPO}. Before editing the global prompt, read {SKILLS_DIR}/agent-md-creator/SKILL.md for placement and {SKILLS_DIR}/writing-agent-prompt/SKILL.md for wording, then verify with a realistic response probe drawn from the failure transcript.
+    5. Use project_prompt for repo-specific behavior. Create or update the target repo's AGENTS.md for shared guidance; the target repo is the event cwd or the project proven by the transcript, not the Introspect runtime repo unless the failure is about Introspect itself. Create CLAUDE.md as a symlink to AGENTS.md when no Claude-only additions exist; use a real CLAUDE.md with @AGENTS.md only when Claude needs extra project guidance. Use CLAUDE.local.md for private project notes.
+    6. Use home_memory for durable facts, preferences, user vocabulary, or machine/project state that should be remembered but should not change agent behavior globally. Write it under {INTROSPECT_HOME}/memory only when it is directly supported by the transcript.
 7. Use skill_new or skill_update only for repeatable procedures, tool workflows, domain references, scripts, or assets that future agents should load on demand. Do not create a skill from one noisy event unless it captures a recurring workflow or a corrected procedure that will likely repeat.
-8. Prefer updating an existing umbrella skill or support file over creating a narrow duplicate. Use project_skill_new or project_skill_update when the workflow belongs to one codebase; write Codex project skills under .agents/skills/<slug>/SKILL.md and Claude project skills under .claude/skills/<slug>/SKILL.md in that target repo.
+8. Prefer updating an existing umbrella skill or support file over creating a narrow duplicate. Use project_skill_new or project_skill_update when the workflow belongs to one codebase; write Codex/OpenCode project skills under .agents/skills/<slug>/SKILL.md and Claude project skills under .claude/skills/<slug>/SKILL.md in that target repo.
 9. Use skill_prune for stale, duplicated, overbroad, unsupported, or harmful skills. Before any skill operation, read skills/skill-creator/SKILL.md, its source map, the skills index, and the closest existing skill. Prefer updating or pruning a close skill over creating a duplicate.
-10. For user-wide skill changes, write or edit a self-contained <slug>/SKILL.md under {USER_SKILLS_DIR}, update {USER_SKILLS_DIR}/index.json, and run INTROSPECT_SKILLS_DIR={USER_SKILLS_DIR} {REPO}/scripts/validate-skills.py. Use {SKILLS_DIR} only for built-in Introspect core skills. For project skills, validate the SKILL.md frontmatter and verify the relevant agent can discover it. For skill_prune, prefer marking status deprecated or narrowing activation before deleting files.
+10. For user-wide skill changes, write or edit a self-contained <slug>/SKILL.md under {USER_SKILLS_DIR}, update {USER_SKILLS_DIR}/index.json, run INTROSPECT_SKILLS_DIR={USER_SKILLS_DIR} {REPO}/scripts/validate-skills.py, then run INTROSPECT_HOME={INTROSPECT_HOME} INTROSPECT_USER_SKILLS_DIR={USER_SKILLS_DIR} {REPO}/scripts/sync-user-skills.sh. Export each skill to one native global namespace only: default/compatibility=codex uses ~/.agents/skills for Codex and OpenCode, compatibility=claude uses ~/.claude/skills for Claude, and compatibility=opencode uses ~/.config/opencode/skills for OpenCode-only skills. Do not export the same skill name to multiple OpenCode-visible roots. Use {SKILLS_DIR} only for built-in Introspect core skills. For project skills, validate the SKILL.md frontmatter and verify the relevant agent can discover it. For skill_prune, prefer marking status deprecated or narrowing activation before deleting files.
 11. If the trigger rate rose after a recent AGENTS.md change, prefer reverting or narrowing that change over adding another rule.
-12. Commit with a behavioral message and push.
+    12. Commit in the repo you changed with a behavioral message. For core_prompt or home_memory changes, commit in {INTROSPECT_HOME}. For project_prompt or project_skill changes, commit in the target project repo. Do not commit runtime feedback, lock, run, proposal, or model artifacts.
 13. If no change is justified, make no file changes and say why in the log output.
 
 Constraints:
@@ -874,30 +976,20 @@ def invoke_reflector(events: list[dict]) -> int:
     LAST_PROMPT.write_text(prompt)
     prompt_path.write_text(prompt)
 
-    runner = "dry-run"
-    runner_path = ""
-    model = ""
-    fallback_model = ""
-    if not DRY_RUN:
-        runner, runner_path = select_reflector_runner()
-        model = selected_model_for_runner(runner)
-        fallback_model = selected_fallback_model_for_runner(runner)
-
-    batch = {
-        "ts": iso_now(),
-        "event_count": len(events),
-        "matched": matched_words(events),
-        "sessions": sorted({session_key(event) for event in events}),
-        "dry_run": DRY_RUN,
-        "runner": runner,
-        "model": model,
-        "fallback_model": fallback_model,
-        "prompt_path": str(prompt_path),
-        "surface_diff_path": str(surface_diff_path),
-    }
-    append_json(BATCHES, batch)
-
     if DRY_RUN:
+        batch = {
+            "ts": iso_now(),
+            "event_count": len(events),
+            "matched": matched_words(events),
+            "sessions": sorted({session_key(event) for event in events}),
+            "dry_run": DRY_RUN,
+            "runner": "dry-run",
+            "model": "",
+            "fallback_model": "",
+            "prompt_path": str(prompt_path),
+            "surface_diff_path": str(surface_diff_path),
+        }
+        append_json(BATCHES, batch)
         write_surface_diff(before_surfaces, before_surfaces, surface_diff_path, batch)
         log(f"DRY RUN would invoke reflector for {len(events)} event(s)")
         return 0
@@ -912,45 +1004,93 @@ def invoke_reflector(events: list[dict]) -> int:
             "WebSearch",
             "WebFetch",
             "Bash(git *)",
-            "Bash(python3 /Users/advaitpaliwal/.claude/skills/read-codex-threads/scripts/resolve-codex-thread.py *)",
-            "Bash(python3 /Users/advaitpaliwal/.claude/skills/read-codex-threads/scripts/parse-codex-thread.py *)",
             "Bash(*trigger-stats.sh)",
             "Bash(*validate-skills.py)",
+            "Bash(*sync-user-skills.sh)",
             "Bash(mkdir -p *)",
         ]
     )
     env = os.environ.copy()
     env["INTROSPECT_REFLECTOR"] = "1"
-    cmd = build_reflector_command(runner, runner_path, prompt, allowed_tools)
-    model_note = f" model={model}" if model else " model=cli-default"
-    if fallback_model:
-        model_note += f" fallback={fallback_model}"
-    log(f"invoking {runner} reflector for {len(events)} event(s){model_note}")
-    words = trigger_words_text(events)
-    body = f"{runner} reflector spawned for {len(events)} trigger event(s)"
-    if words:
-        body = f"{body}: {words}"
-        log(f"review terms: {words}")
-    notify("Introspect", body)
-    with LOG.open("a") as log_file:
-        display_cmd = " ".join(shlex.quote(part) for part in cmd)
-        display_cmd = display_cmd.replace(shlex.quote(prompt), "<batch-prompt>")
-        log_file.write(f"{iso_now()} command: {display_cmd}\n")
-        log_file.flush()
-        result = subprocess.run(
-            cmd,
-            cwd=REPO,
-            env=env,
-            stdout=log_file,
-            stderr=subprocess.STDOUT,
-            text=True,
-            timeout=REFLECTOR_TIMEOUT_SECONDS,
-        )
+    primary_runner, primary_runner_path = select_reflector_runner()
+    attempts = reflector_runner_attempts(primary_runner, primary_runner_path)
+    last_batch: dict | None = None
+    last_code = 1
+    last_nonretryable = False
+
+    for attempt_index, (runner, runner_path) in enumerate(attempts, 1):
+        model = selected_model_for_runner(runner)
+        fallback_model = selected_fallback_model_for_runner(runner)
+        batch = {
+            "ts": iso_now(),
+            "event_count": len(events),
+            "matched": matched_words(events),
+            "sessions": sorted({session_key(event) for event in events}),
+            "dry_run": DRY_RUN,
+            "runner": runner,
+            "model": model,
+            "fallback_model": fallback_model,
+            "attempt": attempt_index,
+            "attempt_count": len(attempts),
+            "prompt_path": str(prompt_path),
+            "surface_diff_path": str(surface_diff_path),
+        }
+        last_batch = batch
+        append_json(BATCHES, batch)
+
+        cmd = build_reflector_command(runner, runner_path, prompt, allowed_tools)
+        model_note = f" model={model}" if model else " model=cli-default"
+        if fallback_model:
+            model_note += f" claude_cli_fallback_model={fallback_model}"
+        log(f"invoking {runner} reflector for {len(events)} event(s){model_note} attempt={attempt_index}/{len(attempts)}")
+        if attempt_index == 1:
+            words = trigger_words_text(events)
+            body = f"{runner} reflector spawned for {len(events)} trigger event(s)"
+            if words:
+                body = f"{body}: {words}"
+                log(f"review terms: {words}")
+            notify("Introspect", body)
+
+        log_offset = LOG.stat().st_size if LOG.exists() else 0
+        with LOG.open("a") as log_file:
+            display_cmd = " ".join(shlex.quote(part) for part in cmd)
+            display_cmd = display_cmd.replace(shlex.quote(prompt), "<batch-prompt>")
+            log_file.write(f"{iso_now()} command: {display_cmd}\n")
+            log_file.flush()
+            result = subprocess.run(
+                cmd,
+                cwd=REFLECTOR_CWD,
+                env=env,
+                stdout=log_file,
+                stderr=subprocess.STDOUT,
+                text=True,
+                timeout=REFLECTOR_TIMEOUT_SECONDS,
+            )
+
+        last_code = result.returncode
+        output = read_log_since(log_offset)
+        last_nonretryable = is_nonretryable_runner_output(output)
+        log(f"{runner} reflector exited code={result.returncode}")
+        if result.returncode == 0:
+            after_surfaces = snapshot_agent_surfaces(events)
+            changed_count = write_surface_diff(before_surfaces, after_surfaces, surface_diff_path, batch)
+            log(f"surface diff recorded changes={changed_count} path={surface_diff_path}")
+            return 0
+        if last_nonretryable:
+            log(f"{runner} reflector failure is non-retryable")
+            if attempt_index < len(attempts):
+                next_runner = attempts[attempt_index][0]
+                log(f"trying alternate reflector runner {next_runner}")
+                continue
+            break
+        break
+
     after_surfaces = snapshot_agent_surfaces(events)
-    changed_count = write_surface_diff(before_surfaces, after_surfaces, surface_diff_path, batch)
+    changed_count = write_surface_diff(before_surfaces, after_surfaces, surface_diff_path, last_batch or {})
     log(f"surface diff recorded changes={changed_count} path={surface_diff_path}")
-    log(f"reflector exited code={result.returncode}")
-    return result.returncode
+    if last_nonretryable:
+        return NONRETRYABLE_REFLECTOR_FAILURE
+    return last_code
 
 
 def update_state_after_run(state: dict, events: list[dict]) -> None:
@@ -1023,20 +1163,24 @@ def main() -> int:
     try:
         code = invoke_reflector(eligible)
     except subprocess.TimeoutExpired:
-        log("reflector timed out; requeueing batch")
-        requeue(eligible)
+        requeue_or_drop_failed_batch(eligible, state, args.nightly, "reflector timed out")
         return 124
     except Exception as exc:
-        log(f"reflector failed before launch: {exc!r}; requeueing batch")
-        requeue(eligible)
+        requeue_or_drop_failed_batch(eligible, state, args.nightly, f"reflector failed before launch: {exc!r}")
         return 1
 
+    if code == NONRETRYABLE_REFLECTOR_FAILURE:
+        log("reflector failure is non-retryable; dropping batch without scheduling another run")
+        update_state_after_run(state, eligible)
+        return 0
+
     if code != 0:
-        log(f"reflector returned nonzero code={code}; requeueing batch")
-        requeue(eligible)
-        if not args.nightly:
-            state = read_json(STATE, {})
-            schedule_retry(GLOBAL_COOLDOWN_SECONDS, state)
+        requeue_or_drop_failed_batch(
+            eligible,
+            state,
+            args.nightly,
+            f"reflector returned nonzero code={code}",
+        )
         return code
 
     update_state_after_run(state, eligible)

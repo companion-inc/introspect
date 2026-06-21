@@ -67,7 +67,7 @@ Sources: `hooks/trigger-worker.py:833-834`, `skills/skill-creator/SKILL.md:73`.
 ## Acceptance Criteria
 
 - A single user prompt captured by both hook and scanner becomes one canonical event, not four reflector events. Evidence: current duplicate event lines `feedback/events.jsonl:4714-4717`.
-- The scanner remains a backstop for missed Codex Desktop hooks, but it does not behave like a noisy poller. Evidence: installed scanner uses `WatchPaths`, not `StartInterval`, in `/Users/advaitpaliwal/Library/LaunchAgents/ai.companion.introspect.codex-scanner.plist:42-52`.
+- The scanner remains a backstop for missed Codex Desktop hooks, but it does not behave like a noisy poller. Evidence: installed scanner uses `WatchPaths`, not `StartInterval`, in `~/Library/LaunchAgents/ai.companion.introspect.codex-scanner.plist:42-52`.
 - The system can show why a trigger became `no_change`, `core_prompt`, `project_prompt`, `home_memory`, `skill_new`, `skill_update`, `project_skill_new`, `project_skill_update`, `skill_prune`, or hook/script work.
 - A technology-specific repeated complaint routes to the closest existing project/user skill before proposing a new one. Source: `skills/skill-creator/SKILL.md:18-20`, `skills/skill-creator/references/source-map.md:136-139`.
 - A project-specific complaint routes to project prompt or project skill, not the global prompt, unless the same failure shape repeats across projects. Source: `docs/hermes-self-evolution-review.md:44-52`.

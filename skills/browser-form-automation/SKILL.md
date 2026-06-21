@@ -43,7 +43,5 @@ Near misses:
 
 ## Sources
 
-- Trigger transcript: `/Users/advaitpaliwal/.claude/projects/-Users-advaitpaliwal-Companion-Code-companion/361d51b1-3306-410b-8019-39c5d7d0814e.jsonl:236` records the agent identifying the root failure: coordinate clicks were not landing in fields, `cmd+a` selected the whole page, and the console was stealing focus.
-- Same transcript: `/Users/advaitpaliwal/.claude/projects/-Users-advaitpaliwal-Companion-Code-companion/361d51b1-3306-410b-8019-39c5d7d0814e.jsonl:239` and `:240` show the corrected move: map the DOM inputs/buttons and drive the form precisely.
-- Chrome skill reference: `/Users/advaitpaliwal/.codex/plugins/cache/openai-bundled/chrome/26.609.41114/skills/control-chrome/SKILL.md:69` says to collect a fresh DOM snapshot when locator ground truth is needed, and `:75` allows node/Playwright clicks when the best UI element is unclear.
-- Browser skill reference: `/Users/advaitpaliwal/.codex/plugins/cache/openai-bundled/browser/26.609.41114/skills/control-in-app-browser/SKILL.md:57` gives the same DOM-snapshot guidance after interactions.
+- Internal failure pattern: coordinate clicks missed form fields, `cmd+a` selected the page, and console focus stole typing; mapping DOM inputs/buttons fixed the flow.
+- Chrome and browser automation skill references: collect a fresh DOM snapshot when locator ground truth is needed, and use browser/Playwright-level interactions when the visible UI element is ambiguous.

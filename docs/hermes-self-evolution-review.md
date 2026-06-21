@@ -4,20 +4,20 @@ Understanding score: 86/100. The remaining unknown is whether a newer private He
 
 ## Sources Checked
 
-- `/Users/advaitpaliwal/Documents/DGX/docs/self_improvement_loop.md`
-- `/Users/advaitpaliwal/Documents/DGX/docs/training_backend.md`
-- `/Users/advaitpaliwal/Documents/DGX/docs/architecture.md`
-- `/Users/advaitpaliwal/Documents/DGX/scripts/nightly_pipeline.sh`
-- `/Users/advaitpaliwal/Documents/DGX/scripts/build_datasets.py`
-- `/Users/advaitpaliwal/Documents/DGX/scripts/eval_quality.py`
-- `/Users/advaitpaliwal/Documents/DGX/scripts/train_lora.py`
-- `/Users/advaitpaliwal/Documents/DGX/systemd/user/hermes-self-improvement.timer`
-- `/Users/advaitpaliwal/.hermes/hermes-agent/agent/background_review.py`
-- `/Users/advaitpaliwal/.hermes/hermes-agent/tools/skill_manager_tool.py`
-- `/Users/advaitpaliwal/.hermes/hermes-agent/agent/curator.py`
-- `/Users/advaitpaliwal/.hermes/hermes-agent/tools/skill_usage.py`
-- `/Users/advaitpaliwal/.hermes/hermes-agent/website/docs/user-guide/features/skills.md`
-- `/Users/advaitpaliwal/.hermes/hermes-agent/website/docs/user-guide/features/curator.md`
+- `~/Documents/DGX/docs/self_improvement_loop.md`
+- `~/Documents/DGX/docs/training_backend.md`
+- `~/Documents/DGX/docs/architecture.md`
+- `~/Documents/DGX/scripts/nightly_pipeline.sh`
+- `~/Documents/DGX/scripts/build_datasets.py`
+- `~/Documents/DGX/scripts/eval_quality.py`
+- `~/Documents/DGX/scripts/train_lora.py`
+- `~/Documents/DGX/systemd/user/hermes-self-improvement.timer`
+- `~/.hermes/hermes-agent/agent/background_review.py`
+- `~/.hermes/hermes-agent/tools/skill_manager_tool.py`
+- `~/.hermes/hermes-agent/agent/curator.py`
+- `~/.hermes/hermes-agent/tools/skill_usage.py`
+- `~/.hermes/hermes-agent/website/docs/user-guide/features/skills.md`
+- `~/.hermes/hermes-agent/website/docs/user-guide/features/curator.md`
 
 ## What Hermes Does Well
 

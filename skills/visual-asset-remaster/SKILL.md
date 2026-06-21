@@ -42,7 +42,7 @@ Near misses: use `ui-component-polish` for UI layout/styling, `product-surface-p
 
 ## Sources
 
-- Failure transcript: `/Users/advaitpaliwal/.codex/sessions/2026/06/15/rollout-2026-06-15T16-26-54-019ecd9c-0442-77f2-9724-51d40c31626d.jsonl` — one-frame model choice flipped after eye crops; full GPT/Fal/Topaz batches exposed alpha/style failures only after generation; later prompt/provider matrices on hard frames produced better decisions.
+- Internal failure pattern: a one-frame remaster looked promising, but full batches exposed alpha/style failures; prompt/provider matrices on hard frames made the later model choice reliable.
 - Skill format and placement: `skills/skill-creator/references/source-map.md`.
 - Agent Skills specification: https://agentskills.io/specification
 - OpenAI Codex Skills docs: https://developers.openai.com/codex/skills

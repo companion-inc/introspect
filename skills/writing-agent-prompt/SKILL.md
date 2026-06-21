@@ -35,7 +35,7 @@ Use this skill for prompt wording after `agent-md-creator` has decided that the 
 
 ## Sources
 
-- Transcript: `/Users/advaitpaliwal/.codex/attachments/34849865-c940-40d5-9648-67c585b55314/pasted-text.txt` lines 173-182 show the bad answer shape: an IP/trademark preamble stopped the requested work.
+- Internal failure pattern: an IP/trademark preamble stopped the requested artifact instead of producing the safe transformed output.
 - Repo: `skills/agent-md-creator/SKILL.md` says rephrase buried or ambiguous rules before adding prompt bloat.
 - OpenAI Codex Skills docs: skills need `SKILL.md`, name, description, and clear trigger boundaries for implicit activation.
 - Agent Skills specification: a skill directory must contain `SKILL.md` with `name` and `description` frontmatter.

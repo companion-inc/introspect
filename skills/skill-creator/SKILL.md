@@ -82,7 +82,7 @@ After any skill change:
 1. Run:
 
 ```bash
-AGENTS_MD_SKILLS_DIR=/Users/advaitpaliwal/Projects/agent-loop/skills /Users/advaitpaliwal/Projects/agent-loop/scripts/validate-skills.py
+INTROSPECT_SKILLS_DIR="$PWD/skills" ./scripts/validate-skills.py
 ```
 
 2. Read the changed skill as a fresh agent would: can it act from the skill alone, without hidden context?

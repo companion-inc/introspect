@@ -17,7 +17,7 @@ Obsidian's URL handler resolves vault names and paths only against its app-level
 - The user reports "Unable to find a vault for the URL".
 - You wrote markdown intended to be opened in Obsidian (`.obsidian/`, wiki-links, MOC/START-HERE pages) into a path that isn't yet a known vault.
 
-Do not load for: editing files already inside `/Users/advaitpaliwal/Obsidian` or another folder already in the registry — those URIs already work.
+Do not load for: editing files already inside a folder that is registered in Obsidian's vault registry — those URIs already work.
 
 ## Procedure
 
@@ -64,7 +64,7 @@ Do not load for: editing files already inside `/Users/advaitpaliwal/Obsidian` or
 - A `.obsidian/` folder alone is not registration. Obsidian creates it on first open; pre-creating it does not register the vault.
 - Slug keys like `"ai-for-normies"` work but pollute the registry — keep ids 16-hex. Duplicate entries for the same path are harmless but ugly; dedupe in step 3.
 - `obsidian://open?path=<abs-md-file>` resolves only if that file lives inside a registered vault. If it fails, register the parent vault first, then retry.
-- macOS spotlight-style "scoped folder" paths inside `/Users/advaitpaliwal/Documents/Codex/...` work the same as `~/Projects/...` — there is nothing special about the Codex tree.
+- macOS spotlight-style "scoped folder" paths work the same as `~/Projects/...`; there is nothing special about where the folder was created.
 
 ## Verification
 
@@ -77,4 +77,4 @@ Done means:
 
 - Obsidian URI scheme docs: https://help.obsidian.md/Concepts/Obsidian+URI
 - Observed registry format on this machine: `~/Library/Application Support/obsidian/obsidian.json` (16-hex id keys, `path`/`ts`/`open` fields).
-- Failure transcript: `/Users/advaitpaliwal/.codex/sessions/2026/06/04/rollout-2026-06-04T11-03-02-019e93cd-8d9e-71e0-8b44-14cb52e41255.jsonl` lines ~43680–43820 (agent sent `obsidian://open?path=/Users/advaitpaliwal/Projects/ai-for-normies/00-START-HERE.md` and `?vault=ai-for-normies`, both failed; same agent had previously registered a different folder by patching `obsidian.json` and a `<id>.json` window geometry file).
+- Internal failure pattern: an agent sent an `obsidian://open?path=...` link for a generated folder before registering that folder in `obsidian.json`, and Obsidian rejected the URL.

@@ -303,6 +303,10 @@ enum IntrospectNotifications {
     static let requestFlag = "--request-notification"
     static let statusFlag = "--notification-status"
     static let statusFileFlag = "--notification-status-file"
+    static let installFlag = "--install"
+    static let uninstallFlag = "--uninstall"
+    static let appStatusFlag = "--status"
+    static let helpFlag = "--help"
 
     private final class ExitCodeBox: @unchecked Sendable {
         private let lock = NSLock()
@@ -324,12 +328,35 @@ enum IntrospectNotifications {
     @MainActor
     static func runCommandLineIfNeeded() -> Bool {
         let args = Array(CommandLine.arguments.dropFirst())
-        guard args.contains(commandLineFlag) || args.contains(requestFlag) || args.contains(statusFlag) else {
+        guard args.contains(commandLineFlag) ||
+            args.contains(requestFlag) ||
+            args.contains(statusFlag) ||
+            args.contains(installFlag) ||
+            args.contains(uninstallFlag) ||
+            args.contains(appStatusFlag) ||
+            args.contains(helpFlag) else {
             return false
         }
 
         if args.contains(requestFlag) {
             return false
+        }
+
+        if args.contains(helpFlag) {
+            printCLIUsage()
+            exit(0)
+        }
+
+        if args.contains(installFlag) {
+            exit(Int32(runInstallCLI(uninstall: false)))
+        }
+
+        if args.contains(uninstallFlag) {
+            exit(Int32(runInstallCLI(uninstall: true)))
+        }
+
+        if args.contains(appStatusFlag) {
+            exit(Int32(runStatusCLI()))
         }
 
         let app = NSApplication.shared
@@ -422,6 +449,111 @@ enum IntrospectNotifications {
             return 124
         }
         return exitCode.code ?? 1
+    }
+
+    private static func printCLIUsage() {
+        print("""
+        Usage:
+          Introspect --install      Set up ~/.introspect, prompt links, hooks, scanner, and health monitor
+          Introspect --status       Print current Introspect setup status
+          Introspect --uninstall    Remove Introspect hooks, scanner, monitor, and prompt links
+
+        Notification helper:
+          Introspect --request-notification
+          Introspect --post-notification TITLE BODY
+          Introspect --notification-status
+        """)
+    }
+
+    private static func runInstallCLI(uninstall: Bool) -> Int {
+        let root = runtimeRoot()
+        let script = root.appendingPathComponent("scripts/install-hooks.sh")
+        guard FileManager.default.isExecutableFile(atPath: script.path) else {
+            fputs("Missing Introspect installer at \(script.path)\n", stderr)
+            return 1
+        }
+        var args = [
+            script.path,
+            "--home", introspectHomeRoot().path,
+            "--agents-home", agentsHomeRoot().path
+        ]
+        if uninstall {
+            args.append("--uninstall")
+        } else {
+            args.append(contentsOf: ["--reflect-mode", "immediate"])
+        }
+        return runProcess("/bin/bash", args)
+    }
+
+    private static func runStatusCLI() -> Int {
+        let root = runtimeRoot()
+        let script = root.appendingPathComponent("scripts/introspect-status.sh")
+        guard FileManager.default.isExecutableFile(atPath: script.path) else {
+            fputs("Missing Introspect status script at \(script.path)\n", stderr)
+            return 1
+        }
+        return runProcess("/bin/bash", [script.path])
+    }
+
+    private static func runProcess(_ executable: String, _ arguments: [String]) -> Int {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: executable)
+        process.arguments = arguments
+        process.environment = ProcessInfo.processInfo.environment.merging([
+            "PYTHONDONTWRITEBYTECODE": "1",
+            "INTROSPECT_REPO": runtimeRoot().path,
+            "INTROSPECT_HOME": introspectHomeRoot().path,
+            "AGENTS_HOME": agentsHomeRoot().path
+        ]) { current, _ in current }
+        do {
+            try process.run()
+            process.waitUntilExit()
+            return Int(process.terminationStatus)
+        } catch {
+            fputs("Failed to run \(executable): \(error)\n", stderr)
+            return 1
+        }
+    }
+
+    private static func runtimeRoot() -> URL {
+        let env = ProcessInfo.processInfo.environment
+        if let configured = env["INTROSPECT_REPO"], !configured.isEmpty {
+            return URL(fileURLWithPath: configured).standardizedFileURL
+        }
+        if let bundled = bundledRuntimeRoot() {
+            return bundled
+        }
+        return URL(fileURLWithPath: FileManager.default.currentDirectoryPath).standardizedFileURL
+    }
+
+    private static func introspectHomeRoot() -> URL {
+        let env = ProcessInfo.processInfo.environment
+        if let configured = env["INTROSPECT_HOME"], !configured.isEmpty {
+            return URL(fileURLWithPath: configured).standardizedFileURL
+        }
+        return URL(fileURLWithPath: "\(NSHomeDirectory())/.introspect").standardizedFileURL
+    }
+
+    private static func agentsHomeRoot() -> URL {
+        let env = ProcessInfo.processInfo.environment
+        return URL(fileURLWithPath: env["AGENTS_HOME"] ?? "\(NSHomeDirectory())/.agents").standardizedFileURL
+    }
+
+    private static func bundledRuntimeRoot() -> URL? {
+        guard let resources = Bundle.main.resourceURL?.standardizedFileURL else {
+            return nil
+        }
+        let required = [
+            "scripts/install-hooks.sh",
+            "scripts/introspect-status.sh",
+            "hooks/trigger-reflect.sh",
+            "hooks/trigger-worker.py",
+            "skills/index.json"
+        ]
+        let hasRuntime = required.allSatisfy {
+            FileManager.default.fileExists(atPath: resources.appendingPathComponent($0).path)
+        }
+        return hasRuntime ? resources : nil
     }
 
     private static func value(after flag: String, in args: [String]) -> String? {
@@ -744,6 +876,14 @@ struct OverviewSection: View {
 
         HealthBanner(model: model)
 
+        Card("Configuration") {
+            InfoRow(label: "Private home", value: model.introspectHomeDisplayPath)
+            Divider()
+            InfoRow(label: "Source prompt", value: model.sourcePromptDisplayPath)
+            Divider()
+            InfoRow(label: "Agents read", value: "~/.claude/CLAUDE.md, ~/.codex/AGENTS.md, ~/.config/opencode/AGENTS.md")
+        }
+
         LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 12), count: 5), spacing: 12) {
             SignalMetricCard(title: "Prompt events", value: "\(model.signalPromptCount)", detail: "\(model.signalClassifierScoredCount) scored")
             SignalMetricCard(title: "Wake rate", value: model.signalTriggerRateText, detail: "\(model.signalTriggeredCount) woke")
@@ -837,7 +977,11 @@ struct OverviewSection: View {
             }
         }
 
-        Card("Prompt links") {
+        Card("Agent prompt links") {
+            HStack(spacing: 8) {
+                CheckRow("Source prompt", detail: model.agentPromptStatus, ok: model.agentPromptOK)
+            }
+            Divider()
             HStack(spacing: 8) {
                 CheckRow("Claude", detail: model.claudePromptStatus, ok: model.claudePromptOK)
                 if model.claudePromptOK {
@@ -859,6 +1003,18 @@ struct OverviewSection: View {
                     .buttonStyle(.bordered)
                     .controlSize(.small)
                     .help("Remove the ~/.codex/AGENTS.md symlink. Apply Configuration in Hooks recreates it.")
+                }
+            }
+            Divider()
+            HStack(spacing: 8) {
+                CheckRow("OpenCode", detail: model.opencodePromptStatus, ok: model.opencodePromptOK)
+                if model.opencodePromptOK {
+                    Button("Unlink") {
+                        Task { await model.unlinkOpenCodePrompt() }
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                    .help("Remove the ~/.config/opencode/AGENTS.md symlink. Apply Configuration in Hooks recreates it.")
                 }
             }
         }
@@ -1104,7 +1260,7 @@ struct HooksSection: View {
             Divider()
 
             VStack(alignment: .leading, spacing: 9) {
-                Text("Model overrides")
+                Text("CLI model pins")
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(.secondary)
 
@@ -1114,18 +1270,13 @@ struct HooksSection: View {
                     text: $model.reflectorClaudeModel
                 )
                 ReflectorModelField(
-                    title: "Claude fallback",
-                    placeholder: "none",
-                    text: $model.reflectorClaudeFallbackModel
-                )
-                ReflectorModelField(
                     title: "Codex",
                     placeholder: "CLI default",
                     text: $model.reflectorCodexModel
                 )
 
                 HStack(spacing: 8) {
-                    Button("Apply Models", systemImage: "checkmark.circle") {
+                    Button("Apply Pins", systemImage: "checkmark.circle") {
                         Task { await model.saveReflectorAgentSettings() }
                     }
                     .buttonStyle(.borderedProminent)
@@ -4143,11 +4294,11 @@ enum ReflectorRunner: String, CaseIterable, Identifiable {
     var helpText: String {
         switch self {
         case .defaultRunner:
-            "Uses the installed agent with the most recent local usage history. Model overrides apply after the runner is selected."
+            "Runs through the installed agent with the most recent local activity. Blank model fields keep each CLI default."
         case .claude:
-            "Forces reflector runs through Claude. Leave the model fields empty to use Claude's CLI default."
+            "Runs every reflector through Claude. Leave the model field empty to use Claude's CLI default."
         case .codex:
-            "Forces reflector runs through Codex. Leave the model field empty to use Codex's CLI default."
+            "Runs every reflector through Codex. Leave the model field empty to use Codex's CLI default."
         }
     }
 
@@ -4487,7 +4638,7 @@ struct TriggerRunRecord: Identifiable {
 
     var fallbackModelBadgeText: String? {
         let value = fallbackModel?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        return value.isEmpty ? nil : "fallback: \(value)"
+        return value.isEmpty ? nil : "Claude CLI fallback model: \(value)"
     }
 
     var lineDelta: Int {
@@ -4891,6 +5042,8 @@ final class IntrospectModel: ObservableObject {
     @Published var nightlyMinute = 0
     @Published var claudePromptOK = false
     @Published var codexPromptOK = false
+    @Published var opencodePromptOK = false
+    @Published var agentPromptOK = false
     @Published var claudeHookInstalled = false
     @Published var codexHookInstalled = false
     @Published var codexScannerInstalled = false
@@ -4948,7 +5101,10 @@ final class IntrospectModel: ObservableObject {
 
     private let fileManager = FileManager.default
     private let repoURL: URL
+    private let runtimeIsBundled: Bool
+    private let agentsHomeURL: URL
     private let introspectHomeURL: URL
+    private let feedbackURL: URL
     private let homeURL: URL
     private var savedTriggerWords: [String] = []
     private var appCommitSubjects: [String: String] = [:]
@@ -4960,23 +5116,71 @@ final class IntrospectModel: ObservableObject {
     init() {
         homeURL = URL(fileURLWithPath: NSHomeDirectory())
         let env = ProcessInfo.processInfo.environment
-        let repoPath = env["INTROSPECT_REPO"] ?? "\(NSHomeDirectory())/Companion/Code/introspect"
+        if let repoPath = env["INTROSPECT_REPO"], !repoPath.isEmpty {
+            repoURL = URL(fileURLWithPath: repoPath).standardizedFileURL
+            runtimeIsBundled = Self.isPackagedRuntime(repoURL)
+        } else if let bundledRoot = Self.bundledRuntimeRoot() {
+            repoURL = bundledRoot
+            runtimeIsBundled = true
+        } else {
+            repoURL = URL(fileURLWithPath: FileManager.default.currentDirectoryPath).standardizedFileURL
+            runtimeIsBundled = false
+        }
+        let agentsHomePath = env["AGENTS_HOME"] ?? "\(NSHomeDirectory())/.agents"
+        agentsHomeURL = URL(fileURLWithPath: agentsHomePath).standardizedFileURL
         let introspectHomePath = env["INTROSPECT_HOME"] ?? "\(NSHomeDirectory())/.introspect"
-        repoURL = URL(fileURLWithPath: repoPath).standardizedFileURL
         introspectHomeURL = URL(fileURLWithPath: introspectHomePath).standardizedFileURL
+        if let feedbackPath = env["INTROSPECT_FEEDBACK_DIR"], !feedbackPath.isEmpty {
+            feedbackURL = URL(fileURLWithPath: feedbackPath).standardizedFileURL
+        } else if runtimeIsBundled {
+            feedbackURL = introspectHomeURL.appendingPathComponent("feedback").standardizedFileURL
+        } else {
+            feedbackURL = repoURL.appendingPathComponent("feedback").standardizedFileURL
+        }
+    }
+
+    private static func isPackagedRuntime(_ url: URL) -> Bool {
+        url.standardizedFileURL.path.hasSuffix(".app/Contents/Resources")
+    }
+
+    private static func bundledRuntimeRoot() -> URL? {
+        guard let resources = Bundle.main.resourceURL?.standardizedFileURL else {
+            return nil
+        }
+        let required = [
+            "scripts/install-hooks.sh",
+            "scripts/introspect-status.sh",
+            "hooks/trigger-reflect.sh",
+            "hooks/trigger-worker.py",
+            "skills/index.json"
+        ]
+        let hasRuntime = required.allSatisfy {
+            FileManager.default.fileExists(atPath: resources.appendingPathComponent($0).path)
+        }
+        return hasRuntime ? resources : nil
     }
 
     var repoPath: String { repoURL.path }
     var introspectHomePath: String { introspectHomeURL.path }
     var repoDisplayPath: String { displayPath(repoURL) }
     var introspectHomeDisplayPath: String { displayPath(introspectHomeURL) }
+    var sourcePromptURL: URL { introspectHomeURL.appendingPathComponent("AGENTS.md").standardizedFileURL }
+    var sourcePromptDisplayPath: String { displayPath(sourcePromptURL) }
+
+    var agentPromptStatus: String {
+        agentPromptOK ? sourcePromptDisplayPath : "missing source prompt"
+    }
 
     var claudePromptStatus: String {
-        claudePromptOK ? "~/.claude/CLAUDE.md -> \(displayPath(introspectHomeURL))/AGENTS.md" : "not linked to Introspect home"
+        claudePromptOK ? "~/.claude/CLAUDE.md -> \(sourcePromptDisplayPath)" : "not linked to ~/.introspect/AGENTS.md"
     }
 
     var codexPromptStatus: String {
-        codexPromptOK ? "~/.codex/AGENTS.md -> \(displayPath(introspectHomeURL))/AGENTS.md" : "not linked to Introspect home"
+        codexPromptOK ? "~/.codex/AGENTS.md -> \(sourcePromptDisplayPath)" : "not linked to ~/.introspect/AGENTS.md"
+    }
+
+    var opencodePromptStatus: String {
+        opencodePromptOK ? "~/.config/opencode/AGENTS.md -> \(sourcePromptDisplayPath)" : "not linked to ~/.introspect/AGENTS.md"
     }
 
     var hooksSummary: String {
@@ -5008,6 +5212,8 @@ final class IntrospectModel: ObservableObject {
     var hasWarning: Bool {
         !claudePromptOK ||
             !codexPromptOK ||
+            !opencodePromptOK ||
+            !agentPromptOK ||
             !healthMonitorInstalled ||
             (mode != .off && (!allHooksInstalled || !codexScannerInstalled)) ||
             (mode != .off && notificationsEnabled && notificationHealthState == .warning)
@@ -5022,7 +5228,7 @@ final class IntrospectModel: ObservableObject {
     var healthDetail: String {
         if hasWarning {
             var missing: [String] = []
-            if !claudePromptOK || !codexPromptOK { missing.append("prompt links") }
+            if !agentPromptOK || !claudePromptOK || !codexPromptOK || !opencodePromptOK { missing.append("prompt links") }
             if mode != .off && !allHooksInstalled { missing.append("hooks") }
             if mode != .off && !codexScannerInstalled { missing.append("the Codex scanner") }
             if !healthMonitorInstalled { missing.append("the health monitor") }
@@ -5297,7 +5503,7 @@ final class IntrospectModel: ObservableObject {
             repaired = true
         }
 
-        if mode != .off && (!claudePromptOK || !codexPromptOK || !allHooksInstalled || !codexScannerInstalled) {
+        if mode != .off && (!agentPromptOK || !claudePromptOK || !codexPromptOK || !opencodePromptOK || !allHooksInstalled || !codexScannerInstalled) {
             await applySystemPromptAndHooks(report: false, refreshAfter: false)
             repaired = true
         }
@@ -5308,7 +5514,10 @@ final class IntrospectModel: ObservableObject {
     }
 
     private var currentProjectAgentFilesReady: Bool {
-        fileManager.fileExists(atPath: repoURL.appendingPathComponent("AGENTS.md").path) &&
+        if runtimeIsBundled {
+            return true
+        }
+        return fileManager.fileExists(atPath: repoURL.appendingPathComponent("AGENTS.md").path) &&
             fileManager.fileExists(atPath: repoURL.appendingPathComponent("CLAUDE.md").path) &&
             fileManager.fileExists(atPath: repoURL.appendingPathComponent(".agents/skills").path) &&
             fileManager.fileExists(atPath: repoURL.appendingPathComponent(".claude/skills").path) &&
@@ -5317,9 +5526,10 @@ final class IntrospectModel: ObservableObject {
 
     func refresh() async {
         await refreshNotificationState()
-        let homePrompt = introspectHomeURL.appendingPathComponent("AGENTS.md")
-        claudePromptOK = symlink(homeURL.appendingPathComponent(".claude/CLAUDE.md"), pointsTo: homePrompt)
-        codexPromptOK = symlink(homeURL.appendingPathComponent(".codex/AGENTS.md"), pointsTo: homePrompt)
+        agentPromptOK = fileManager.fileExists(atPath: sourcePromptURL.path)
+        claudePromptOK = symlink(homeURL.appendingPathComponent(".claude/CLAUDE.md"), pointsTo: sourcePromptURL)
+        codexPromptOK = symlink(homeURL.appendingPathComponent(".codex/AGENTS.md"), pointsTo: sourcePromptURL)
+        opencodePromptOK = symlink(homeURL.appendingPathComponent(".config/opencode/AGENTS.md"), pointsTo: sourcePromptURL)
         let claude = hookStatus(path: homeURL.appendingPathComponent(".claude/settings.json"))
         let codex = hookStatus(path: homeURL.appendingPathComponent(".codex/hooks.json"))
         claudeHookInstalled = claude.installed
@@ -5338,7 +5548,7 @@ final class IntrospectModel: ObservableObject {
                 wakeCustomThreshold = threshold
             }
         }
-        queuedEvents = lineCount(repoURL.appendingPathComponent("feedback/trigger-queue.jsonl"))
+        queuedEvents = lineCount(feedbackURL.appendingPathComponent("trigger-queue.jsonl"))
         lastRunText = readLastRun()
         appCommitSubjects = await gitSubjectMap(in: repoURL)
         loadTriggerHistory()
@@ -5376,7 +5586,8 @@ final class IntrospectModel: ObservableObject {
         var args = [
             repoURL.appendingPathComponent("scripts/install-hooks.sh").path,
             "--home", introspectHomeURL.path,
-            "--prompt", introspectHomeURL.appendingPathComponent("AGENTS.md").path,
+            "--agents-home", agentsHomeURL.path,
+            "--prompt", sourcePromptURL.path,
             "--user-skills", introspectHomeURL.appendingPathComponent("skills").path,
             "--reflect-mode", mode.rawValue,
             "--nightly-hour", "\(nightlyHour)",
@@ -5392,7 +5603,8 @@ final class IntrospectModel: ObservableObject {
             args = [
                 repoURL.appendingPathComponent("scripts/install-hooks.sh").path,
                 "--home", introspectHomeURL.path,
-                "--prompt", introspectHomeURL.appendingPathComponent("AGENTS.md").path,
+                "--agents-home", agentsHomeURL.path,
+                "--prompt", sourcePromptURL.path,
                 "--user-skills", introspectHomeURL.appendingPathComponent("skills").path,
                 "--reflect-mode", "off",
                 "--wake-sensitivity", wakeSensitivity.rawValue,
@@ -5484,13 +5696,16 @@ final class IntrospectModel: ObservableObject {
         do {
             try fileManager.createDirectory(at: introspectHomeURL.appendingPathComponent("skills"), withIntermediateDirectories: true)
             try fileManager.createDirectory(at: introspectHomeURL.appendingPathComponent("memory"), withIntermediateDirectories: true)
+            try fileManager.createDirectory(at: introspectHomeURL.appendingPathComponent("models"), withIntermediateDirectories: true)
+            try fileManager.createDirectory(at: feedbackURL, withIntermediateDirectories: true)
             try fileManager.createDirectory(at: introspectHomeURL.appendingPathComponent("runs"), withIntermediateDirectories: true)
             try fileManager.createDirectory(at: introspectHomeURL.appendingPathComponent("proposals"), withIntermediateDirectories: true)
-            let agentsHomeURL = introspectHomeURL.appendingPathComponent("AGENTS.md")
-            if !fileManager.fileExists(atPath: agentsHomeURL.path) {
-                let repoPromptURL = repoURL.appendingPathComponent("AGENTS.md")
-                if fileManager.fileExists(atPath: repoPromptURL.path) {
-                    try fileManager.copyItem(at: repoPromptURL, to: agentsHomeURL)
+            try ensureIntrospectHomeGitignore()
+            let sourcePromptURL = introspectHomeURL.appendingPathComponent("AGENTS.md")
+            if !fileManager.fileExists(atPath: sourcePromptURL.path) {
+                let defaultPromptURL = repoURL.appendingPathComponent("templates/default-AGENTS.md")
+                if fileManager.fileExists(atPath: defaultPromptURL.path) {
+                    try fileManager.copyItem(at: defaultPromptURL, to: sourcePromptURL)
                 } else {
                     try """
                     # AGENTS.md
@@ -5498,8 +5713,14 @@ final class IntrospectModel: ObservableObject {
                     ## Mission
 
                     - Add global user-wide agent guidance here.
-                    """.write(to: agentsHomeURL, atomically: true, encoding: .utf8)
+                    """.write(to: sourcePromptURL, atomically: true, encoding: .utf8)
                 }
+            }
+            let homeWakeModelURL = introspectHomeURL.appendingPathComponent("models/wake-logreg-v2-round4.json")
+            let bundledWakeModelURL = repoURL.appendingPathComponent("models/wake-logreg-v2-round4.json")
+            if !fileManager.fileExists(atPath: homeWakeModelURL.path),
+               fileManager.fileExists(atPath: bundledWakeModelURL.path) {
+                try fileManager.copyItem(at: bundledWakeModelURL, to: homeWakeModelURL)
             }
             let skillsIndexURL = introspectHomeURL.appendingPathComponent("skills/index.json")
             if !fileManager.fileExists(atPath: skillsIndexURL.path) {
@@ -5529,15 +5750,17 @@ final class IntrospectModel: ObservableObject {
 
                 This repository is private local state for Introspect:
 
-                - `AGENTS.md`: the canonical user-wide prompt linked into Claude and Codex.
+                - `AGENTS.md`: the Git-tracked source for the user-wide prompt linked into each agent's native prompt file.
                 - `trigger-words.txt`: optional review terms, one lowercase word per line. Introspect does not install defaults.
                 - `settings.json`: local app preferences such as notification delivery.
                 - `skills/`: private user skills.
                 - `memory/`: durable user and machine facts.
-                - `runs/`: local run artifacts.
+                - `feedback/`: ignored local trigger queues, logs, and run artifacts.
+                - `runs/`: ignored local run artifacts.
                 - `proposals/`: reflector proposals before they are accepted.
+                - `models/`: ignored local model artifacts seeded or produced by Introspect.
 
-                Commit changes locally when you want a checkpoint.
+                Durable prompt, settings, skill, and memory changes are Git-tracked. Runtime artifacts stay local and ignored.
                 """.write(to: readme, atomically: true, encoding: .utf8)
             }
         } catch {
@@ -5750,6 +5973,10 @@ final class IntrospectModel: ObservableObject {
         await removePromptLink(homeURL.appendingPathComponent(".codex/AGENTS.md"))
     }
 
+    func unlinkOpenCodePrompt() async {
+        await removePromptLink(homeURL.appendingPathComponent(".config/opencode/AGENTS.md"))
+    }
+
     private func removePromptLink(_ url: URL) async {
         do {
             try fileManager.removeItem(at: url)
@@ -5761,6 +5988,15 @@ final class IntrospectModel: ObservableObject {
     }
 
     func initializeCurrentProjectAgentFiles(report: Bool = true, refreshAfter: Bool = true) async {
+        if runtimeIsBundled {
+            if report {
+                lastCommandOutput = "The packaged Introspect runtime is not a project folder. Project agent files are discovered from existing project folders."
+            }
+            if refreshAfter {
+                await refresh()
+            }
+            return
+        }
         do {
             let agentsURL = repoURL.appendingPathComponent("AGENTS.md")
             if !fileManager.fileExists(atPath: agentsURL.path) {
@@ -5857,9 +6093,11 @@ final class IntrospectModel: ObservableObject {
     }
 
     private func defaultSelectedSurfaceID() -> String? {
-        let repoPath = repoURL.standardizedFileURL.path
-        if let repoTree = projectTrees.first(where: { $0.id == repoPath }) {
-            return repoTree.prompts.first?.id ?? repoTree.skills.first?.id
+        if !runtimeIsBundled {
+            let repoPath = repoURL.standardizedFileURL.path
+            if let repoTree = projectTrees.first(where: { $0.id == repoPath }) {
+                return repoTree.prompts.first?.id ?? repoTree.skills.first?.id
+            }
         }
         return projectTrees.first?.allSurfaces.first?.id
     }
@@ -5875,37 +6113,42 @@ final class IntrospectModel: ObservableObject {
 
     private func projectSortRank(_ path: String) -> Int {
         let homePath = homeURL.standardizedFileURL.path
-        if path == repoURL.standardizedFileURL.path { return 0 }
+        if !runtimeIsBundled && path == repoURL.standardizedFileURL.path { return 0 }
         if path == introspectHomeURL.standardizedFileURL.path { return 1 }
         if path == homePath + "/.codex" { return 2 }
         if path == homePath + "/.claude" { return 3 }
         if path == homePath + "/.agents" { return 4 }
-        if path.hasPrefix(homePath + "/Projects/") { return 5 }
-        if path.hasPrefix(homePath + "/Companion/Code/") { return 6 }
-        if path.hasPrefix(homePath + "/Documents/Codex/") { return 7 }
+        if path == homePath + "/.config/opencode" { return 5 }
+        if path.hasPrefix(homePath + "/Projects/") { return 6 }
+        if path.hasPrefix(homePath + "/Developer/") { return 7 }
+        if path.hasPrefix(homePath + "/Code/") { return 8 }
+        if path.hasPrefix(homePath + "/Documents/") { return 9 }
         return 10
     }
 
     private func scanRoots() -> [URL] {
-        [
-            repoURL,
+        let runtimeRoots = runtimeIsBundled ? [] : [repoURL]
+        return runtimeRoots + [
             introspectHomeURL,
             homeURL.appendingPathComponent("Projects"),
-            homeURL.appendingPathComponent("Companion/Code"),
-            homeURL.appendingPathComponent("Documents/Codex"),
+            homeURL.appendingPathComponent("Developer"),
+            homeURL.appendingPathComponent("Code"),
+            homeURL.appendingPathComponent("Documents"),
             homeURL.appendingPathComponent(".codex"),
             homeURL.appendingPathComponent(".claude"),
-            homeURL.appendingPathComponent(".agents")
+            homeURL.appendingPathComponent(".agents"),
+            homeURL.appendingPathComponent(".config/opencode")
         ]
     }
 
     private func priorityScanRoots() -> [URL] {
-        [
-            repoURL,
+        let runtimeRoots = runtimeIsBundled ? [] : [repoURL]
+        return runtimeRoots + [
             introspectHomeURL,
             homeURL.appendingPathComponent(".codex"),
             homeURL.appendingPathComponent(".claude"),
-            homeURL.appendingPathComponent(".agents")
+            homeURL.appendingPathComponent(".agents"),
+            homeURL.appendingPathComponent(".config/opencode")
         ]
     }
 
@@ -5936,7 +6179,7 @@ final class IntrospectModel: ObservableObject {
             let path = entry.standardizedFileURL.path
 
             if isDirectory {
-                if skippedScanDirectories.contains(name) { continue }
+                if skippedScanDirectories.contains(name) || shouldSkipSurfaceDirectory(entry) { continue }
                 collectProjectSurfaces(
                     at: entry,
                     depth: depth + 1,
@@ -5969,6 +6212,10 @@ final class IntrospectModel: ObservableObject {
 
     private func isSkillFile(_ url: URL) -> Bool {
         url.lastPathComponent == "SKILL.md" && url.path.contains("/skills/")
+    }
+
+    private func shouldSkipSurfaceDirectory(_ url: URL) -> Bool {
+        url.standardizedFileURL.path == homeURL.appendingPathComponent(".codex/skills").standardizedFileURL.path
     }
 
     private func surfaceRecord(for url: URL, isSkill: Bool) -> ProjectSurfaceRecord {
@@ -6033,11 +6280,11 @@ final class IntrospectModel: ObservableObject {
         if path == introspectHomePath || path.hasPrefix(introspectHomePath + "/") {
             return url.lastPathComponent == "AGENTS.md" ? "Introspect home prompt" : "Introspect home"
         }
-        if path.hasPrefix(homePath + "/.codex/skills/") {
-            return "Codex user skill"
-        }
         if path.hasPrefix(homePath + "/.codex/") {
             return url.lastPathComponent == "AGENTS.override.md" ? "Codex global override" : "Codex global"
+        }
+        if path.hasPrefix(homePath + "/.agents/skills/") {
+            return "Codex/OpenCode user skill"
         }
         if path.hasPrefix(homePath + "/.claude/skills/") {
             return "Claude personal skill"
@@ -6048,9 +6295,16 @@ final class IntrospectModel: ObservableObject {
         if path.hasPrefix(homePath + "/.claude/") {
             return "Claude user"
         }
+        if path.hasPrefix(homePath + "/.config/opencode/skills/") {
+            return "OpenCode user skill"
+        }
+        if path.hasPrefix(homePath + "/.config/opencode/") {
+            return "OpenCode global"
+        }
         if isSkill {
-            if path.contains("/.agents/skills/") { return "Codex project skill" }
+            if path.contains("/.agents/skills/") { return "Codex/OpenCode project skill" }
             if path.contains("/.claude/skills/") { return "Claude project skill" }
+            if path.contains("/.opencode/skills/") { return "OpenCode project skill" }
             return "Repo skill"
         }
         if path.contains("/.claude/rules/") {
@@ -6076,6 +6330,11 @@ final class IntrospectModel: ObservableObject {
         let introspectHomePath = introspectHomeURL.standardizedFileURL.path
         if path == introspectHomePath || path.hasPrefix(introspectHomePath + "/") {
             return introspectHomeURL.standardizedFileURL
+        }
+        let opencodeGlobalURL = homeURL.appendingPathComponent(".config/opencode").standardizedFileURL
+        let opencodeGlobalPath = opencodeGlobalURL.path
+        if path == opencodeGlobalPath || path.hasPrefix(opencodeGlobalPath + "/") {
+            return opencodeGlobalURL
         }
         for globalDirectory in [".codex", ".claude", ".agents"] {
             let globalURL = homeURL.appendingPathComponent(globalDirectory).standardizedFileURL
@@ -6131,8 +6390,10 @@ final class IntrospectModel: ObservableObject {
             return "Claude Global"
         case homePath + "/.agents":
             return "Agent Skills"
+        case homePath + "/.config/opencode":
+            return "OpenCode Global"
         default:
-            if path == repoURL.standardizedFileURL.path {
+            if !runtimeIsBundled && path == repoURL.standardizedFileURL.path {
                 return "Introspect"
             }
             return root.lastPathComponent.isEmpty ? path : root.lastPathComponent
@@ -6153,7 +6414,10 @@ final class IntrospectModel: ObservableObject {
         if projectPath == homePath + "/.agents" {
             return "hammer"
         }
-        if projectPath == repoURL.standardizedFileURL.path {
+        if projectPath == homePath + "/.config/opencode" {
+            return "terminal"
+        }
+        if !runtimeIsBundled && projectPath == repoURL.standardizedFileURL.path {
             return "app.connected.to.app.below.fill"
         }
         return "folder"
@@ -6198,6 +6462,17 @@ final class IntrospectModel: ObservableObject {
 
     private func ensureGitignoreEntry(_ entry: String) throws {
         let gitignoreURL = repoURL.appendingPathComponent(".gitignore")
+        try ensureGitignoreEntry(entry, in: gitignoreURL)
+    }
+
+    private func ensureIntrospectHomeGitignore() throws {
+        let gitignoreURL = introspectHomeURL.appendingPathComponent(".gitignore")
+        for entry in ["feedback/", "runs/", "proposals/", "models/*.json", "models/*.json.*"] {
+            try ensureGitignoreEntry(entry, in: gitignoreURL)
+        }
+    }
+
+    private func ensureGitignoreEntry(_ entry: String, in gitignoreURL: URL) throws {
         let current = (try? String(contentsOf: gitignoreURL, encoding: .utf8)) ?? ""
         let lines = current.split(whereSeparator: \.isNewline).map(String.init)
         guard !lines.contains(entry) else { return }
@@ -6327,7 +6602,7 @@ final class IntrospectModel: ObservableObject {
     }
 
     private func readLastRun() -> String {
-        let stateURL = repoURL.appendingPathComponent("feedback/reflector-state.json")
+        let stateURL = feedbackURL.appendingPathComponent("reflector-state.json")
         guard let data = try? Data(contentsOf: stateURL),
               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let value = json["last_run_at"] as? String else {
@@ -6881,7 +7156,7 @@ final class IntrospectModel: ObservableObject {
     }
 
     private func loadClassifierReports() {
-        let reportDir = repoURL.appendingPathComponent("feedback/intent-classifier")
+        let reportDir = feedbackURL.appendingPathComponent("intent-classifier")
         let selectedStats = readClassifierThresholds(
             reportDir.appendingPathComponent("intent-v2-round4-split-grid-report.md")
         )
@@ -7908,7 +8183,7 @@ final class IntrospectModel: ObservableObject {
     }
 
     private func readTriggerEvents() -> [TriggerEventRecord] {
-        let url = repoURL.appendingPathComponent("feedback/events.jsonl")
+        let url = feedbackURL.appendingPathComponent("events.jsonl")
         return readJSONLines(url).enumerated().map { index, object in
             let timestamp = object["ts"] as? String ?? ""
             let sessionID = object["session_id"] as? String ?? "unknown"
@@ -7981,7 +8256,7 @@ final class IntrospectModel: ObservableObject {
     }
 
     private func readTriggerBatches() -> [TriggerBatchRecord] {
-        let url = repoURL.appendingPathComponent("feedback/reflector-batches.jsonl")
+        let url = feedbackURL.appendingPathComponent("reflector-batches.jsonl")
         return readJSONLines(url).enumerated().map { index, object in
             let timestamp = object["ts"] as? String ?? ""
             let sessions = (object["sessions"] as? [String] ?? [])
@@ -8027,7 +8302,7 @@ final class IntrospectModel: ObservableObject {
     }
 
     private func readReflectorSummaries() -> [ReflectorRunSummary] {
-        let url = repoURL.appendingPathComponent("feedback/reflector.log")
+        let url = feedbackURL.appendingPathComponent("reflector.log")
         guard let text = try? String(contentsOf: url, encoding: .utf8) else {
             return []
         }
@@ -8489,6 +8764,9 @@ final class IntrospectModel: ObservableObject {
             let process = Process()
             process.executableURL = URL(fileURLWithPath: executable)
             process.arguments = args
+            process.environment = ProcessInfo.processInfo.environment.merging([
+                "PYTHONDONTWRITEBYTECODE": "1"
+            ]) { current, _ in current }
             let pipe = Pipe()
             process.standardOutput = pipe
             process.standardError = pipe

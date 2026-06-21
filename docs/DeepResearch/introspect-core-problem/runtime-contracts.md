@@ -38,7 +38,7 @@ Contract:
 ```json
 {
   "batch_id": "20260614T000000Z-project-session",
-  "project_key": "/Users/advaitpaliwal/Companion/Code/companion",
+  "project_key": "~/Companion/Code/companion",
   "session_ids": ["..."],
   "canonical_event_ids": ["..."],
   "mode": "immediate|nightly|quiet|manual",

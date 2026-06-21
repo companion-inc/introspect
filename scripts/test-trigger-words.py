@@ -18,6 +18,7 @@ HOOK = REPO / "hooks" / "trigger-reflect.sh"
 SCANNER = REPO / "hooks" / "codex-transcript-scan.py"
 WORKER = REPO / "hooks" / "trigger-worker.py"
 INTENT_CLASSIFIER = REPO / "hooks" / "intent_classifier.py"
+WAKE_MODEL = REPO / "models" / "wake-logreg-v2-round4.json"
 
 
 def load_worker_module(name: str, env_updates: dict[str, str] | None = None):
@@ -37,12 +38,18 @@ def load_worker_module(name: str, env_updates: dict[str, str] | None = None):
 
 
 def load_intent_module(name: str = "intent_classifier_test"):
-    spec = importlib.util.spec_from_file_location(name, INTENT_CLASSIFIER)
-    if spec is None or spec.loader is None:
-        raise AssertionError("could not load intent_classifier.py")
-    classifier = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(classifier)
-    return classifier
+    old_env = os.environ.copy()
+    try:
+        os.environ["INTROSPECT_WAKE_MODEL"] = str(WAKE_MODEL)
+        spec = importlib.util.spec_from_file_location(name, INTENT_CLASSIFIER)
+        if spec is None or spec.loader is None:
+            raise AssertionError("could not load intent_classifier.py")
+        classifier = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(classifier)
+        return classifier
+    finally:
+        os.environ.clear()
+        os.environ.update(old_env)
 
 
 def read_jsonl(path: Path) -> list[dict]:
@@ -71,6 +78,7 @@ def run_case(
                 "INTROSPECT_PROMPT": str(REPO / "AGENTS.md"),
                 "INTROSPECT_SKILLS_DIR": str(REPO / "skills"),
                 "INTROSPECT_FEEDBACK_DIR": str(tmp),
+                "INTROSPECT_WAKE_MODEL": str(WAKE_MODEL),
                 "TRIGGER_REFLECTOR_DRY_RUN": "1",
                 "TRIGGER_DEBOUNCE_SECONDS": "0",
                 "TRIGGER_DISABLE_SCHEDULE": "1",
@@ -156,6 +164,7 @@ def run_mode_case(reflect_mode: str, expected_queue: int, expected_batches: int)
                 "INTROSPECT_PROMPT": str(REPO / "AGENTS.md"),
                 "INTROSPECT_SKILLS_DIR": str(REPO / "skills"),
                 "INTROSPECT_FEEDBACK_DIR": str(tmp),
+                "INTROSPECT_WAKE_MODEL": str(WAKE_MODEL),
                 "TRIGGER_REFLECTOR_DRY_RUN": "1",
                 "TRIGGER_DEBOUNCE_SECONDS": "0",
                 "TRIGGER_DISABLE_SCHEDULE": "1",
@@ -194,7 +203,7 @@ def run_home_case() -> None:
     with tempfile.TemporaryDirectory(prefix="introspect-home-") as tmp_raw:
         tmp = Path(tmp_raw)
         home = tmp / ".introspect"
-        home.mkdir()
+        home.mkdir(parents=True)
         (home / "trigger-words.txt").write_text("bruh\n")
         env = os.environ.copy()
         env.update(
@@ -204,6 +213,7 @@ def run_home_case() -> None:
                 "INTROSPECT_SKILLS_DIR": str(REPO / "skills"),
                 "INTROSPECT_FEEDBACK_DIR": str(tmp / "feedback"),
                 "INTROSPECT_HOME": str(home),
+                "INTROSPECT_WAKE_MODEL": str(WAKE_MODEL),
                 "INTROSPECT_REFLECT_MODE": "off",
                 "TRIGGER_REFLECTOR_DRY_RUN": "1",
                 "TRIGGER_DEBOUNCE_SECONDS": "0",
@@ -240,7 +250,8 @@ def run_shadow_model_case() -> None:
                 "INTROSPECT_SKILLS_DIR": str(REPO / "skills"),
                 "INTROSPECT_FEEDBACK_DIR": str(tmp),
                 "INTROSPECT_REFLECT_MODE": "off",
-                "INTROSPECT_WAKE_SHADOW_MODELS": f"prod-shadow={Path.home() / '.introspect/models/wake-logreg-v2-round4.json'}",
+                "INTROSPECT_WAKE_MODEL": str(WAKE_MODEL),
+                "INTROSPECT_WAKE_SHADOW_MODELS": f"prod-shadow={WAKE_MODEL}",
                 "TRIGGER_REFLECTOR_DRY_RUN": "1",
                 "TRIGGER_DEBOUNCE_SECONDS": "0",
                 "TRIGGER_DISABLE_SCHEDULE": "1",
@@ -341,11 +352,20 @@ def run_codex_scanner_case() -> None:
                 "payload": {
                     "type": "message",
                     "role": "user",
-                    "content": [{"type": "input_text", "text": "plain status check"}],
+                    "content": [{"type": "input_text", "text": "# AGENTS.md instructions\n\n<INSTRUCTIONS>\nhell"}],
                 },
             },
             {
                 "timestamp": ts(3),
+                "type": "response_item",
+                "payload": {
+                    "type": "message",
+                    "role": "user",
+                    "content": [{"type": "input_text", "text": "plain status check"}],
+                },
+            },
+            {
+                "timestamp": ts(4),
                 "type": "response_item",
                 "payload": {
                     "type": "message",
@@ -359,7 +379,7 @@ def run_codex_scanner_case() -> None:
                 },
             },
             {
-                "timestamp": ts(4),
+                "timestamp": ts(5),
                 "type": "response_item",
                 "payload": {
                     "type": "message",
@@ -384,6 +404,7 @@ def run_codex_scanner_case() -> None:
                 "INTROSPECT_FEEDBACK_DIR": str(tmp / "feedback"),
                 "INTROSPECT_CODEX_SESSIONS_DIR": str(tmp / "sessions"),
                 "INTROSPECT_REFLECT_MODE": "nightly",
+                "INTROSPECT_WAKE_MODEL": str(WAKE_MODEL),
             }
         )
         for _ in range(2):
@@ -446,6 +467,22 @@ def run_worker_command_model_case() -> None:
             raise AssertionError(f"codex command still uses removed flag {removed}: {codex_cmd}")
 
 
+def run_worker_retry_policy_case() -> None:
+    worker = load_worker_module("trigger_worker_retry_policy", {"TRIGGER_MAX_REFLECTOR_ATTEMPTS": "2"})
+    auth_output = "Failed to authenticate. API Error: 401 Invalid authentication credentials"
+    if not worker.is_nonretryable_runner_output(auth_output):
+        raise AssertionError("worker did not classify CLI auth failure as non-retryable")
+    if worker.is_nonretryable_runner_output("rate limit exceeded, try again"):
+        raise AssertionError("worker treated retryable output as non-retryable")
+
+    first_retry = worker.events_with_next_reflector_attempt([{"event_id": "one"}])
+    if first_retry[0].get("reflector_attempts") != 1:
+        raise AssertionError(f"first retry attempt not recorded: {first_retry}")
+    second_retry = worker.events_with_next_reflector_attempt(first_retry)
+    if worker.max_reflector_attempt(second_retry) != 2:
+        raise AssertionError(f"max retry attempt not recorded: {second_retry}")
+
+
 def main() -> int:
     cases = [
         ("same with this locally in companion and stuff", False, None, False),
@@ -467,7 +504,8 @@ def main() -> int:
     run_codex_scanner_case()
     run_worker_notification_summary_case()
     run_worker_command_model_case()
-    print(f"test-trigger-words: ok ({len(cases) + 8} cases)")
+    run_worker_retry_policy_case()
+    print(f"test-trigger-words: ok ({len(cases) + 9} cases)")
     return 0
 
 

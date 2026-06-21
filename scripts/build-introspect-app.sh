@@ -48,6 +48,16 @@ mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp "$EXEC" "$APP/Contents/MacOS/Introspect"
 cp "$ICON" "$APP/Contents/Resources/AppIcon.icns"
 
+for resource in README.md hooks scripts skills models templates; do
+  if [ -e "$REPO/$resource" ]; then
+    rm -rf "$APP/Contents/Resources/$resource"
+    ditto "$REPO/$resource" "$APP/Contents/Resources/$resource"
+  fi
+done
+
+find "$APP/Contents/Resources" -type d -name '__pycache__' -prune -exec rm -rf {} +
+find "$APP/Contents/Resources" -type f \( -name '*.pyc' -o -name '*.pyo' -o -name '.DS_Store' \) -delete
+
 cat > "$APP/Contents/Info.plist" <<'PLIST'
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">

@@ -16,7 +16,9 @@ from typing import Any, Iterable
 REPO = Path(__file__).resolve().parents[2]
 DEFAULT_OUTPUT = REPO / "feedback" / "intent-classifier" / "chat-corpus.jsonl"
 DEFAULT_SAMPLE = REPO / "feedback" / "intent-classifier" / "eval-sample.jsonl"
-DEFAULT_REVIEW_TERMS_FILE = Path(os.environ.get("INTROSPECT_HOME", Path.home() / ".introspect")) / "trigger-words.txt"
+DEFAULT_REVIEW_TERMS_FILE = (
+    Path(os.environ.get("INTROSPECT_HOME", Path.home() / ".introspect")) / "trigger-words.txt"
+)
 
 CODEX_FILES = [
     Path.home() / ".codex" / "sessions",

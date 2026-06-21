@@ -7,9 +7,21 @@ import json
 import os
 import subprocess
 import sys
+from pathlib import Path
 
-REPO = os.path.expanduser(os.environ.get("INTROSPECT_REPO", "~/Companion/Code/introspect"))
-EVENTS = os.path.expanduser(os.environ.get("INTROSPECT_FEEDBACK_DIR", os.path.join(REPO, "feedback")))
+DEFAULT_REPO = str(Path(__file__).resolve().parent.parent)
+REPO = os.path.expanduser(os.environ.get("INTROSPECT_REPO", DEFAULT_REPO))
+AGENTS_HOME = os.path.expanduser(os.environ.get("AGENTS_HOME") or "~/.agents")
+INTROSPECT_HOME = os.path.expanduser(os.environ.get("INTROSPECT_HOME") or "~/.introspect")
+
+
+def default_feedback_dir():
+    if REPO.endswith(".app/Contents/Resources"):
+        return os.path.join(INTROSPECT_HOME, "feedback")
+    return os.path.join(REPO, "feedback")
+
+
+EVENTS = os.path.expanduser(os.environ.get("INTROSPECT_FEEDBACK_DIR", default_feedback_dir()))
 EVENTS = os.path.join(EVENTS, "events.jsonl")
 
 if not os.path.exists(EVENTS):

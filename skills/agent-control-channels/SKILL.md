@@ -67,7 +67,7 @@ Don't patch the regex to catch the latest phrasing — that's re-fighting the sy
 
 ## Sources
 
-- Transcript: `/Users/advaitpaliwal/.codex/sessions/2026/06/15/rollout-2026-06-15T18-35-52-019ece12-13fd-7d91-8e29-aed11614e297.jsonl:28120-28126` shows a Clippy menu implementation reporting `Return only a JSON object` in the app prompt, followed by user pushback asking why it was not a custom tool call or equivalent structured channel.
+- Internal failure pattern: a model was asked to return JSON for a host-rendered menu, which made the host depend on assistant prose instead of a native control channel.
 - OpenAI function calling docs: tool calling sends a separate tool call to the application, which executes code with the tool-call input and continues the conversation.
 - OpenAI structured outputs docs: use function calling for app functionality/tools/data, and use strict structured response formats when the model response itself needs a schema.
 - Anthropic tool-use docs: Claude client tools are passed through the `tools` parameter with a name, description, and JSON Schema `input_schema`.
