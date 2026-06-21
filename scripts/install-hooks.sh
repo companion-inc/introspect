@@ -363,13 +363,7 @@ PY
 }
 
 migrate_stale_assistant_classifier_feedback() {
-  local scorer_python="${INTROSPECT_SCORER_PYTHON:-}"
-  if [[ -z "$scorer_python" ]]; then
-    scorer_python="$(command -v python3 || true)"
-  fi
-  if [[ -z "$scorer_python" ]]; then
-    scorer_python="$SETUP_PYTHON"
-  fi
+  local scorer_python="${INTROSPECT_SCORER_PYTHON:-$SETUP_PYTHON}"
   PYTHONDONTWRITEBYTECODE=1 "$scorer_python" - "$FEEDBACK_DIR/events.jsonl" "$FEEDBACK_DIR/trigger-queue.jsonl" "$INTROSPECT_HOME_DIR/models/assistant-boundary-logreg-v1.json" "$REPO" "$STAMP" <<'PY'
 import json
 import os
@@ -574,6 +568,13 @@ if [[ "$REFLECT_MODE" != "immediate" && "$REFLECT_MODE" != "nightly" && "$REFLEC
   echo "invalid --reflect-mode: $REFLECT_MODE" >&2
   exit 2
 fi
+case "$SETUP_PYTHON" in
+  /*)
+    ;;
+  *)
+    SETUP_PYTHON="$(command -v "$SETUP_PYTHON")"
+    ;;
+esac
 
 case "$REPO" in
   *.app/Contents/Resources)
@@ -599,7 +600,7 @@ else
   INTROSPECT_HOME="$INTROSPECT_HOME_DIR" INTROSPECT_USER_SKILLS_DIR="$USER_SKILLS_DIR" /bin/bash "$SKILL_SYNC" --unlink
 fi
 
-HOOK_COMMAND="env PYTHONDONTWRITEBYTECODE=1 INTROSPECT_REFLECT_MODE=$(quote "$REFLECT_MODE") INTROSPECT_REPO=$(quote "$REPO") AGENTS_HOME=$(quote "$AGENTS_HOME_DIR") INTROSPECT_PROMPT=$(quote "$PROMPT") INTROSPECT_SKILLS_DIR=$(quote "$SKILLS_DIR") INTROSPECT_USER_SKILLS_DIR=$(quote "$USER_SKILLS_DIR") INTROSPECT_FEEDBACK_DIR=$(quote "$FEEDBACK_DIR") INTROSPECT_HOME=$(quote "$INTROSPECT_HOME_DIR") INTROSPECT_WAKE_MODEL=$(quote "$INTROSPECT_HOME_DIR/models/wake-logreg-v2-round4.json") INTROSPECT_ASSISTANT_FAILURE_MODEL=$(quote "$INTROSPECT_HOME_DIR/models/assistant-boundary-logreg-v1.json") INTROSPECT_WAKE_SHADOW_MODELS=$(quote "$WAKE_SHADOW_MODELS") INTROSPECT_WAKE_SENSITIVITY=$(quote "$WAKE_SENSITIVITY") INTROSPECT_WAKE_THRESHOLD=$(quote "$WAKE_THRESHOLD") $(quote "$HOOK")"
+HOOK_COMMAND="env PYTHONDONTWRITEBYTECODE=1 INTROSPECT_REFLECT_MODE=$(quote "$REFLECT_MODE") INTROSPECT_REPO=$(quote "$REPO") AGENTS_HOME=$(quote "$AGENTS_HOME_DIR") INTROSPECT_PROMPT=$(quote "$PROMPT") INTROSPECT_SKILLS_DIR=$(quote "$SKILLS_DIR") INTROSPECT_USER_SKILLS_DIR=$(quote "$USER_SKILLS_DIR") INTROSPECT_FEEDBACK_DIR=$(quote "$FEEDBACK_DIR") INTROSPECT_HOME=$(quote "$INTROSPECT_HOME_DIR") INTROSPECT_WAKE_MODEL=$(quote "$INTROSPECT_HOME_DIR/models/wake-logreg-v2-round4.json") INTROSPECT_ASSISTANT_FAILURE_MODEL=$(quote "$INTROSPECT_HOME_DIR/models/assistant-boundary-logreg-v1.json") INTROSPECT_WAKE_SHADOW_MODELS=$(quote "$WAKE_SHADOW_MODELS") INTROSPECT_WAKE_SENSITIVITY=$(quote "$WAKE_SENSITIVITY") INTROSPECT_WAKE_THRESHOLD=$(quote "$WAKE_THRESHOLD") $(quote "$SETUP_PYTHON") $(quote "$HOOK")"
 HOOK_MODE="$MODE"
 if [[ "$MODE" == "install" && "$REFLECT_MODE" == "off" ]]; then
   HOOK_MODE="uninstall"
@@ -723,16 +724,16 @@ PY
 
 install_launch_agent() {
   mkdir -p "$HOME/Library/LaunchAgents" "$FEEDBACK_DIR"
-  "$SETUP_PYTHON" - "$LAUNCH_LABEL" "$REPO" "$WORKER" "$PROMPT" "$SKILLS_DIR" "$USER_SKILLS_DIR" "$FEEDBACK_DIR" "$AGENTS_HOME_DIR" "$INTROSPECT_HOME_DIR" "$NIGHTLY_HOUR" "$NIGHTLY_MINUTE" "$REFLECTOR_RUNNER" "$REFLECTOR_CLAUDE_MODEL" "$REFLECTOR_CLAUDE_FALLBACK_MODEL" "$REFLECTOR_CODEX_MODEL" "$WAKE_SENSITIVITY" "$WAKE_THRESHOLD" "$LAUNCHD_PATH" "$LAUNCH_PLIST" <<'PY'
+  "$SETUP_PYTHON" - "$LAUNCH_LABEL" "$SETUP_PYTHON" "$REPO" "$WORKER" "$PROMPT" "$SKILLS_DIR" "$USER_SKILLS_DIR" "$FEEDBACK_DIR" "$AGENTS_HOME_DIR" "$INTROSPECT_HOME_DIR" "$NIGHTLY_HOUR" "$NIGHTLY_MINUTE" "$REFLECTOR_RUNNER" "$REFLECTOR_CLAUDE_MODEL" "$REFLECTOR_CLAUDE_FALLBACK_MODEL" "$REFLECTOR_CODEX_MODEL" "$WAKE_SENSITIVITY" "$WAKE_THRESHOLD" "$LAUNCHD_PATH" "$LAUNCH_PLIST" <<'PY'
 import plistlib
 import os
 import sys
 from pathlib import Path
 
-label, repo, worker, prompt, skills_dir, user_skills_dir, feedback_dir, agents_home_dir, home_dir, hour, minute, runner, claude_model, claude_fallback_model, codex_model, wake_sensitivity, wake_threshold, launchd_path, plist_path = sys.argv[1:]
+label, python, repo, worker, prompt, skills_dir, user_skills_dir, feedback_dir, agents_home_dir, home_dir, hour, minute, runner, claude_model, claude_fallback_model, codex_model, wake_sensitivity, wake_threshold, launchd_path, plist_path = sys.argv[1:]
 data = {
     "Label": label,
-    "ProgramArguments": ["/usr/bin/env", "python3", worker, "--nightly"],
+    "ProgramArguments": [python, worker, "--nightly"],
     "WorkingDirectory": repo,
     "EnvironmentVariables": {
         "PYTHONDONTWRITEBYTECODE": "1",
@@ -789,16 +790,16 @@ uninstall_launch_agent() {
 
 install_scan_agent() {
   mkdir -p "$HOME/Library/LaunchAgents" "$FEEDBACK_DIR"
-  "$SETUP_PYTHON" - "$SCAN_LABEL" "$REPO" "$SCANNER" "$PROMPT" "$SKILLS_DIR" "$USER_SKILLS_DIR" "$FEEDBACK_DIR" "$AGENTS_HOME_DIR" "$INTROSPECT_HOME_DIR" "$REFLECT_MODE" "$REFLECTOR_RUNNER" "$REFLECTOR_CLAUDE_MODEL" "$REFLECTOR_CLAUDE_FALLBACK_MODEL" "$REFLECTOR_CODEX_MODEL" "$WAKE_SHADOW_MODELS" "$WAKE_SENSITIVITY" "$WAKE_THRESHOLD" "$LAUNCHD_PATH" "$SCAN_PLIST" <<'PY'
+  "$SETUP_PYTHON" - "$SCAN_LABEL" "$SETUP_PYTHON" "$REPO" "$SCANNER" "$PROMPT" "$SKILLS_DIR" "$USER_SKILLS_DIR" "$FEEDBACK_DIR" "$AGENTS_HOME_DIR" "$INTROSPECT_HOME_DIR" "$REFLECT_MODE" "$REFLECTOR_RUNNER" "$REFLECTOR_CLAUDE_MODEL" "$REFLECTOR_CLAUDE_FALLBACK_MODEL" "$REFLECTOR_CODEX_MODEL" "$WAKE_SHADOW_MODELS" "$WAKE_SENSITIVITY" "$WAKE_THRESHOLD" "$LAUNCHD_PATH" "$SCAN_PLIST" <<'PY'
 import plistlib
 import os
 import sys
 from pathlib import Path
 
-label, repo, scanner, prompt, skills_dir, user_skills_dir, feedback_dir, agents_home_dir, home_dir, reflect_mode, runner, claude_model, claude_fallback_model, codex_model, wake_shadow_models, wake_sensitivity, wake_threshold, launchd_path, plist_path = sys.argv[1:]
+label, python, repo, scanner, prompt, skills_dir, user_skills_dir, feedback_dir, agents_home_dir, home_dir, reflect_mode, runner, claude_model, claude_fallback_model, codex_model, wake_shadow_models, wake_sensitivity, wake_threshold, launchd_path, plist_path = sys.argv[1:]
 data = {
     "Label": label,
-    "ProgramArguments": ["/usr/bin/env", "python3", scanner],
+    "ProgramArguments": [python, scanner],
     "WorkingDirectory": repo,
     "EnvironmentVariables": {
         "PYTHONDONTWRITEBYTECODE": "1",

@@ -348,11 +348,11 @@ enum IntrospectNotifications {
         }
 
         if args.contains(installFlag) {
-            exit(Int32(runInstallCLI(uninstall: false)))
+            exit(Int32(runInstallCLI(uninstall: false, commandLineArgs: args)))
         }
 
         if args.contains(uninstallFlag) {
-            exit(Int32(runInstallCLI(uninstall: true)))
+            exit(Int32(runInstallCLI(uninstall: true, commandLineArgs: args)))
         }
 
         if args.contains(appStatusFlag) {
@@ -454,7 +454,8 @@ enum IntrospectNotifications {
     private static func printCLIUsage() {
         print("""
         Usage:
-          Introspect --install      Set up ~/.introspect, prompt links, hooks, scanner, and health monitor
+          Introspect --install [install flags]
+                                    Set up ~/.introspect, prompt links, hooks, scanner, and health monitor
           Introspect --status       Print current Introspect setup status
           Introspect --uninstall    Remove Introspect hooks, scanner, monitor, and prompt links
 
@@ -465,13 +466,15 @@ enum IntrospectNotifications {
         """)
     }
 
-    private static func runInstallCLI(uninstall: Bool) -> Int {
+    private static func runInstallCLI(uninstall: Bool, commandLineArgs: [String]) -> Int {
         let root = runtimeRoot()
         let script = root.appendingPathComponent("scripts/install-hooks.sh")
         guard FileManager.default.isExecutableFile(atPath: script.path) else {
             fputs("Missing Introspect installer at \(script.path)\n", stderr)
             return 1
         }
+        let strippedFlags: Set<String> = [installFlag, uninstallFlag]
+        let forwardedArgs = commandLineArgs.filter { !strippedFlags.contains($0) }
         var args = [
             script.path,
             "--home", introspectHomeRoot().path,
@@ -480,7 +483,10 @@ enum IntrospectNotifications {
         if uninstall {
             args.append("--uninstall")
         } else {
-            args.append(contentsOf: ["--reflect-mode", "immediate"])
+            if !forwardedArgs.contains("--reflect-mode") {
+                args.append(contentsOf: ["--reflect-mode", "immediate"])
+            }
+            args.append(contentsOf: forwardedArgs)
         }
         return runProcess("/bin/bash", args)
     }

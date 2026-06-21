@@ -309,7 +309,7 @@ else
 fi
 
 printf "\nskills:\n"
-"$RUNTIME_REPO/scripts/validate-skills.py"
+"$SETUP_PYTHON" "$RUNTIME_REPO/scripts/validate-skills.py"
 
 printf "\nfeedback:\n"
 if [[ -f "$FEEDBACK_DIR/events.jsonl" ]]; then
