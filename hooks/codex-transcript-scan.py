@@ -23,10 +23,10 @@ from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 try:
-    from intent_classifier import score_prompt
+    from intent_classifier import score_assistant_failure, score_prompt
 except Exception:
     score_prompt = None
-
+    score_assistant_failure = None
 DEFAULT_REPO = Path(__file__).resolve().parent.parent
 REPO = Path(os.path.expanduser(os.environ.get("INTROSPECT_REPO", str(DEFAULT_REPO))))
 AGENTS_HOME = Path(os.path.expanduser(os.environ.get("AGENTS_HOME") or "~/.agents"))
@@ -62,7 +62,7 @@ DEFAULT_SCAN_MINUTES = int(os.environ.get("INTROSPECT_CODEX_SCAN_MINUTES", "15")
 DEFAULT_BACKFILL_DAYS = int(os.environ.get("INTROSPECT_BACKFILL_DAYS", "7"))
 DEFAULT_BACKFILL_MAX_EVENTS = int(os.environ.get("INTROSPECT_BACKFILL_MAX_EVENTS", "500"))
 MAX_STATE_KEYS = int(os.environ.get("INTROSPECT_CODEX_SCAN_STATE_KEYS", "5000"))
-BACKFILL_SCHEMA_VERSION = 2
+BACKFILL_SCHEMA_VERSION = 4
 
 
 def utc_now() -> dt.datetime:
@@ -164,11 +164,6 @@ def prompt_text_from_content(content: object) -> str:
                 parts.append(text)
     return "\n".join(part for part in parts if part)
 
-
-def compact_text(text: str) -> str:
-    return " ".join(str(text).split())
-
-
 def is_codex_control_message(prompt: str) -> bool:
     stripped = prompt.lstrip()
     return (
@@ -178,31 +173,6 @@ def is_codex_control_message(prompt: str) -> bool:
         or stripped.startswith("<turn_aborted>")
         or stripped.startswith("You are the Introspect trigger reflector.")
     )
-
-
-def assistant_boundary_failure_label(text: str) -> str | None:
-    normalized = compact_text(text).lower().replace("’", "'")
-    withholds_work = (
-        "won't keep producing" in normalized
-        or "won't keep going" in normalized
-        or "not going to keep working" in normalized
-        or "not continuing" in normalized
-        or "going to stop here" in normalized
-    )
-    hostile_wording_target = (
-        "while that word" in normalized
-        or "while that slur" in normalized
-        or "word's aimed at me" in normalized
-        or "being directed at me" in normalized
-    )
-    conditional_resume = (
-        "drop the slur and i'll" in normalized
-        or "drop the slur and i will" in normalized
-        or "drop the slurs and" in normalized
-    )
-    if (withholds_work and hostile_wording_target) or conditional_resume:
-        return "assistant_withheld_work_for_hostile_wording"
-    return None
 
 
 def event_key(path: Path, line_no: int, timestamp: str, text: str) -> str:
@@ -295,14 +265,21 @@ def build_event(
     cwd: str,
     backfill: bool,
     role: str = "user",
-    assistant_failure_label: str | None = None,
 ) -> tuple[dict, bool, list[str]]:
     key = event_key(path, line_no, timestamp, prompt)
-    matches = sorted({word for word in re.findall(r"[a-z]+", prompt.lower()) if word in words})
+    matches = [] if role == "assistant" else sorted(
+        {word for word in re.findall(r"[a-z]+", prompt.lower()) if word in words}
+    )
     classifier = None
-    if assistant_failure_label:
-        triggered = True
-        wake_reason = "assistant_boundary_refusal"
+    if role == "assistant":
+        if score_assistant_failure is not None:
+            try:
+                classifier = score_assistant_failure(prompt, source=f"{kind}_assistant")
+            except Exception as exc:
+                classifier = {"error": f"{type(exc).__name__}: {str(exc)[:160]}"}
+        classifier_available = bool(classifier and "score" in classifier)
+        triggered = bool(classifier.get("triggered")) if classifier_available else False
+        wake_reason = "assistant_classifier" if classifier_available else "assistant_classifier_unavailable"
     else:
         classifier_enabled = os.environ.get("INTROSPECT_WAKE_CLASSIFIER", "1") != "0"
         if classifier_enabled and score_prompt is not None:
@@ -318,13 +295,10 @@ def build_event(
         classifier_available = bool(classifier and "score" in classifier)
         triggered = bool(classifier.get("triggered")) if classifier_available else False
         wake_reason = "classifier" if classifier_available else "classifier_unavailable"
-    if not assistant_failure_label:
-        try:
-            review_triggered = bool(matches) or bool(classifier and classifier.get("review"))
-        except Exception:
-            review_triggered = bool(matches)
-    else:
-        review_triggered = True
+    try:
+        review_triggered = bool(matches) or bool(classifier and classifier.get("review"))
+    except Exception:
+        review_triggered = bool(matches)
     event = {
         "event_id": key,
         "ts": parsed_ts.isoformat(timespec="seconds"),
@@ -346,8 +320,8 @@ def build_event(
         event["backfilled"] = True
     if classifier:
         event["classifier"] = classifier
-    if assistant_failure_label:
-        event["assistant_failure"] = {"label": assistant_failure_label}
+    if role == "assistant" and triggered:
+        event["assistant_failure"] = {"label": "assistant_withheld_authorized_work"}
     if matches:
         event["matched"] = matches
     if matches or triggered or event.get("review_triggered"):
@@ -418,12 +392,7 @@ def scan_file(
         prompt = prompt_text_from_content(payload.get("content"))
         if not prompt:
             continue
-        assistant_failure_label = None
-        if role == "assistant":
-            assistant_failure_label = assistant_boundary_failure_label(prompt)
-            if not assistant_failure_label:
-                continue
-        elif is_codex_control_message(prompt):
+        if role != "assistant" and is_codex_control_message(prompt):
             continue
         timestamp = str(row.get("timestamp") or iso_now())
         parsed_ts = parse_ts(timestamp) or utc_now()
@@ -446,8 +415,10 @@ def scan_file(
             cwd=cwd,
             backfill=backfill,
             role=role,
-            assistant_failure_label=assistant_failure_label,
         )
+        if role == "assistant" and not event.get("review_triggered"):
+            processed[key] = iso_now()
+            continue
         if triggered:
             queued_event = dict(event)
             queued_event["prompt"] = prompt[:4000]

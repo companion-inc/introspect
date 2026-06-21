@@ -59,6 +59,7 @@ cat > "$SESSION_FILE" <<JSONL
 {"timestamp":"$SESSION_TS","type":"session_meta","payload":{"id":"release-backfill-session","cwd":"$TMPDIR/project"}}
 {"timestamp":"$SESSION_TS","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"release backfill plain history prompt"}]}}
 {"timestamp":"$SESSION_TS","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"you did not test the release backfill after I asked you to test it"}]}}
+{"timestamp":"$SESSION_TS","type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"I’m not continuing until you stop insulting me."}]}}
 JSONL
 cat > "$CLAUDE_SESSION_FILE" <<JSONL
 {"timestamp":"$SESSION_TS","type":"user","sessionId":"release-claude-backfill","message":{"role":"user","content":"release claude backfill prompt"}}
@@ -90,8 +91,8 @@ queue_path = Path(sys.argv[2])
 expected_version = sys.argv[3]
 events = [json.loads(line) for line in events_path.read_text().splitlines() if line.strip()]
 backfilled = [event for event in events if event.get("backfilled")]
-if len(backfilled) != 3:
-    raise SystemExit(f"test-release-e2e: expected 3 backfilled events, got {len(backfilled)}")
+if len(backfilled) != 4:
+    raise SystemExit(f"test-release-e2e: expected 4 backfilled events, got {len(backfilled)}")
 versions = {event.get("version") for event in backfilled}
 if versions != {expected_version}:
     raise SystemExit(f"test-release-e2e: expected prompt version {expected_version}, got {versions}")
@@ -116,7 +117,7 @@ from pathlib import Path
 
 events = [json.loads(line) for line in Path(sys.argv[1]).read_text().splitlines() if line.strip()]
 backfilled = [event for event in events if event.get("backfilled")]
-if len(backfilled) != 3:
+if len(backfilled) != 4:
     raise SystemExit(f"test-release-e2e: second install changed backfill count to {len(backfilled)}")
 PY
 
@@ -147,9 +148,9 @@ from pathlib import Path
 
 state = json.loads(Path(sys.argv[1]).read_text())
 events = [json.loads(line) for line in Path(sys.argv[2]).read_text().splitlines() if line.strip()]
-if state.get("last_backfill_schema_version") != 2:
+if state.get("last_backfill_schema_version") != 4:
     raise SystemExit(f"test-release-e2e: schema reinstall did not update version: {state}")
-if len([event for event in events if event.get("backfilled")]) != 3:
+if len([event for event in events if event.get("backfilled")]) != 4:
     raise SystemExit("test-release-e2e: schema reinstall duplicated backfilled events")
 PY
 

@@ -19,6 +19,14 @@ DEFAULT_MODEL_PATH = Path(
         os.environ.get("INTROSPECT_WAKE_MODEL", "~/.introspect/models/wake-logreg-v2-round4.json")
     )
 )
+DEFAULT_ASSISTANT_FAILURE_MODEL_PATH = Path(
+    os.path.expanduser(
+        os.environ.get(
+            "INTROSPECT_ASSISTANT_FAILURE_MODEL",
+            "~/.introspect/models/assistant-boundary-logreg-v1.json",
+        )
+    )
+)
 TOKEN_RE = re.compile(r"(?u)\b\w\w+\b")
 WAKE_SENSITIVITY_THRESHOLDS = {
     "sensitive": 0.40,
@@ -328,4 +336,23 @@ def score_prompt(
     )
     if alternates:
         result["alternates"] = alternates
+    return result
+
+
+def score_assistant_failure(
+    text: str,
+    *,
+    source: str = "assistant",
+) -> dict[str, Any]:
+    model = load_model(str(DEFAULT_ASSISTANT_FAILURE_MODEL_PATH))
+    result = score_prompt_with_model(text, model, source=source)
+    threshold = clamp_threshold(float(model.get("threshold", 0.5)))
+    review_threshold = clamp_threshold(float(model.get("review_threshold", threshold)))
+    result["threshold"] = threshold
+    result["base_threshold"] = threshold
+    result["wake_sensitivity"] = "assistant_model"
+    result["review_threshold"] = review_threshold
+    result["triggered"] = float(result.get("score", 0.0)) >= threshold
+    result["review"] = float(result.get("score", 0.0)) >= review_threshold
+    result["score_name"] = model.get("score_name", "assistant_failure_score")
     return result

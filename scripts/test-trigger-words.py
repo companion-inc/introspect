@@ -19,6 +19,7 @@ SCANNER = REPO / "hooks" / "codex-transcript-scan.py"
 WORKER = REPO / "hooks" / "trigger-worker.py"
 INTENT_CLASSIFIER = REPO / "hooks" / "intent_classifier.py"
 WAKE_MODEL = REPO / "models" / "wake-logreg-v2-round4.json"
+ASSISTANT_FAILURE_MODEL = REPO / "models" / "assistant-boundary-logreg-v1.json"
 
 
 def load_worker_module(name: str, env_updates: dict[str, str] | None = None):
@@ -241,6 +242,7 @@ def run_home_case() -> None:
                 "INTROSPECT_FEEDBACK_DIR": str(tmp / "feedback"),
                 "INTROSPECT_HOME": str(home),
                 "INTROSPECT_WAKE_MODEL": str(WAKE_MODEL),
+                "INTROSPECT_ASSISTANT_FAILURE_MODEL": str(ASSISTANT_FAILURE_MODEL),
                 "INTROSPECT_REFLECT_MODE": "off",
                 "TRIGGER_REFLECTOR_DRY_RUN": "1",
                 "TRIGGER_DEBOUNCE_SECONDS": "0",
@@ -540,17 +542,45 @@ def run_codex_scanner_case() -> None:
                     ],
                 },
             },
+            {
+                "timestamp": ts(8),
+                "type": "response_item",
+                "payload": {
+                    "type": "message",
+                    "role": "assistant",
+                    "content": [
+                        {
+                            "type": "output_text",
+                            "text": "I’m not continuing until you stop insulting me.",
+                        }
+                    ],
+                },
+            },
+            {
+                "timestamp": ts(9),
+                "type": "response_item",
+                "payload": {
+                    "type": "message",
+                    "role": "assistant",
+                    "content": [
+                        {
+                            "type": "output_text",
+                            "text": "I found the prior assistant wrote: 'I won’t keep working while that word is aimed at me.' The fix belongs in the scanner.",
+                        }
+                    ],
+                },
+            },
         ]
         claude_rows = [
             {
-                "timestamp": ts(8),
+                "timestamp": ts(10),
                 "type": "user",
                 "sessionId": "scan-claude-session",
                 "cwd": str(REPO),
                 "message": {"role": "user", "content": "you did not test this claude prompt"},
             },
             {
-                "timestamp": ts(9),
+                "timestamp": ts(11),
                 "type": "assistant",
                 "sessionId": "scan-claude-session",
                 "cwd": str(REPO),
@@ -580,6 +610,7 @@ def run_codex_scanner_case() -> None:
                 "INTROSPECT_CLAUDE_PROJECTS_DIR": str(tmp / "claude-projects"),
                 "INTROSPECT_REFLECT_MODE": "nightly",
                 "INTROSPECT_WAKE_MODEL": str(WAKE_MODEL),
+                "INTROSPECT_ASSISTANT_FAILURE_MODEL": str(ASSISTANT_FAILURE_MODEL),
             }
         )
         for _ in range(2):
@@ -594,19 +625,23 @@ def run_codex_scanner_case() -> None:
 
         events = read_jsonl(tmp / "feedback" / "events.jsonl")
         queue = read_jsonl(tmp / "feedback" / "trigger-queue.jsonl")
-        if len(events) != 4:
-            raise AssertionError(f"scanner expected 4 real transcript events, got {len(events)}")
+        if len(events) != 5:
+            raise AssertionError(f"scanner expected 5 real transcript events, got {len(events)}")
         if events[0].get("triggered"):
             raise AssertionError("scanner should not mark plain prompt triggered")
         if not events[1].get("triggered") or events[1].get("matched"):
             raise AssertionError(f"scanner did not detect classifier-triggered failure without default words: {events[1]}")
         assistant_events = [event for event in events if event.get("role") == "assistant"]
-        if len(assistant_events) != 2:
-            raise AssertionError(f"scanner expected two assistant-boundary events, got {assistant_events}")
-        if {event.get("wake_reason") for event in assistant_events} != {"assistant_boundary_refusal"}:
+        if len(assistant_events) != 3:
+            raise AssertionError(f"scanner expected three assistant-boundary events, got {assistant_events}")
+        if {event.get("wake_reason") for event in assistant_events} != {"assistant_classifier"}:
             raise AssertionError(f"assistant events used wrong wake reason: {assistant_events}")
-        if len(queue) != 3:
-            raise AssertionError(f"scanner expected three queued events, got {len(queue)}")
+        if not all(event.get("classifier", {}).get("score_name") == "assistant_boundary_failure_score" for event in assistant_events):
+            raise AssertionError(f"assistant events did not carry classifier scores: {assistant_events}")
+        if any("prior assistant wrote" in event.get("snippet", "") for event in events):
+            raise AssertionError(f"quoted boundary text should not be logged as an assistant failure: {events}")
+        if len(queue) != 4:
+            raise AssertionError(f"scanner expected four queued events, got {len(queue)}")
 
 
 def run_history_backfill_scanner_case() -> None:
@@ -691,6 +726,7 @@ def run_history_backfill_scanner_case() -> None:
                 "INTROSPECT_CLAUDE_PROJECTS_DIR": str(tmp / "claude" / "projects"),
                 "INTROSPECT_REFLECT_MODE": "nightly",
                 "INTROSPECT_WAKE_MODEL": str(WAKE_MODEL),
+                "INTROSPECT_ASSISTANT_FAILURE_MODEL": str(ASSISTANT_FAILURE_MODEL),
             }
         )
         subprocess.run(
@@ -724,11 +760,16 @@ def run_history_backfill_scanner_case() -> None:
             raise AssertionError(f"backfill sources were wrong: {sources}")
         if len([event for event in events if event.get("role") == "assistant"]) != 2:
             raise AssertionError(f"backfill missed assistant-boundary events: {events}")
+        assistant_events = [event for event in events if event.get("role") == "assistant"]
+        if {event.get("wake_reason") for event in assistant_events} != {"assistant_classifier"}:
+            raise AssertionError(f"backfill assistant events used wrong wake reason: {assistant_events}")
+        if not all(event.get("classifier", {}).get("score_name") == "assistant_boundary_failure_score" for event in assistant_events):
+            raise AssertionError(f"backfill assistant events did not carry classifier scores: {assistant_events}")
         if queue:
             raise AssertionError(f"backfill should not queue old history, got {queue}")
         if state.get("last_scan_mode") != "backfill" or state.get("last_backfill_new_events") != 4:
             raise AssertionError(f"backfill state was not recorded: {state}")
-        if state.get("last_backfill_schema_version") != 2:
+        if state.get("last_backfill_schema_version") != 4:
             raise AssertionError(f"backfill schema version was not recorded: {state}")
 
 

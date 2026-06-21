@@ -135,6 +135,7 @@ fallback = value("INTROSPECT_REFLECTOR_CLAUDE_FALLBACK_MODEL").strip()
 codex = model(value("INTROSPECT_REFLECTOR_CODEX_MODEL"))
 shadow = value("INTROSPECT_WAKE_SHADOW_MODELS")
 shadow_count = len([item for item in shadow.split(",") if item.strip()])
+assistant_model = Path(value("INTROSPECT_ASSISTANT_FAILURE_MODEL")).name or "missing"
 sensitivity = value("INTROSPECT_WAKE_SENSITIVITY", "balanced")
 threshold = value("INTROSPECT_WAKE_THRESHOLD")
 configured_threshold = threshold.strip() if threshold.strip() else "model"
@@ -152,6 +153,7 @@ parts = [
     f"codex_model={codex}",
     f"sensitivity={sensitivity}",
     f"effective_threshold={effective_threshold}",
+    f"assistant_failure_model={assistant_model}",
     f"shadow_models={shadow_count}",
 ]
 if sensitivity == "custom":

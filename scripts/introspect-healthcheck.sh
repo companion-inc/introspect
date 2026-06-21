@@ -176,6 +176,7 @@ else
       check_plist_env "$scan_plist" "INTROSPECT_REFLECTOR_CLAUDE_FALLBACK_MODEL" "$claude_fallback_model" "scanner Claude CLI fallback model"
       check_plist_env "$scan_plist" "INTROSPECT_REFLECTOR_CODEX_MODEL" "$codex_model" "scanner Codex model"
       check_plist_env "$scan_plist" "INTROSPECT_WAKE_MODEL" "$INTROSPECT_HOME_DIR/models/wake-logreg-v2-round4.json" "scanner wake model"
+      check_plist_env "$scan_plist" "INTROSPECT_ASSISTANT_FAILURE_MODEL" "$INTROSPECT_HOME_DIR/models/assistant-boundary-logreg-v1.json" "scanner assistant failure model"
       check_plist_env "$scan_plist" "INTROSPECT_WAKE_SHADOW_MODELS" "$shadow_models" "scanner shadow models"
       check_plist_env "$scan_plist" "INTROSPECT_WAKE_SENSITIVITY" "$wake_sensitivity" "scanner wake sensitivity"
       check_plist_env "$scan_plist" "INTROSPECT_WAKE_THRESHOLD" "$wake_threshold" "scanner wake threshold"
@@ -192,6 +193,7 @@ if [[ "$mode" == "nightly" ]]; then
     check_plist_env "$reflector_plist" "INTROSPECT_REFLECTOR_CLAUDE_FALLBACK_MODEL" "$claude_fallback_model" "nightly Claude CLI fallback model"
     check_plist_env "$reflector_plist" "INTROSPECT_REFLECTOR_CODEX_MODEL" "$codex_model" "nightly Codex model"
     check_plist_env "$reflector_plist" "INTROSPECT_WAKE_MODEL" "$INTROSPECT_HOME_DIR/models/wake-logreg-v2-round4.json" "nightly wake model"
+    check_plist_env "$reflector_plist" "INTROSPECT_ASSISTANT_FAILURE_MODEL" "$INTROSPECT_HOME_DIR/models/assistant-boundary-logreg-v1.json" "nightly assistant failure model"
     check_plist_env "$reflector_plist" "INTROSPECT_WAKE_SENSITIVITY" "$wake_sensitivity" "nightly wake sensitivity"
     check_plist_env "$reflector_plist" "INTROSPECT_WAKE_THRESHOLD" "$wake_threshold" "nightly wake threshold"
   fi
