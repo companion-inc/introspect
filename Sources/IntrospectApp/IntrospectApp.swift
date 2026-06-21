@@ -1035,6 +1035,12 @@ struct OverviewSection: View {
             InfoRow(label: "Queued events", value: "\(model.queuedEvents)")
             Divider()
             InfoRow(label: "Last reflector run", value: model.lastRunText)
+            Divider()
+            InfoRow(label: "Latest invocation", value: model.lastInvocationText)
+            Divider()
+            InfoRow(label: "Invocation detail", value: model.lastInvocationDetail)
+            Divider()
+            InfoRow(label: "Last notification", value: model.lastNotificationText)
         }
 
         Card("Locations") {
@@ -5083,6 +5089,9 @@ final class IntrospectModel: ObservableObject {
     @Published var launchAgentInstalled = false
     @Published var queuedEvents = 0
     @Published var lastRunText = "unknown"
+    @Published var lastInvocationText = "never"
+    @Published var lastInvocationDetail = "none"
+    @Published var lastNotificationText = "unknown"
     @Published var triggerWordsText = ""
     @Published var homeGitOK = false
     @Published var triggerWordsOK = false
@@ -5589,7 +5598,7 @@ final class IntrospectModel: ObservableObject {
             }
         }
         queuedEvents = lineCount(feedbackURL.appendingPathComponent("trigger-queue.jsonl"))
-        lastRunText = readLastRun()
+        loadReflectorState()
         appCommitSubjects = await gitSubjectMap(in: repoURL)
         loadTriggerHistory()
         loadClassifierReports()
@@ -6647,14 +6656,48 @@ final class IntrospectModel: ObservableObject {
         return text.split(separator: "\n").count
     }
 
-    private func readLastRun() -> String {
+    private func loadReflectorState() {
         let stateURL = feedbackURL.appendingPathComponent("reflector-state.json")
         guard let data = try? Data(contentsOf: stateURL),
-              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let value = json["last_run_at"] as? String else {
-            return "never"
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            lastRunText = "never"
+            lastInvocationText = "never"
+            lastInvocationDetail = "none"
+            lastNotificationText = "unknown"
+            return
         }
-        return friendlyTimestamp(value)
+
+        if let value = json["last_run_at"] as? String {
+            lastRunText = friendlyTimestamp(value)
+        } else {
+            lastRunText = "never"
+        }
+
+        guard let invocation = json["last_invocation"] as? [String: Any] else {
+            lastInvocationText = "never"
+            lastInvocationDetail = "none"
+            lastNotificationText = "unknown"
+            return
+        }
+
+        let status = stringValue(invocation["status"], fallback: "unknown")
+        let started = stringValue(invocation["started_at"], fallback: "")
+        let updated = stringValue(invocation["updated_at"], fallback: "")
+        let timestamp = started.isEmpty ? updated : started
+        lastInvocationText = timestamp.isEmpty
+            ? statusLabel(status)
+            : "\(statusLabel(status)) · \(friendlyTimestamp(timestamp))"
+
+        let runner = stringValue(invocation["runner"], fallback: "unknown")
+        let eventCount = intValue(invocation["event_count"]) ?? 0
+        let attempt = intValue(invocation["attempt"]) ?? 1
+        let attemptCount = intValue(invocation["attempt_count"]) ?? 1
+        let exitCode = intValue(invocation["exit_code"])
+        let exitText = exitCode.map { " · exit \($0)" } ?? ""
+        lastInvocationDetail = "\(runner) · \(eventCount) event\(eventCount == 1 ? "" : "s") · attempt \(attempt)/\(attemptCount)\(exitText)"
+
+        let notification = stringValue(invocation["notification_status"], fallback: "unknown")
+        lastNotificationText = notificationLabel(notification)
     }
 
     private func loadHomeHistory() async {
@@ -8704,6 +8747,55 @@ final class IntrospectModel: ObservableObject {
 
     private func dateValue(_ value: String) -> Date? {
         Self.isoParser.date(from: value) ?? Self.isoParserFractional.date(from: value)
+    }
+
+    private func stringValue(_ value: Any?, fallback: String) -> String {
+        if let value = value as? String {
+            let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+            return trimmed.isEmpty ? fallback : trimmed
+        }
+        if let value = value as? NSNumber {
+            return value.stringValue
+        }
+        return fallback
+    }
+
+    private func statusLabel(_ value: String) -> String {
+        switch value {
+        case "starting":
+            return "Starting"
+        case "running":
+            return "Running"
+        case "completed":
+            return "Completed"
+        case "failed":
+            return "Failed"
+        case "timed_out":
+            return "Timed out"
+        case "dry_run":
+            return "Dry run"
+        default:
+            return value.isEmpty ? "Unknown" : value.replacingOccurrences(of: "_", with: " ").capitalized
+        }
+    }
+
+    private func notificationLabel(_ value: String) -> String {
+        switch value {
+        case "delivered":
+            return "Delivered to macOS"
+        case "pending":
+            return "Pending"
+        case "disabled":
+            return "Disabled"
+        case "helper_missing":
+            return "App helper missing"
+        case "blocked_by_macos":
+            return "Blocked by macOS"
+        case "failed":
+            return "Post failed"
+        default:
+            return value.isEmpty ? "Unknown" : value.replacingOccurrences(of: "_", with: " ").capitalized
+        }
     }
 
     private func intValue(_ value: Any?) -> Int? {

@@ -247,21 +247,22 @@ def app_notifications_allowed(helper: Path) -> bool:
     return False
 
 
-def notify(title: str, message: str) -> None:
+def notify(title: str, message: str) -> str:
     if not notifications_enabled():
-        return
+        return "disabled"
 
     helper = notification_helper()
     if not helper:
         log("notification skipped: Introspect.app is not installed")
-        return
+        return "helper_missing"
     if not app_notifications_allowed(helper):
         log("notification skipped: Introspect.app is not allowed to send notifications (enable it in System Settings > Notifications)")
-        return
+        return "blocked_by_macos"
     if notify_with_app(title, message, helper):
         log("notification delivered through Introspect.app")
-        return
+        return "delivered"
     log("notification failed: Introspect.app is allowed but posting did not succeed")
+    return "failed"
 
 
 def matched_words(events: list[dict]) -> list[str]:
@@ -470,6 +471,28 @@ def write_surface_diff(before: dict[str, dict], after: dict[str, dict], path: Pa
     return len(changes)
 
 
+def restore_agent_surfaces(before: dict[str, dict], after: dict[str, dict]) -> int:
+    restored = 0
+    for item_path in sorted(set(before) | set(after)):
+        old = before.get(item_path)
+        new = after.get(item_path)
+        old_text = old.get("text", "") if old else None
+        new_text = new.get("text", "") if new else None
+        if old_text == new_text:
+            continue
+        path = Path(item_path)
+        try:
+            if old is None:
+                path.unlink(missing_ok=True)
+            else:
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(old_text or "", encoding="utf-8")
+            restored += 1
+        except OSError as exc:
+            log(f"failed to restore agent surface {item_path}: {exc!r}")
+    return restored
+
+
 def available_reflector_runners() -> dict[str, str]:
     runners = {}
     for name in ("claude", "codex"):
@@ -650,7 +673,6 @@ def build_reflector_command(runner: str, runner_path: str, prompt: str, allowed_
         cmd = [
             runner_path,
             "-p",
-            prompt,
         ]
         model = selected_model_for_runner(runner)
         fallback_model = selected_fallback_model_for_runner(runner)
@@ -678,7 +700,7 @@ def build_reflector_command(runner: str, runner_path: str, prompt: str, allowed_
         model = selected_model_for_runner(runner)
         if model:
             cmd.extend(["--model", model])
-        cmd.append(prompt)
+        cmd.append("-")
         return cmd
     raise RuntimeError(f"unsupported reflector runner {runner!r}")
 
@@ -707,6 +729,17 @@ def save_json(path: Path, data: dict) -> None:
     tmp = path.with_suffix(path.suffix + f".{os.getpid()}.tmp")
     tmp.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n")
     os.replace(tmp, path)
+
+
+def record_last_invocation(**values) -> None:
+    state = read_json(STATE, {})
+    invocation = state.get("last_invocation")
+    if not isinstance(invocation, dict):
+        invocation = {}
+    invocation.update(values)
+    invocation["updated_at"] = iso_now()
+    state["last_invocation"] = invocation
+    save_json(STATE, state)
 
 
 def acquire_lock() -> bool:
@@ -991,6 +1024,23 @@ def invoke_reflector(events: list[dict]) -> int:
         }
         append_json(BATCHES, batch)
         write_surface_diff(before_surfaces, before_surfaces, surface_diff_path, batch)
+        record_last_invocation(
+            run_id=run_id,
+            status="dry_run",
+            started_at=batch["ts"],
+            runner="dry-run",
+            model="",
+            fallback_model="",
+            event_count=len(events),
+            attempt=1,
+            attempt_count=1,
+            pid=os.getpid(),
+            prompt_path=str(prompt_path),
+            surface_diff_path=str(surface_diff_path),
+            notification_status="disabled",
+            exit_code=0,
+            changed_count=0,
+        )
         log(f"DRY RUN would invoke reflector for {len(events)} event(s)")
         return 0
 
@@ -1043,29 +1093,67 @@ def invoke_reflector(events: list[dict]) -> int:
         if fallback_model:
             model_note += f" claude_cli_fallback_model={fallback_model}"
         log(f"invoking {runner} reflector for {len(events)} event(s){model_note} attempt={attempt_index}/{len(attempts)}")
+        record_last_invocation(
+            run_id=run_id,
+            status="starting",
+            started_at=batch["ts"],
+            runner=runner,
+            model=model,
+            fallback_model=fallback_model,
+            event_count=len(events),
+            attempt=attempt_index,
+            attempt_count=len(attempts),
+            pid=os.getpid(),
+            prompt_path=str(prompt_path),
+            surface_diff_path=str(surface_diff_path),
+            notification_status="pending",
+        )
         if attempt_index == 1:
             words = trigger_words_text(events)
             body = f"{runner} reflector spawned for {len(events)} trigger event(s)"
             if words:
                 body = f"{body}: {words}"
                 log(f"review terms: {words}")
-            notify("Introspect", body)
+            notification_status = notify("Introspect", body)
+            record_last_invocation(
+                run_id=run_id,
+                status="running",
+                notification_status=notification_status,
+            )
 
         log_offset = LOG.stat().st_size if LOG.exists() else 0
         with LOG.open("a") as log_file:
             display_cmd = " ".join(shlex.quote(part) for part in cmd)
-            display_cmd = display_cmd.replace(shlex.quote(prompt), "<batch-prompt>")
+            display_cmd = f"{display_cmd} < <batch-prompt>"
             log_file.write(f"{iso_now()} command: {display_cmd}\n")
             log_file.flush()
-            result = subprocess.run(
-                cmd,
-                cwd=REFLECTOR_CWD,
-                env=env,
-                stdout=log_file,
-                stderr=subprocess.STDOUT,
-                text=True,
-                timeout=REFLECTOR_TIMEOUT_SECONDS,
-            )
+            try:
+                result = subprocess.run(
+                    cmd,
+                    cwd=REFLECTOR_CWD,
+                    env=env,
+                    input=prompt,
+                    stdout=log_file,
+                    stderr=subprocess.STDOUT,
+                    text=True,
+                    timeout=REFLECTOR_TIMEOUT_SECONDS,
+                )
+            except subprocess.TimeoutExpired:
+                after_surfaces = snapshot_agent_surfaces(events)
+                changed_count = write_surface_diff(before_surfaces, after_surfaces, surface_diff_path, batch)
+                restored_count = restore_agent_surfaces(before_surfaces, after_surfaces)
+                log(
+                    f"surface diff recorded changes={changed_count} path={surface_diff_path}; "
+                    f"restored failed reflector changes={restored_count}"
+                )
+                record_last_invocation(
+                    run_id=run_id,
+                    status="timed_out",
+                    exit_code=124,
+                    changed_count=changed_count,
+                    restored_count=restored_count,
+                )
+                raise
 
         last_code = result.returncode
         output = read_log_since(log_offset)
@@ -1075,6 +1163,12 @@ def invoke_reflector(events: list[dict]) -> int:
             after_surfaces = snapshot_agent_surfaces(events)
             changed_count = write_surface_diff(before_surfaces, after_surfaces, surface_diff_path, batch)
             log(f"surface diff recorded changes={changed_count} path={surface_diff_path}")
+            record_last_invocation(
+                run_id=run_id,
+                status="completed",
+                exit_code=0,
+                changed_count=changed_count,
+            )
             return 0
         if last_nonretryable:
             log(f"{runner} reflector failure is non-retryable")
@@ -1087,13 +1181,28 @@ def invoke_reflector(events: list[dict]) -> int:
 
     after_surfaces = snapshot_agent_surfaces(events)
     changed_count = write_surface_diff(before_surfaces, after_surfaces, surface_diff_path, last_batch or {})
-    log(f"surface diff recorded changes={changed_count} path={surface_diff_path}")
+    restored_count = restore_agent_surfaces(before_surfaces, after_surfaces)
+    log(
+        f"surface diff recorded changes={changed_count} path={surface_diff_path}; "
+        f"restored failed reflector changes={restored_count}"
+    )
+    record_last_invocation(
+        run_id=run_id,
+        status="failed" if last_code else "completed",
+        exit_code=last_code,
+        changed_count=changed_count,
+        restored_count=restored_count,
+    )
     if last_nonretryable:
         return NONRETRYABLE_REFLECTOR_FAILURE
     return last_code
 
 
 def update_state_after_run(state: dict, events: list[dict]) -> None:
+    current = read_json(STATE, {})
+    if isinstance(current, dict):
+        current.update({key: value for key, value in state.items() if key != "last_invocation"})
+        state = current
     now = iso_now()
     state["last_run_at"] = now
     state["scheduled_retry_at"] = None

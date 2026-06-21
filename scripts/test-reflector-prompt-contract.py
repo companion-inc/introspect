@@ -103,6 +103,10 @@ def main() -> None:
             fail("codex reflector command is missing -C")
         if command[cwd_index] != str(worker.REFLECTOR_CWD):
             fail(f"codex reflector cwd is {command[cwd_index]}, expected {worker.REFLECTOR_CWD}")
+        if "prompt" in command:
+            fail("codex reflector command leaked the prompt through argv")
+        if "-" not in command:
+            fail("codex reflector command should read the prompt from stdin")
 
     print("test-reflector-prompt-contract: ok")
 

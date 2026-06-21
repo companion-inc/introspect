@@ -801,14 +801,80 @@ def run_worker_command_model_case() -> None:
         raise AssertionError(f"claude command missing model override: {claude_cmd}")
     if "--fallback-model" not in claude_cmd or "haiku-test" not in claude_cmd:
         raise AssertionError(f"claude command missing fallback override: {claude_cmd}")
+    if "prompt" in claude_cmd:
+        raise AssertionError(f"claude command leaked prompt through argv: {claude_cmd}")
 
     codex_cmd = worker.build_reflector_command("codex", "/usr/local/bin/codex", "prompt", "Read")
-    for expected in ("exec", "--dangerously-bypass-approvals-and-sandbox", "-C", "--model", "gpt-test"):
+    for expected in ("exec", "--dangerously-bypass-approvals-and-sandbox", "-C", "--model", "gpt-test", "-"):
         if expected not in codex_cmd:
             raise AssertionError(f"codex command missing {expected}: {codex_cmd}")
+    if "prompt" in codex_cmd:
+        raise AssertionError(f"codex command leaked prompt through argv: {codex_cmd}")
     for removed in ("--ask-for-approval", "--search"):
         if removed in codex_cmd:
             raise AssertionError(f"codex command still uses removed flag {removed}: {codex_cmd}")
+
+
+def run_worker_restore_failed_surface_case() -> None:
+    worker = load_worker_module("trigger_worker_restore_failed_surface")
+    with tempfile.TemporaryDirectory(prefix="introspect-restore-surfaces-") as tmp_raw:
+        tmp = Path(tmp_raw)
+        modified = tmp / "AGENTS.md"
+        deleted = tmp / "nested" / "AGENTS.md"
+        added = tmp / "skills" / "new-skill" / "SKILL.md"
+        modified.write_text("old\n")
+        deleted.parent.mkdir(parents=True)
+        deleted.write_text("deleted old\n")
+        added.parent.mkdir(parents=True)
+        added.write_text("new skill\n")
+        modified.write_text("new\n")
+        deleted.unlink()
+
+        before = {
+            str(modified): {"text": "old\n"},
+            str(deleted): {"text": "deleted old\n"},
+        }
+        after = {
+            str(modified): {"text": "new\n"},
+            str(added): {"text": "new skill\n"},
+        }
+        restored = worker.restore_agent_surfaces(before, after)
+        if restored != 3:
+            raise AssertionError(f"expected three restored files, got {restored}")
+        if modified.read_text() != "old\n":
+            raise AssertionError("modified surface was not restored")
+        if deleted.read_text() != "deleted old\n":
+            raise AssertionError("deleted surface was not restored")
+        if added.exists():
+            raise AssertionError("added failed-run surface was not removed")
+
+
+def run_worker_state_preserves_invocation_case() -> None:
+    with tempfile.TemporaryDirectory(prefix="introspect-state-preserve-") as tmp_raw:
+        tmp = Path(tmp_raw)
+        worker = load_worker_module(
+            "trigger_worker_state_preserve",
+            {"INTROSPECT_FEEDBACK_DIR": str(tmp)},
+        )
+        worker.save_json(
+            worker.STATE,
+            {
+                "last_invocation": {
+                    "status": "completed",
+                    "notification_status": "delivered",
+                },
+                "scheduled_retry_at": "2026-06-21T00:00:00+00:00",
+            },
+        )
+        worker.update_state_after_run({"sessions": {"old": "kept"}}, [{"session_id": "new"}])
+        state = worker.read_json(worker.STATE, {})
+        invocation = state.get("last_invocation")
+        if invocation != {"status": "completed", "notification_status": "delivered"}:
+            raise AssertionError(f"last_invocation was not preserved: {state}")
+        if state.get("scheduled_retry_at") is not None:
+            raise AssertionError(f"scheduled retry was not cleared: {state}")
+        if "new" not in state.get("sessions", {}):
+            raise AssertionError(f"new session timestamp was not recorded: {state}")
 
 
 def run_worker_retry_policy_case() -> None:
@@ -850,8 +916,10 @@ def main() -> int:
     run_history_backfill_scanner_case()
     run_worker_notification_summary_case()
     run_worker_command_model_case()
+    run_worker_restore_failed_surface_case()
+    run_worker_state_preserves_invocation_case()
     run_worker_retry_policy_case()
-    print(f"test-trigger-words: ok ({len(cases) + 11} cases)")
+    print(f"test-trigger-words: ok ({len(cases) + 13} cases)")
     return 0
 
 

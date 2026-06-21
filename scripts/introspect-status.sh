@@ -412,6 +412,24 @@ if state_path.exists():
     state = json.loads(state_path.read_text())
     print(f"last run: {state.get('last_run_at')}")
     print(f"scheduled retry: {state.get('scheduled_retry_at')}")
+    invocation = state.get("last_invocation")
+    if isinstance(invocation, dict):
+        started = invocation.get("started_at") or invocation.get("updated_at")
+        status = invocation.get("status") or "unknown"
+        runner = invocation.get("runner") or "unknown"
+        event_count = invocation.get("event_count")
+        notification = invocation.get("notification_status") or "unknown"
+        exit_code = invocation.get("exit_code")
+        parts = [
+            f"started={started}",
+            f"status={status}",
+            f"runner={runner}",
+            f"events={event_count}",
+            f"notification={notification}",
+        ]
+        if exit_code is not None:
+            parts.append(f"exit={exit_code}")
+        print("latest invocation: " + " ".join(parts))
 
 queue_path = feedback / "trigger-queue.jsonl"
 if queue_path.exists():
