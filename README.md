@@ -1,51 +1,38 @@
 # Introspect
 
-Open-source macOS app and hook engine for improving local Claude/Codex agent instructions from real trigger signals.
+Introspect is a local macOS tool that helps coding agents improve from real conversations.
 
-Bundle identifier:
+It watches your Claude, Codex, and OpenCode sessions for moments where the agent got stuck, ignored instructions, overclaimed, patched the wrong layer, or needed repeated correction. When that happens, Introspect can run a locked background reflection pass that updates the right agent instruction surface: global `AGENTS.md`, project `AGENTS.md`, project skills, or user-wide skills.
+
+It is not a hosted service. Your prompts, transcripts, feedback logs, model scores, proposed edits, and Introspect history live on your Mac under `~/.introspect`.
+
+## Download
+
+Download the latest macOS build:
+
+[Download Introspect.dmg](https://github.com/companion-inc/introspect/releases/latest/download/Introspect.dmg)
+
+Open the DMG, drag `Introspect.app` to Applications, then open Introspect.
+
+The app is the friendly installer and status UI. The same runtime also exposes a CLI:
+
+```bash
+/Applications/Introspect.app/Contents/MacOS/Introspect --install
+/Applications/Introspect.app/Contents/MacOS/Introspect --status
+/Applications/Introspect.app/Contents/MacOS/Introspect --uninstall
+```
+
+## What Happens After Install
+
+On first install, Introspect sets up one private local home:
 
 ```text
-ai.companion.introspect
+~/.introspect
 ```
 
-The public repo contains the app, hooks, worker, scripts, default prompt/skill templates, and docs. User-specific prompt, skill, review-term, memory, model, feedback, and run state lives under `~/.introspect`; durable prompt, settings, skill, and memory files are Git-tracked there, while runtime feedback, run, proposal, and model artifacts are ignored.
+That home contains the shared prompt, settings, skills, local memory, feedback history, reflector runs, and proposals. Durable files are Git-tracked inside `~/.introspect`; runtime logs and generated feedback artifacts are ignored.
 
-This checkout is the reusable app/engine. The Git-tracked user-wide prompt source is `~/.introspect/AGENTS.md`; the installer links Claude, Codex, and OpenCode native prompt files directly to that source.
-
-## Mac App
-
-Build the app:
-
-```bash
-./scripts/build-introspect-app.sh
-open .build/Introspect.app
-```
-
-The app can:
-
-- apply the system prompt links for Claude, Codex, and OpenCode
-- install hooks in `immediate`, `nightly`, or `off` mode
-- run a bounded one-time local Claude/Codex history backfill on install, then install the scanner backstop for Desktop sessions whose hooks have not fired
-- install a recurring health monitor that verifies links, hooks, scanner state, and repairs drift
-- remove hooks without deleting the prompt links
-- initialize `~/.introspect` as a local Git repo
-- show discovered global/project agent files and project skills
-- initialize a project's `AGENTS.md`, symlinked `CLAUDE.md`, `.agents/skills/`, `.claude/skills/`, and `.claude/rules/` surface
-- edit optional review terms without installing a default word list
-- inspect trigger signal analytics: optional review-term counts, version trigger rates, run outcomes, and local tone scores
-- inspect classifier audit metrics, threshold curves, and prompt-variant comparisons
-- show recent reflector runs, trigger source, reflector prompt/output, and AGENTS/CLAUDE/skill diffs
-- show the exact event locator for a run's source message when the hook or Codex scanner can provide one
-- browse the private `~/.introspect` Git history and per-commit patches from the app
-- show queue, prompt-link, hook, scanner, monitor, notification, and last-run status
-
-## Install
-
-```bash
-./scripts/install-hooks.sh --reflect-mode immediate
-```
-
-This links:
+Then Introspect wires each agent to that home:
 
 ```text
 ~/.claude/CLAUDE.md -> ~/.introspect/AGENTS.md
@@ -53,111 +40,189 @@ This links:
 ~/.config/opencode/AGENTS.md -> ~/.introspect/AGENTS.md
 ```
 
-It also syncs `~/.introspect/skills/<skill>/SKILL.md` folders into agent-native global skill directories with symlinks. Each skill is exported to exactly one native namespace to avoid duplicate OpenCode skill names: the default is `~/.agents/skills` for Codex/OpenCode, `compatibility: claude` exports to `~/.claude/skills`, and `compatibility: opencode` exports to `~/.config/opencode/skills`.
+It also installs:
 
-It installs Claude/Codex `UserPromptSubmit` hooks that run `hooks/trigger-reflect.sh`, does a bounded one-time local agent history backfill from `~/.claude/projects` and `~/.codex/sessions`, installs a transcript scanner LaunchAgent at `~/Library/LaunchAgents/ai.companion.introspect.codex-scanner.plist`, and installs a health monitor LaunchAgent at `~/Library/LaunchAgents/ai.companion.introspect.health.plist`. The backfill scores recent historical prompts and model-classified assistant-output failures into `~/.introspect/feedback/events.jsonl` so the app has immediate local signal after download, but it does not queue old triggered events into the reflector. Repeated installs skip backfill after `last_backfill_at` is recorded; use `--force-backfill` only for an intentional replay. The scanner is event-driven, not polled: launchd `WatchPaths` wakes it when Codex writes (a new prompt appends to `~/.codex/history.jsonl`, or a new session adds a rollout file under `~/.codex/sessions`) or Claude writes under `~/.claude/projects`, because Desktop hooks can be skipped until changed hooks are trusted, a running app session reloads config, or the failure is in the assistant output rather than a user prompt. The health monitor runs once at login (no polling timer) and repairs prompt links, skill links, hook config, and scanner launch state when they drift; the app also self-repairs whenever you open it.
+- foreground hooks for Claude and Codex prompts
+- an event-driven transcript scanner for missed Desktop sessions and assistant-output failures
+- a login health check that repairs drift in links, hooks, scanner state, and skill links
+- a bounded one-time backfill over recent local Claude/Codex transcripts so the app starts with useful signal
+- optional macOS notifications when a reflector run starts
+
+The backfill scores recent local history into `~/.introspect/feedback/events.jsonl`. It does not queue old history into the reflector, so installing the app does not rewrite your prompts from past conversations. Repeated installs skip backfill unless you explicitly force it.
+
+## What You See
+
+The app opens to a status dashboard, not a blank settings shell.
+
+- **Status** shows whether prompt links, hooks, scanner, health monitor, notifications, queue, and latest run are working.
+- **Signals** shows captured events, wake scores, trigger rates, optional review-term matches, run outcomes, and local tone scores.
+- **Runs** shows each reflector batch, the source locator, the prompt/output, and the AGENTS/CLAUDE/skill diff it produced.
+- **Projects** shows discovered global and project agent files plus project skills.
+- **Introspect Home** shows the private `~/.introspect` Git history and selected commit patches.
+- **Hooks** controls immediate, nightly, or off mode plus runner selection.
+- **Review Terms** lets you add optional words to track without making those words the wake trigger.
+- **Notifications** requests macOS permission, sends a test banner, and opens System Settings when macOS blocks delivery.
+
+## CLI
+
+The app binary is also the main CLI entrypoint:
+
+```bash
+Introspect --install [install flags]
+Introspect --status
+Introspect --uninstall
+Introspect --request-notification
+Introspect --post-notification "Introspect" "Reflector started"
+Introspect --notification-status
+```
+
+Install flags pass through to the runtime installer:
+
+```bash
+Introspect --install \
+  --reflect-mode immediate \
+  --runner codex \
+  --wake-sensitivity sensitive
+```
+
+For source checkouts, the scripts are directly runnable:
+
+```bash
+./scripts/install-hooks.sh --reflect-mode immediate
+./scripts/introspect-status.sh
+./scripts/test-release-e2e.sh
+```
 
 Reflection modes:
 
-- `immediate`: enqueue the event and kick one locked worker after trigger. The worker debounces bursts and applies global/session cooldowns.
-- `nightly`: enqueue only; install a LaunchAgent at the configured hour/minute.
-- `off`: remove hooks while keeping prompt links available.
+- `immediate`: enqueue a triggered event and kick one locked worker after debounce/cooldown.
+- `nightly`: enqueue events and process them at the configured local time.
+- `off`: remove hooks/scanner/reflector scheduling while keeping prompt files available.
 
-The reflector runner defaults to `default`: use the installed agent with the most recent local usage history, based on recent Claude and Codex transcript user-message counts. If both are tied, the most recent user message wins; if still tied, Codex wins when installed. No model is pinned unless configured in the app or passed with `--claude-model`, `--claude-fallback-model`, or `--codex-model`; blank, `default`, and `auto` use the CLI default. `--claude-fallback-model` is Claude CLI's fallback-model flag, not a separate runner. Use `--runner claude` or `--runner codex` to force one.
+Runner selection:
+
+- `default` chooses the installed agent with the most recent local usage.
+- `claude` forces Claude.
+- `codex` forces Codex.
+
+No model is pinned by default. Blank, `default`, and `auto` use the selected CLI's own default model.
+
+## How It Works
+
+1. A Claude, Codex, or OpenCode prompt is submitted.
+2. The hook records prompt metadata into the active feedback directory.
+3. A local classifier scores whether this looks like negative feedback or an agent-boundary failure.
+4. Low scores are logged for audit only.
+5. High-confidence events are appended to `trigger-queue.jsonl`.
+6. Immediate mode kicks one locked worker; nightly mode waits for the scheduled reflector.
+7. The worker batches nearby events, applies cooldowns, snapshots relevant agent surfaces, and runs one reflector process.
+8. The reflector inspects the original thread and chooses one target: no change, global prompt, project prompt, home memory, user skill, project skill, or skill pruning.
+9. The worker records the prompt, output, status, notification result, and exact surface diff.
+10. The app reads those local artifacts and shows what changed.
+
+The classifier uses word and character features because the signal is not only exact words; it also needs to catch misspellings, repeated corrections, punctuation-heavy frustration, and phrases it has not seen verbatim. That is scoring, not a hardcoded slur list.
+
+## Agent File Scopes
+
+Introspect keeps global, project, and skill instructions separate.
+
+- Global invariants live in `~/.introspect/AGENTS.md`.
+- Codex project guidance lives in the repo's `AGENTS.md`.
+- Nested `AGENTS.md` files apply narrower guidance closer to the working directory.
+- `AGENTS.override.md` replaces the broader Codex file for a subtree.
+- Claude reads `CLAUDE.md`, so project `CLAUDE.md` should usually be a symlink to `AGENTS.md`.
+- Private Claude project notes belong in `CLAUDE.local.md` and should stay gitignored.
+- User-wide skills live under `~/.introspect/skills/<skill>/SKILL.md`.
+- Codex/OpenCode project skills live under `.agents/skills/<skill>/SKILL.md`.
+- Claude project skills live under `.claude/skills/<skill>/SKILL.md`.
+
+Introspect exports each user-wide skill into one native global namespace to avoid duplicate OpenCode-visible skill names:
+
+- default / `compatibility: codex` -> `~/.agents/skills`
+- `compatibility: claude` -> `~/.claude/skills`
+- `compatibility: opencode` -> `~/.config/opencode/skills`
+
+References for this hierarchy:
+
+- [OpenAI Codex AGENTS.md](https://developers.openai.com/codex/guides/agents-md)
+- [OpenAI Codex Skills](https://developers.openai.com/codex/skills)
+- [AGENTS.md](https://agents.md/)
+- [Claude memory](https://code.claude.com/docs/en/memory)
+- [Claude skills](https://code.claude.com/docs/en/skills)
+- [OpenCode rules](https://opencode.ai/docs/rules/)
+- [OpenCode skills](https://opencode.ai/docs/skills/)
+
+## Build From Source
+
+Requirements:
+
+- macOS 14 or newer
+- Xcode command line tools
+- Swift
+- Python 3
+- Claude and/or Codex CLI installed for reflection runs
+
+Build:
+
+```bash
+./scripts/build-introspect-app.sh
+open .build/Introspect.app
+```
+
+Create a local DMG:
+
+```bash
+./scripts/build-introspect-app.sh
+./scripts/build-dmg.sh
+```
 
 ## Verify
 
 ```bash
-readlink ~/.claude/CLAUDE.md
-readlink ~/.codex/AGENTS.md
-readlink ~/.config/opencode/AGENTS.md
-rg "trigger-reflect.sh" ~/.claude/settings.json ~/.codex/hooks.json
-INTROSPECT_SKILLS_DIR="$PWD/skills" ./scripts/validate-skills.py
-./scripts/sync-user-skills.sh
-./scripts/test-user-skill-sync.sh
-./scripts/test-surface-scopes.py
-./scripts/test-reflector-prompt-contract.py
-./scripts/test-trigger-words.py
-./scripts/build-introspect-app.sh
+./scripts/test-install-paths.sh
+/usr/bin/python3 scripts/test-trigger-words.py
+/usr/bin/python3 scripts/test-reflector-prompt-contract.py
+INTROSPECT_SKILLS_DIR="$PWD/skills" /usr/bin/python3 scripts/validate-skills.py
 ./scripts/test-release-e2e.sh
-./scripts/introspect-status.sh
+./scripts/build-introspect-app.sh
+codesign --verify --deep --strict --verbose=2 .build/Introspect.app
 ```
 
-## How It Works
+For an installed app:
 
-1. Claude Code or Codex submits a user prompt.
-2. `hooks/trigger-reflect.sh` logs prompt metadata to the active feedback directory. Installed apps use `~/.introspect/feedback`; checkout/dev installs use `feedback/` in the repo.
-3. The hook scores wake intent with the exportable local classifier at `~/.introspect/models/wake-logreg-v2-round4.json` unless `INTROSPECT_WAKE_CLASSIFIER=0`. Balanced mode uses the model's production threshold, sensitive mode wakes earlier at `0.40`, and lower scores down to the review threshold are logged for audit but do not wake the reflector.
-4. `~/.introspect/trigger-words.txt` is optional review metadata only. Introspect does not install defaults; word fallback is disabled unless `INTROSPECT_TRIGGER_WORD_FALLBACK=1`.
-5. If the classifier says the prompt is a foreground wake, the hook appends it to `trigger-queue.jsonl` in the active feedback directory with the event id, message locator, prompt hash, classifier score, optional review-term matches, snippet, and transcript identity fields available from the hook input.
-6. In immediate mode, the hook kicks `hooks/trigger-worker.py --kick`. In nightly mode, the LaunchAgent runs `hooks/trigger-worker.py --nightly`.
-7. On install, `hooks/codex-transcript-scan.py --backfill` scores a bounded local slice of recent Claude/Codex transcript JSONL files into feedback history without queueing old trigger events.
-8. After install, the same scanner runs incrementally, skips Codex control/context records, dedupes by transcript line, queues missed classifier-triggered user prompts, and queues model-classified assistant-output failures with a stable `message_locator` of `transcript_path:line`.
-9. `scripts/introspect-healthcheck.sh` runs from launchd once at login (no polling timer), writes `health-status.latest` in the active feedback directory, and repairs local install drift through `scripts/install-hooks.sh`.
-10. The worker holds a lock, batches nearby events, applies cooldowns, writes the exact reflector prompt to `reflector-prompts/` in the active feedback directory, snapshots relevant agent surfaces before/after, and runs at most one reflector process.
-11. The reflector inspects the original thread and stats, then chooses one target: `no_change`, `core_prompt`, `project_prompt`, `home_memory`, `skill_new`, `skill_update`, `project_skill_new`, `project_skill_update`, or `skill_prune`.
-12. The worker passes the event id, source, message locator, transcript line, classifier result, optional review-term matches, and snippet to the reflector so the AI can inspect the exact message before classifying the run.
-13. The app's Signals screen reads `events.jsonl`, `reflector-batches.jsonl`, `surface-diffs/`, and `intent-classifier/` from the active feedback directory; it shows optional review-term counts, trigger rates by prompt version, run/change counts by term, local sentiment scores, and classifier audit metrics.
-14. The app's Runs screen reads `reflector-batches.jsonl`, `reflector.log`, and `surface-diffs/` from the active feedback directory; it shows source, event locator, classifier/review metadata, reflector prompt/output, and the AGENTS/CLAUDE/skill diff. Original Claude/Codex JSONL history stays available as an external open/reveal path instead of an inline chat viewer.
-15. The app's Introspect Home screen reads the private `~/.introspect` Git repo and shows the working-tree status, commit list, and selected commit patch.
+```bash
+/Applications/Introspect.app/Contents/MacOS/Introspect --status
+```
 
-When a real reflector process starts, the worker posts the banner through the signed `Introspect.app`, but only when macOS has authorized that bundle for notifications; otherwise it skips and logs why. The banner body includes optional review-term matches when present. Use the app's Notifications section to request macOS permission, send a test banner, open System Settings when macOS blocks the app, or disable these popups; the setting is stored in `~/.introspect/settings.json`. `INTROSPECT_NOTIFY=0` still disables popups for a hook or LaunchAgent environment.
+## Repository Layout
 
-## Agent File Scopes
-
-Introspect treats agent memory as a routing problem, not one giant prompt.
-
-- Global invariants are authored in `~/.introspect/AGENTS.md` and linked directly into `~/.claude/CLAUDE.md`, `~/.codex/AGENTS.md`, and `~/.config/opencode/AGENTS.md`.
-- Project-wide Codex guidance belongs in the repo's `AGENTS.md`; nested `AGENTS.md` files append narrower instructions, with closer files winning on conflicts.
-- `AGENTS.override.md` is different: it replaces the regular `AGENTS.md` at that directory level, so use it only when a subtree should override that layer instead of appending to it.
-- Claude reads `CLAUDE.md` / `.claude/CLAUDE.md`, not `AGENTS.md` directly, so project `CLAUDE.md` should be a symlink to `AGENTS.md` when no Claude-only additions exist; use a real `CLAUDE.md` with `@AGENTS.md` only for Claude-specific project guidance.
-- OpenCode reads `AGENTS.md`; project `AGENTS.md` and `.agents/skills/<skill>/SKILL.md` cover OpenCode without duplicating project files.
-- Private project notes belong in `CLAUDE.local.md` and should stay gitignored.
-- User-wide skills are authored once under `~/.introspect/skills/<skill>/SKILL.md`; Introspect links each one into exactly one native global skill folder. Default / `compatibility: codex` goes to `~/.agents/skills`, `compatibility: claude` goes to `~/.claude/skills`, and `compatibility: opencode` goes to `~/.config/opencode/skills`.
-- OpenCode loads global skills from `~/.config/opencode/skills`, `~/.claude/skills`, and `~/.agents/skills`, so the same skill name must not be exported to more than one of those roots.
-- Project skills belong beside the codebase: `.agents/skills/<skill>/SKILL.md` for Codex/OpenCode project skills and `.claude/skills/<skill>/SKILL.md` for Claude project skills.
-- Introspect scans those surfaces from `~/.introspect`, `~/.codex`, `~/.claude`, `~/.agents`, `~/.config/opencode`, and project roots; nested project files are shown relative to the nearest project marker.
-
-References used for this hierarchy: [OpenAI Codex AGENTS.md](https://developers.openai.com/codex/guides/agents-md), [OpenAI Codex Skills](https://developers.openai.com/codex/skills), [AGENTS.md](https://agents.md/), [Claude memory](https://code.claude.com/docs/en/memory), [Claude skills](https://code.claude.com/docs/en/skills), [OpenCode rules](https://opencode.ai/docs/rules/), and [OpenCode skills](https://opencode.ai/docs/skills/).
-
-## Learning Layers
-
-Self-evolution should not mean "append everything to the system prompt."
-
-- System prompt: durable behavior that should shape nearly every task.
-- Project prompt: repo-specific facts, decisions, and local working rules.
-- Home memory: durable user preferences, vocabulary, and local machine facts under `~/.introspect/memory`.
-- Skills: repeatable procedures, tool workflows, references, scripts, and assets loaded on demand.
-- Training/adapters: later behavior work only after enough examples and eval gates exist.
-
-Hermes was reviewed as the main reference for this split. The conclusion is in `docs/hermes-self-evolution-review.md`: use its layered memory/skills/curator shape, but do not copy its eager default skill-writing bias or promote any learned behavior without evals and approval/staging.
-
-## Files
-
-- `Package.swift` and `Sources/IntrospectApp/`: native macOS menu bar/settings app.
-- `~/.introspect/AGENTS.md`: Git-tracked user-wide prompt source linked into each agent's native prompt file.
-- `AGENTS.md`: project guidance for developing Introspect itself.
-- `skills/index.json`: skill routing index.
-- `skills/*/SKILL.md`: scoped skill files.
-- `skills/agent-md-creator/SKILL.md`: edits the always-loaded AGENTS.md / CLAUDE.md prompt.
-- `skills/skill-creator/SKILL.md`: creates, updates, prunes, and validates scoped skills.
+- `Sources/IntrospectApp/`: native macOS app and CLI entrypoint.
 - `hooks/trigger-reflect.sh`: prompt hook entrypoint.
-- `hooks/codex-transcript-scan.py`: Codex/Claude transcript scanner backstop.
+- `hooks/codex-transcript-scan.py`: transcript scanner and install backfill.
 - `hooks/trigger-worker.py`: locked background batch worker.
-- `hooks/trigger-stats.sh`: feedback scoreboard by prompt commit.
-- `docs/review-terms.md`: classifier-first wake behavior and optional review-term metadata.
-- `docs/hermes-self-evolution-review.md`: source-backed review of Hermes memory, skill, curator, and training loops.
-- `docs/skill-manager-reference-review.md`: source-backed review of public skill-manager apps and self-improvement tools.
-- `scripts/install-hooks.sh`: installs/uninstalls prompt links and hooks.
-- `scripts/introspect-healthcheck.sh`: launchd health monitor that rechecks and repairs local setup.
-- `scripts/sync-user-skills.sh`: links each `~/.introspect/skills` entry into the one Claude/Codex/OpenCode global skill folder selected by its compatibility metadata.
-- `scripts/build-introspect-app.sh`: builds `.build/Introspect.app`.
-- `scripts/validate-skills.py`: validates the skill index and skill files.
-- `scripts/test-surface-scopes.py`: regression test for global/project prompt and skill surface classification.
-- `scripts/test-reflector-prompt-contract.py`: regression test for reflector global/project/local layer selection.
-- `scripts/test-release-e2e.sh`: packaged-app release smoke test with a fake HOME, install/status/dry-run/uninstall trace, and bundle privacy checks.
-- `scripts/test-user-skill-sync.sh`: regression test for compatibility-aware user skill export.
-- `scripts/test-install-paths.sh`: regression test for the `~/.introspect` install contract.
-- `scripts/test-trigger-words.py`: regression test for the foreground trigger detector.
-- `scripts/introspect-status.sh`: health check for links, hooks, skills, queue, and recent reflector runs.
-- `feedback/`: ignored local queue, stats, and reflector logs for checkout/dev installs; packaged app installs write these under `~/.introspect/feedback`.
+- `hooks/intent_classifier.py`: local wake classifier runtime.
+- `models/`: bundled classifier models.
+- `scripts/install-hooks.sh`: installer for prompt links, hooks, scanner, monitor, and backfill.
+- `scripts/introspect-status.sh`: end-to-end local status check.
+- `scripts/build-introspect-app.sh`: app bundle builder.
+- `scripts/build-dmg.sh`: DMG builder for local release artifacts.
+- `scripts/test-release-e2e.sh`: packaged-app release smoke test.
+- `skills/`: built-in Introspect skills and skill index.
+- `templates/default-AGENTS.md`: default global prompt template seeded into `~/.introspect`.
+- `docs/`: design notes, source reviews, and runtime contracts.
+
+## Privacy
+
+Introspect is local-first:
+
+- it reads local Claude/Codex/OpenCode prompt and transcript files
+- it writes local feedback and run artifacts under `~/.introspect`
+- it uses your installed Claude or Codex CLI only when a reflector run is triggered
+- it does not upload your transcript archive to a Companion server
+- it does not install a default banned-word list
+
+The bundle identifier is `ai.companion.introspect`. That matters for macOS signing, notifications, and Launch Services; it is not the product pitch.
+
+## License
+
+MIT
