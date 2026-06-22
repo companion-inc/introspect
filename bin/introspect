@@ -4,12 +4,14 @@
 from __future__ import annotations
 
 import argparse
+import datetime as dt
 import json
 import os
 import shutil
 import subprocess
 import sys
 import time
+from collections import Counter
 from pathlib import Path
 
 
@@ -53,10 +55,49 @@ def short(value: object, fallback: str = "-") -> str:
     return text or fallback
 
 
-def bar(label: str, value: int, total: int, width: int = 28) -> str:
+def one_line(value: object, fallback: str = "-") -> str:
+    return " ".join(short(value, fallback).split())
+
+
+def terminal_width(default: int = 100) -> int:
+    return shutil.get_terminal_size((default, 40)).columns
+
+
+def bar(label: str, value: int, total: int, width: int = 28, suffix: str = "") -> str:
     total = max(total, 1)
     filled = min(width, int(round(width * value / total)))
-    return f"{label:<14} [{'#' * filled}{'.' * (width - filled)}] {value}"
+    pct = value / total * 100
+    tail = suffix or f"{value} ({pct:.1f}%)"
+    return f"{label:<14} [{'#' * filled}{'.' * (width - filled)}] {tail}"
+
+
+def parse_ts(value: object) -> dt.datetime | None:
+    if not isinstance(value, str) or not value.strip():
+        return None
+    try:
+        parsed = dt.datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=dt.timezone.utc)
+    return parsed.astimezone(dt.timezone.utc)
+
+
+def prompt_links() -> list[tuple[str, Path, bool]]:
+    prompt = DEFAULT_HOME / "AGENTS.md"
+    links = [
+        ("claude", Path.home() / ".claude" / "CLAUDE.md"),
+        ("codex", Path.home() / ".codex" / "AGENTS.md"),
+        ("opencode", Path.home() / ".config" / "opencode" / "AGENTS.md"),
+    ]
+    result = []
+    for label, path in links:
+        try:
+            ok = path.is_symlink() and path.resolve(strict=False) == prompt.resolve(strict=False)
+        except OSError:
+            ok = False
+        result.append((label, path, ok))
+    return result
 
 
 def latest_file(directory: Path, pattern: str) -> Path | None:
@@ -98,8 +139,11 @@ def doctor(args: argparse.Namespace) -> int:
     return 0
 
 
-def load_signal_summary() -> dict[str, int]:
-    events = read_jsonl(DEFAULT_FEEDBACK / "events.jsonl")
+def load_events() -> list[dict]:
+    return read_jsonl(DEFAULT_FEEDBACK / "events.jsonl")
+
+
+def load_signal_summary(events: list[dict]) -> dict[str, int]:
     total = len(events)
     woke = sum(1 for event in events if event.get("triggered"))
     review = sum(1 for event in events if event.get("review_triggered") and not event.get("triggered"))
@@ -114,40 +158,176 @@ def load_signal_summary() -> dict[str, int]:
     }
 
 
+def render_event_trend(events: list[dict], width: int = 32) -> None:
+    print("Trend (last 7 days)")
+    today = dt.datetime.now(dt.timezone.utc).date()
+    days = [today - dt.timedelta(days=offset) for offset in range(6, -1, -1)]
+    by_day: dict[dt.date, Counter] = {day: Counter() for day in days}
+    for event in events:
+        ts = parse_ts(event.get("observed_at") or event.get("ts"))
+        if ts is None or ts.date() not in by_day:
+            continue
+        by_day[ts.date()]["logged"] += 1
+        if event.get("triggered"):
+            by_day[ts.date()]["woke"] += 1
+        elif event.get("review_triggered"):
+            by_day[ts.date()]["review"] += 1
+    max_logged = max([by_day[day]["logged"] for day in days] + [1])
+    for day in days:
+        row = by_day[day]
+        logged_width = int(round(width * row["logged"] / max_logged)) if row["logged"] else 0
+        woke_width = int(round(width * row["woke"] / max_logged)) if row["woke"] else 0
+        review_width = int(round(width * row["review"] / max_logged)) if row["review"] else 0
+        if row["woke"] and woke_width == 0:
+            woke_width = 1
+        if row["review"] and review_width == 0:
+            review_width = 1
+        if row["logged"] and logged_width < woke_width + review_width:
+            logged_width = min(width, woke_width + review_width)
+        rest = max(logged_width - woke_width - review_width, 0)
+        chart = "#" * woke_width + "+" * review_width + "." * rest
+        chart = chart.ljust(width)
+        label = day.strftime("%m-%d")
+        print(f"  {label} [{chart}] logged={row['logged']} woke={row['woke']} review={row['review']}")
+    print("  legend: # woke, + review-only, . logged")
+
+
+def render_score_distribution(events: list[dict], width: int = 24) -> None:
+    buckets = [0, 0, 0, 0, 0]
+    for event in events:
+        classifier = event.get("classifier")
+        if not isinstance(classifier, dict):
+            continue
+        score = classifier.get("score")
+        if not isinstance(score, (int, float)):
+            continue
+        index = min(4, max(0, int(float(score) * 5)))
+        buckets[index] += 1
+    total = max(max(buckets), 1)
+    labels = ["0.0-0.2", "0.2-0.4", "0.4-0.6", "0.6-0.8", "0.8-1.0"]
+    print("Wake Score Distribution")
+    for label, count in zip(labels, buckets):
+        filled = int(round(width * count / total)) if count else 0
+        print(f"  {label} [{'#' * filled}{'.' * (width - filled)}] {count}")
+
+
+def latest_diff_summary() -> tuple[str, list[str]]:
+    path = latest_file(DEFAULT_FEEDBACK / "surface-diffs", "*.json")
+    if path is None:
+        return "none", []
+    payload = read_json(path, {})
+    changes = payload.get("changes", [])
+    lines = [f"{path.name}: changed={payload.get('changed_count', 0)}"]
+    for change in changes[:3] if isinstance(changes, list) else []:
+        if not isinstance(change, dict):
+            continue
+        lines.append(
+            f"{short(change.get('change_type')):<8} {short(change.get('kind')):<12} {short(change.get('display_path'))}"
+        )
+    return str(path), lines
+
+
+def render_queue(queue: list[dict], width: int) -> None:
+    print(f"Queue ({len(queue)})")
+    if not queue:
+        print("  empty")
+        return
+    for event in queue[-4:]:
+        ts = short(event.get("ts") or event.get("observed_at"))
+        source = one_line(event.get("source"))
+        if len(source) > 16:
+            source = source[:15] + "~"
+        score = "-"
+        classifier = event.get("classifier")
+        if isinstance(classifier, dict) and isinstance(classifier.get("score"), (int, float)):
+            score = f"{float(classifier['score']):.2f}"
+        snippet = one_line(event.get("snippet") or event.get("prompt"))
+        prefix = f"  {ts[:19]} {source:<16} score={score:<4} "
+        max_snippet = max(12, width - len(prefix) - 1)
+        if len(snippet) > max_snippet:
+            snippet = snippet[: max_snippet - 3] + "..."
+        print(prefix + snippet)
+
+
+def render_run_summary(batches: list[dict], latest_invocation: dict) -> None:
+    dry_runs = sum(1 for batch in batches if batch.get("dry_run"))
+    total_events = sum(int(batch.get("event_count") or 0) for batch in batches)
+    print("Runs")
+    print(f"  batches          {len(batches)}")
+    print(f"  batched events   {total_events}")
+    print(f"  dry runs         {dry_runs}")
+    print(f"  latest status    {short(latest_invocation.get('status'))}")
+    print(f"  latest runner    {short(latest_invocation.get('runner'))}")
+    print(f"  latest notify    {short(latest_invocation.get('notification_status'))}")
+    if batches:
+        print("  recent")
+        for batch in batches[-4:]:
+            print(
+                f"    {short(batch.get('ts'))[:19]} "
+                f"runner={short(batch.get('runner')):<6} "
+                f"events={short(batch.get('event_count')):<3} "
+                f"dry={bool(batch.get('dry_run'))}"
+            )
+
+
 def render_dashboard() -> None:
     state = read_json(DEFAULT_FEEDBACK / "reflector-state.json", {})
     scan = read_json(DEFAULT_FEEDBACK / "codex-transcript-scan-state.json", {})
     settings = read_json(SETTINGS, {})
-    signal = load_signal_summary()
-    queued = len(read_jsonl(DEFAULT_FEEDBACK / "trigger-queue.jsonl"))
+    events = load_events()
+    batches = read_jsonl(DEFAULT_FEEDBACK / "reflector-batches.jsonl")
+    queue = read_jsonl(DEFAULT_FEEDBACK / "trigger-queue.jsonl")
+    signal = load_signal_summary(events)
+    queued = len(queue)
     lock = (DEFAULT_FEEDBACK / "reflector.lock").exists()
     latest_invocation = state.get("last_invocation") if isinstance(state, dict) else None
     if not isinstance(latest_invocation, dict):
         latest_invocation = {}
+    width = terminal_width()
+    chart_width = max(18, min(36, width - 84))
+    diff_path, diff_lines = latest_diff_summary()
 
     print("Introspect")
-    print("=" * 72)
-    print(f"home       {DEFAULT_HOME}")
-    print(f"runtime    {REPO}")
-    print(f"mode       {short(settings.get('reflect_mode'), 'immediate')}")
-    print(f"runner     {short(settings.get('reflector_runner'), 'default')}")
-    print(f"sensitivity {short(settings.get('wake_sensitivity'), 'balanced')}")
+    print("=" * min(width, 100))
+    print(f"home        {DEFAULT_HOME}")
+    print(f"runtime     {REPO}")
+    print(
+        "config      "
+        f"mode={short(settings.get('reflect_mode'), 'immediate')} "
+        f"runner={short(settings.get('reflector_runner'), 'default')} "
+        f"sensitivity={short(settings.get('wake_sensitivity'), 'balanced')} "
+        f"threshold={short(settings.get('wake_custom_threshold'), 'model')}"
+    )
+    print("links       " + " ".join(f"{label}={'ok' if ok else 'bad'}" for label, _path, ok in prompt_links()))
     print()
     print("Signal")
     total = max(signal["total"], 1)
-    print(bar("logged", signal["total"], total))
-    print(bar("woke", signal["woke"], total))
-    print(bar("review-only", signal["review"], total))
-    print(bar("backfilled", signal["backfilled"], total))
-    print(bar("assistant", signal["assistant"], total))
+    print(bar("logged", signal["total"], total, chart_width, suffix=str(signal["total"])))
+    print(bar("woke", signal["woke"], total, chart_width))
+    print(bar("review-only", signal["review"], total, chart_width))
+    print(bar("backfilled", signal["backfilled"], total, chart_width))
+    print(bar("assistant", signal["assistant"], total, chart_width))
+    print()
+    render_event_trend(events, width=chart_width)
     print()
     print("Runtime")
     print(f"  queued events     {queued}")
     print(f"  worker lock       {'present' if lock else 'clear'}")
+    print(f"  scheduled retry   {short(state.get('scheduled_retry_at') if isinstance(state, dict) else None)}")
     print(f"  last scan         {short(scan.get('last_scan_at'))}")
     print(f"  last backfill     {short(scan.get('last_backfill_at'))}")
     print(f"  latest invocation {short(latest_invocation.get('status'))} via {short(latest_invocation.get('runner'))}")
     print(f"  notification      {short(latest_invocation.get('notification_status'))}")
+    print()
+    render_score_distribution(events, width=chart_width)
+    print()
+    render_run_summary(batches, latest_invocation)
+    print()
+    render_queue(queue, width)
+    print()
+    print("Latest Diff")
+    for line in diff_lines or [f"{diff_path}"]:
+        print(f"  {line}")
     print()
     print("Next")
     print("  introspect install --reflect-mode immediate")
