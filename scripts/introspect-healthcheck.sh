@@ -4,14 +4,7 @@ set -euo pipefail
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 AGENTS_HOME_DIR="${AGENTS_HOME:-$HOME/.agents}"
 INTROSPECT_HOME_DIR="${INTROSPECT_HOME:-$HOME/.introspect}"
-case "$REPO" in
-  *.app/Contents/Resources)
-    DEFAULT_FEEDBACK_DIR="$INTROSPECT_HOME_DIR/feedback"
-    ;;
-  *)
-    DEFAULT_FEEDBACK_DIR="$REPO/feedback"
-    ;;
-esac
+DEFAULT_FEEDBACK_DIR="$INTROSPECT_HOME_DIR/feedback"
 FEEDBACK_DIR="${INTROSPECT_FEEDBACK_DIR:-$DEFAULT_FEEDBACK_DIR}"
 SETTINGS="$INTROSPECT_HOME_DIR/settings.json"
 PROMPT="$INTROSPECT_HOME_DIR/AGENTS.md"

@@ -317,7 +317,7 @@ This repository is private local state for Introspect:
 
 - `AGENTS.md`: the Git-tracked source for the user-wide prompt linked into each agent's native prompt file.
 - `trigger-words.txt`: optional review terms, one lowercase word per line. Introspect does not install defaults.
-- `settings.json`: local app preferences such as notification delivery.
+- `settings.json`: local CLI/runtime preferences such as notification delivery.
 - `skills/`: private user skills.
 - `memory/`: durable user and machine facts.
 - `feedback/`: ignored local trigger queues, logs, and run artifacts.
@@ -486,14 +486,7 @@ if [[ -z "$USER_SKILLS_DIR" ]]; then
 fi
 USER_SKILLS_DIR="$(expand_path "$USER_SKILLS_DIR")"
 if [[ -z "$FEEDBACK_DIR" ]]; then
-  case "$REPO" in
-    *.app/Contents/Resources)
-      FEEDBACK_DIR="$INTROSPECT_HOME_DIR/feedback"
-      ;;
-    *)
-      FEEDBACK_DIR="$REPO/feedback"
-      ;;
-  esac
+  FEEDBACK_DIR="$INTROSPECT_HOME_DIR/feedback"
 fi
 FEEDBACK_DIR="$(expand_path "$FEEDBACK_DIR")"
 
@@ -576,13 +569,7 @@ case "$SETUP_PYTHON" in
     ;;
 esac
 
-case "$REPO" in
-  *.app/Contents/Resources)
-    ;;
-  *)
-    chmod +x "$HOOK" "$WORKER" "$SCANNER" "$MONITOR" "$SKILL_SYNC" "$REPO/hooks/trigger-stats.sh" "$REPO/scripts/introspect-status.sh" "$REPO/scripts/test-trigger-words.py" "$REPO/scripts/test-surface-scopes.py" "$REPO/scripts/test-reflector-prompt-contract.py" "$REPO/scripts/test-user-skill-sync.sh" "$REPO/scripts/test-install-paths.sh"
-    ;;
-esac
+chmod +x "$REPO/bin/introspect" "$HOOK" "$WORKER" "$SCANNER" "$MONITOR" "$SKILL_SYNC" "$REPO/hooks/trigger-stats.sh" "$REPO/scripts/introspect-status.sh" "$REPO/scripts/test-trigger-words.py" "$REPO/scripts/test-surface-scopes.py" "$REPO/scripts/test-reflector-prompt-contract.py" "$REPO/scripts/test-user-skill-sync.sh" "$REPO/scripts/test-install-paths.sh"
 
 if [[ "$MODE" == "install" ]]; then
   remove_old_agents_prompt_bridge
@@ -937,7 +924,7 @@ data = {
         "PATH": launchd_path,
     },
     # Runs once at login to repair setup drift, then stays idle. No polling
-    # timer — the app also self-repairs whenever you open it.
+    # timer.
     "RunAtLoad": True,
     "StandardOutPath": str(Path(feedback_dir) / "healthcheck.out.log"),
     "StandardErrorPath": str(Path(feedback_dir) / "healthcheck.err.log"),

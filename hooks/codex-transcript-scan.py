@@ -37,9 +37,7 @@ PROMPT_PATH = Path(
 
 
 def default_feedback_dir() -> Path:
-    if str(REPO).endswith(".app/Contents/Resources"):
-        return INTROSPECT_HOME / "feedback"
-    return REPO / "feedback"
+    return INTROSPECT_HOME / "feedback"
 
 
 FEEDBACK_DIR = Path(

@@ -43,7 +43,7 @@ def main() -> None:
         base = Path(tmp)
         agents_home = base / ".agents"
         home = base / ".introspect"
-        runtime = base / "Introspect.app" / "Contents" / "Resources"
+        runtime = base / "introspect-runtime"
         project = base / "project"
         (runtime / "skills").mkdir(parents=True)
         (home / "skills").mkdir(parents=True)
@@ -80,7 +80,7 @@ def main() -> None:
             "User skill directory:",
             f"- {user_skills}",
             f"Edit the live global prompt at {prompt_path}",
-            f"do not edit packaged runtime files under {runtime_path}",
+            f"do not edit Introspect runtime files under {runtime_path}",
             "the target repo is the event cwd or the project proven by the transcript",
             "Export each skill to one native global namespace only",
             f"commit in {worker_home}",
@@ -91,7 +91,7 @@ def main() -> None:
 
         roots = worker.surface_scan_roots([event])
         if runtime.resolve() in roots:
-            fail("packaged runtime must not be snapshotted as an editable surface root")
+            fail("CLI runtime must not be snapshotted as an editable surface root for unrelated projects")
         for expected in [home.resolve(), project.resolve()]:
             if expected not in roots:
                 fail(f"missing surface root: {expected}")

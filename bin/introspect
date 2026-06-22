@@ -1,0 +1,328 @@
+#!/usr/bin/env python3
+"""Introspect CLI and terminal dashboard."""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import shutil
+import subprocess
+import sys
+import time
+from pathlib import Path
+
+
+REPO = Path(__file__).resolve().parents[1]
+DEFAULT_HOME = Path(os.environ.get("INTROSPECT_HOME", "~/.introspect")).expanduser()
+DEFAULT_FEEDBACK = Path(os.environ.get("INTROSPECT_FEEDBACK_DIR", str(DEFAULT_HOME / "feedback"))).expanduser()
+SETTINGS = DEFAULT_HOME / "settings.json"
+
+
+def run(cmd: list[str], *, env: dict[str, str] | None = None) -> int:
+    return subprocess.call(cmd, cwd=REPO, env=env or os.environ.copy())
+
+
+def read_json(path: Path, default):
+    try:
+        return json.loads(path.read_text())
+    except Exception:
+        return default
+
+
+def read_jsonl(path: Path) -> list[dict]:
+    rows: list[dict] = []
+    try:
+        lines = path.read_text(errors="replace").splitlines()
+    except OSError:
+        return rows
+    for line in lines:
+        if not line.strip():
+            continue
+        try:
+            row = json.loads(line)
+        except Exception:
+            continue
+        if isinstance(row, dict):
+            rows.append(row)
+    return rows
+
+
+def short(value: object, fallback: str = "-") -> str:
+    text = str(value or "").strip()
+    return text or fallback
+
+
+def bar(label: str, value: int, total: int, width: int = 28) -> str:
+    total = max(total, 1)
+    filled = min(width, int(round(width * value / total)))
+    return f"{label:<14} [{'#' * filled}{'.' * (width - filled)}] {value}"
+
+
+def latest_file(directory: Path, pattern: str) -> Path | None:
+    try:
+        candidates = [path for path in directory.glob(pattern) if path.is_file()]
+    except OSError:
+        return None
+    if not candidates:
+        return None
+    return max(candidates, key=lambda path: path.stat().st_mtime)
+
+
+def install(args: argparse.Namespace) -> int:
+    cmd = [str(REPO / "scripts" / "install-hooks.sh")]
+    cmd.extend(args.install_args)
+    return run(cmd)
+
+
+def uninstall(_args: argparse.Namespace) -> int:
+    return run([str(REPO / "scripts" / "install-hooks.sh"), "--uninstall"])
+
+
+def status(_args: argparse.Namespace) -> int:
+    return run([str(REPO / "scripts" / "introspect-status.sh")])
+
+
+def doctor(args: argparse.Namespace) -> int:
+    code = status(args)
+    if code != 0:
+        return code
+    print()
+    print("doctor:")
+    for name in ["claude", "codex", "opencode"]:
+        found = shutil.which(name)
+        print(f"  {name:<8} {found or 'not found'}")
+    print(f"  runtime  {REPO}")
+    print(f"  home     {DEFAULT_HOME}")
+    print(f"  feedback {DEFAULT_FEEDBACK}")
+    return 0
+
+
+def load_signal_summary() -> dict[str, int]:
+    events = read_jsonl(DEFAULT_FEEDBACK / "events.jsonl")
+    total = len(events)
+    woke = sum(1 for event in events if event.get("triggered"))
+    review = sum(1 for event in events if event.get("review_triggered") and not event.get("triggered"))
+    backfilled = sum(1 for event in events if event.get("backfilled"))
+    assistant = sum(1 for event in events if event.get("role") == "assistant")
+    return {
+        "total": total,
+        "woke": woke,
+        "review": review,
+        "backfilled": backfilled,
+        "assistant": assistant,
+    }
+
+
+def render_dashboard() -> None:
+    state = read_json(DEFAULT_FEEDBACK / "reflector-state.json", {})
+    scan = read_json(DEFAULT_FEEDBACK / "codex-transcript-scan-state.json", {})
+    settings = read_json(SETTINGS, {})
+    signal = load_signal_summary()
+    queued = len(read_jsonl(DEFAULT_FEEDBACK / "trigger-queue.jsonl"))
+    lock = (DEFAULT_FEEDBACK / "reflector.lock").exists()
+    latest_invocation = state.get("last_invocation") if isinstance(state, dict) else None
+    if not isinstance(latest_invocation, dict):
+        latest_invocation = {}
+
+    print("Introspect")
+    print("=" * 72)
+    print(f"home       {DEFAULT_HOME}")
+    print(f"runtime    {REPO}")
+    print(f"mode       {short(settings.get('reflect_mode'), 'immediate')}")
+    print(f"runner     {short(settings.get('reflector_runner'), 'default')}")
+    print(f"sensitivity {short(settings.get('wake_sensitivity'), 'balanced')}")
+    print()
+    print("Signal")
+    total = max(signal["total"], 1)
+    print(bar("logged", signal["total"], total))
+    print(bar("woke", signal["woke"], total))
+    print(bar("review-only", signal["review"], total))
+    print(bar("backfilled", signal["backfilled"], total))
+    print(bar("assistant", signal["assistant"], total))
+    print()
+    print("Runtime")
+    print(f"  queued events     {queued}")
+    print(f"  worker lock       {'present' if lock else 'clear'}")
+    print(f"  last scan         {short(scan.get('last_scan_at'))}")
+    print(f"  last backfill     {short(scan.get('last_backfill_at'))}")
+    print(f"  latest invocation {short(latest_invocation.get('status'))} via {short(latest_invocation.get('runner'))}")
+    print(f"  notification      {short(latest_invocation.get('notification_status'))}")
+    print()
+    print("Next")
+    print("  introspect install --reflect-mode immediate")
+    print("  introspect status")
+    print("  introspect runs")
+    print("  introspect diff")
+    print("  introspect config --sensitivity sensitive --runner codex")
+
+
+def dashboard(args: argparse.Namespace) -> int:
+    while True:
+        if args.watch:
+            print("\033[2J\033[H", end="")
+        render_dashboard()
+        if not args.watch:
+            return 0
+        print()
+        print("Refreshing. Press Ctrl-C to quit.")
+        try:
+            time.sleep(args.interval)
+        except KeyboardInterrupt:
+            print()
+            return 0
+
+
+def runs(args: argparse.Namespace) -> int:
+    batches = read_jsonl(DEFAULT_FEEDBACK / "reflector-batches.jsonl")
+    state = read_json(DEFAULT_FEEDBACK / "reflector-state.json", {})
+    latest_invocation = state.get("last_invocation") if isinstance(state, dict) else None
+    if isinstance(latest_invocation, dict):
+        print("latest invocation:")
+        print(f"  status   {short(latest_invocation.get('status'))}")
+        print(f"  runner   {short(latest_invocation.get('runner'))}")
+        print(f"  events   {short(latest_invocation.get('event_count'))}")
+        print(f"  notify   {short(latest_invocation.get('notification_status'))}")
+        print(f"  prompt   {short(latest_invocation.get('prompt_path'))}")
+        print(f"  diff     {short(latest_invocation.get('surface_diff_path'))}")
+        print()
+    if not batches:
+        print("No reflector runs recorded yet.")
+        return 0
+    print(f"recent runs ({min(args.limit, len(batches))} of {len(batches)}):")
+    for batch in batches[-args.limit :]:
+        print(
+            f"  {short(batch.get('ts'))} "
+            f"runner={short(batch.get('runner'))} "
+            f"events={short(batch.get('event_count'))} "
+            f"dry_run={bool(batch.get('dry_run'))}"
+        )
+        if batch.get("surface_diff_path"):
+            print(f"    diff: {batch.get('surface_diff_path')}")
+    return 0
+
+
+def diff(args: argparse.Namespace) -> int:
+    path = Path(args.path).expanduser() if args.path else latest_file(DEFAULT_FEEDBACK / "surface-diffs", "*.json")
+    if path is None or not path.exists():
+        print("No surface diff recorded yet.")
+        return 0
+    payload = read_json(path, {})
+    print(f"diff: {path}")
+    print(f"changed: {payload.get('changed_count', 0)}")
+    for change in payload.get("changes", []):
+        if not isinstance(change, dict):
+            continue
+        print()
+        print(f"--- {short(change.get('change_type'))}: {short(change.get('display_path'))}")
+        text = str(change.get("diff") or "")
+        if args.summary:
+            for line in text.splitlines()[:12]:
+                print(line)
+            if len(text.splitlines()) > 12:
+                print("...")
+        else:
+            print(text)
+    return 0
+
+
+def config(args: argparse.Namespace) -> int:
+    updates = {
+        "--reflect-mode": args.mode,
+        "--runner": args.runner,
+        "--wake-sensitivity": args.sensitivity,
+        "--wake-threshold": args.threshold,
+        "--nightly-hour": args.nightly_hour,
+        "--nightly-minute": args.nightly_minute,
+        "--claude-model": args.claude_model,
+        "--claude-fallback-model": args.claude_fallback_model,
+        "--codex-model": args.codex_model,
+    }
+    install_args: list[str] = []
+    for flag, value in updates.items():
+        if value is not None:
+            install_args.extend([flag, str(value)])
+    if install_args:
+        install_args.append("--no-backfill")
+        return run([str(REPO / "scripts" / "install-hooks.sh"), *install_args])
+    settings = read_json(SETTINGS, {})
+    print(json.dumps(settings, indent=2, sort_keys=True))
+    return 0
+
+
+def notify(args: argparse.Namespace) -> int:
+    script = (
+        'on run argv\n'
+        '  display notification (item 2 of argv) with title (item 1 of argv)\n'
+        'end run\n'
+    )
+    result = subprocess.run(["osascript", "-e", script, args.title, args.message], check=False)
+    return result.returncode
+
+
+def main(argv: list[str] | None = None) -> int:
+    raw_argv = list(sys.argv[1:] if argv is None else argv)
+    if raw_argv and raw_argv[0] == "install":
+        return install(argparse.Namespace(install_args=raw_argv[1:]))
+
+    parser = argparse.ArgumentParser(prog="introspect")
+    parser.add_argument("--version", action="store_true", help="print the runtime commit")
+    sub = parser.add_subparsers(dest="command")
+
+    install_parser = sub.add_parser("install", help="install prompt links, hooks, scanner, and backfill")
+    install_parser.add_argument("install_args", nargs=argparse.REMAINDER)
+    install_parser.set_defaults(func=install)
+
+    uninstall_parser = sub.add_parser("uninstall", help="remove hooks, scanner, monitor, and prompt links")
+    uninstall_parser.set_defaults(func=uninstall)
+
+    status_parser = sub.add_parser("status", help="print setup and runtime status")
+    status_parser.set_defaults(func=status)
+
+    doctor_parser = sub.add_parser("doctor", help="status plus local tool/runtime checks")
+    doctor_parser.set_defaults(func=doctor)
+
+    dash_parser = sub.add_parser("dashboard", help="show the terminal dashboard")
+    dash_parser.add_argument("--watch", action="store_true", help="refresh until Ctrl-C")
+    dash_parser.add_argument("--interval", type=float, default=3.0)
+    dash_parser.set_defaults(func=dashboard)
+
+    runs_parser = sub.add_parser("runs", help="show recent reflector runs")
+    runs_parser.add_argument("-n", "--limit", type=int, default=12)
+    runs_parser.set_defaults(func=runs)
+
+    diff_parser = sub.add_parser("diff", help="show the latest agent-surface diff")
+    diff_parser.add_argument("path", nargs="?")
+    diff_parser.add_argument("--summary", action="store_true")
+    diff_parser.set_defaults(func=diff)
+
+    config_parser = sub.add_parser("config", help="print or apply runtime config")
+    config_parser.add_argument("--mode", choices=["immediate", "nightly", "off"])
+    config_parser.add_argument("--runner", choices=["default", "claude", "codex"])
+    config_parser.add_argument("--sensitivity", choices=["quiet", "balanced", "sensitive", "custom"])
+    config_parser.add_argument("--threshold")
+    config_parser.add_argument("--nightly-hour")
+    config_parser.add_argument("--nightly-minute")
+    config_parser.add_argument("--claude-model")
+    config_parser.add_argument("--claude-fallback-model")
+    config_parser.add_argument("--codex-model")
+    config_parser.set_defaults(func=config)
+
+    notify_parser = sub.add_parser("notify", help="send a best-effort macOS notification")
+    notify_parser.add_argument("title")
+    notify_parser.add_argument("message")
+    notify_parser.set_defaults(func=notify)
+
+    args = parser.parse_args(argv)
+    if args.version:
+        subprocess.call(["git", "-C", str(REPO), "rev-parse", "--short", "HEAD"])
+        return 0
+    if not hasattr(args, "func"):
+        args.watch = False
+        args.interval = 3.0
+        return dashboard(args)
+    return int(args.func(args))
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

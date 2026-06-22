@@ -319,7 +319,7 @@ def run_shadow_model_case() -> None:
 def run_prompt_version_case() -> None:
     with tempfile.TemporaryDirectory(prefix="introspect-version-") as tmp_raw:
         tmp = Path(tmp_raw)
-        runtime = tmp / "Introspect.app" / "Contents" / "Resources"
+        runtime = tmp / "introspect-runtime"
         runtime.mkdir(parents=True)
         home = tmp / ".introspect"
         home.mkdir()

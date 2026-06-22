@@ -36,16 +36,14 @@ USER_SKILLS_DIR = Path(
 
 
 def is_packaged_runtime(path: Path) -> bool:
-    return str(path).endswith(".app/Contents/Resources")
+    return False
 
 
 REFLECTOR_CWD = INTROSPECT_HOME
 
 
 def default_feedback_dir() -> Path:
-    if is_packaged_runtime(REPO):
-        return INTROSPECT_HOME / "feedback"
-    return REPO / "feedback"
+    return INTROSPECT_HOME / "feedback"
 
 
 FEEDBACK_DIR = Path(
@@ -192,8 +190,6 @@ def notification_helper() -> Path | None:
     configured = os.environ.get("INTROSPECT_NOTIFICATION_HELPER")
     if configured:
         candidates.append(Path(os.path.expanduser(configured)))
-    candidates.append(Path("/Applications/Introspect.app/Contents/MacOS/Introspect"))
-    candidates.append(REPO / ".build" / "Introspect.app" / "Contents" / "MacOS" / "Introspect")
 
     for candidate in candidates:
         if candidate.is_file() and os.access(candidate, os.X_OK):
@@ -247,21 +243,45 @@ def app_notifications_allowed(helper: Path) -> bool:
     return False
 
 
+def notify_with_osascript(title: str, message: str) -> bool:
+    if not shutil.which("osascript"):
+        log("notification skipped: osascript is not installed")
+        return False
+    script = (
+        "on run argv\n"
+        "  display notification (item 2 of argv) with title (item 1 of argv)\n"
+        "end run\n"
+    )
+    try:
+        result = subprocess.run(
+            ["osascript", "-e", script, title, message],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=False,
+        )
+    except Exception as exc:
+        log(f"osascript notification failed: {exc!r}")
+        return False
+    if result.returncode == 0:
+        log("notification delivered through osascript")
+        return True
+    output = (result.stderr or result.stdout or "").strip()
+    log(f"osascript notification exited {result.returncode}: {output[:500]}")
+    return False
+
+
 def notify(title: str, message: str) -> str:
     if not notifications_enabled():
         return "disabled"
 
     helper = notification_helper()
-    if not helper:
-        log("notification skipped: Introspect.app is not installed")
-        return "helper_missing"
-    if not app_notifications_allowed(helper):
-        log("notification skipped: Introspect.app is not allowed to send notifications (enable it in System Settings > Notifications)")
-        return "blocked_by_macos"
-    if notify_with_app(title, message, helper):
-        log("notification delivered through Introspect.app")
+    if helper and app_notifications_allowed(helper) and notify_with_app(title, message, helper):
+        log("notification delivered through configured helper")
         return "delivered"
-    log("notification failed: Introspect.app is allowed but posting did not succeed")
+    if notify_with_osascript(title, message):
+        return "delivered"
+    log("notification failed")
     return "failed"
 
 
@@ -281,7 +301,16 @@ def trigger_words_text(events: list[dict]) -> str:
 
 def surface_scan_roots(events: list[dict] | None = None) -> list[Path]:
     home = Path.home()
-    runtime_roots = [] if is_packaged_runtime(REPO) else [REPO]
+    runtime_roots: list[Path] = []
+    repo_resolved = REPO.expanduser().resolve(strict=False)
+    for event in events or []:
+        cwd = event.get("cwd")
+        if not isinstance(cwd, str) or not cwd.strip():
+            continue
+        cwd_resolved = Path(os.path.expanduser(cwd.strip())).resolve(strict=False)
+        if cwd_resolved == repo_resolved or repo_resolved in cwd_resolved.parents:
+            runtime_roots = [REPO]
+            break
     roots = runtime_roots + [
         INTROSPECT_HOME,
         home / ".codex",
@@ -978,7 +1007,7 @@ Workflow:
 1. Read the exact message identified by message_locator / transcript_path + transcript_line when present, then the surrounding recent turns for that transcript/session. Identify the agent behavior that caused the trigger, not the wording of the user's message. The snippet is only a preview. A codex://threads/<id> link is local evidence, not an inaccessible external URL; use available local tooling to resolve it, and log the missing resolver when no resolver exists.
 2. Run {REPO}/hooks/trigger-stats.sh and compare the current prompt version against prior versions.
 3. Classify the change target as exactly one of: no_change, core_prompt, project_prompt, home_memory, skill_new, skill_update, project_skill_new, project_skill_update, skill_prune.
-    4. Use core_prompt only for an always-loaded invariant that should apply across nearly every task. Edit the live global prompt at {PROMPT_PATH}; do not edit packaged runtime files under {REPO}. Before editing the global prompt, read {SKILLS_DIR}/agent-md-creator/SKILL.md for placement and {SKILLS_DIR}/writing-agent-prompt/SKILL.md for wording, then verify with a realistic response probe drawn from the failure transcript.
+    4. Use core_prompt only for an always-loaded invariant that should apply across nearly every task. Edit the live global prompt at {PROMPT_PATH}; do not edit Introspect runtime files under {REPO} unless the source thread is about Introspect itself. Before editing the global prompt, read {SKILLS_DIR}/agent-md-creator/SKILL.md for placement and {SKILLS_DIR}/writing-agent-prompt/SKILL.md for wording, then verify with a realistic response probe drawn from the failure transcript.
     5. Use project_prompt for repo-specific behavior. Create or update the target repo's AGENTS.md for shared guidance; the target repo is the event cwd or the project proven by the transcript, not the Introspect runtime repo unless the failure is about Introspect itself. Create CLAUDE.md as a symlink to AGENTS.md when no Claude-only additions exist; use a real CLAUDE.md with @AGENTS.md only when Claude needs extra project guidance. Use CLAUDE.local.md for private project notes.
     6. Use home_memory for durable facts, preferences, user vocabulary, or machine/project state that should be remembered but should not change agent behavior globally. Write it under {INTROSPECT_HOME}/memory only when it is directly supported by the transcript.
 7. Use skill_new or skill_update only for repeatable procedures, tool workflows, domain references, scripts, or assets that future agents should load on demand. Do not create a skill from one noisy event unless it captures a recurring workflow or a corrected procedure that will likely repeat.

@@ -8,7 +8,7 @@ from pathlib import Path
 
 
 REPO = Path(__file__).resolve().parents[1]
-SOURCE = REPO / "Sources" / "IntrospectApp" / "IntrospectApp.swift"
+SOURCE = REPO / "hooks" / "trigger-worker.py"
 
 
 def fail(message: str) -> None:
@@ -22,14 +22,14 @@ def contains_path(path: Path, root: Path) -> bool:
 
 
 class SurfaceHarness:
-    def __init__(self, home: Path, introspect_home: Path, repo: Path, bundled: bool = True):
+    def __init__(self, home: Path, introspect_home: Path, repo: Path, include_runtime: bool = False):
         self.home = home
         self.introspect_home = introspect_home
         self.repo = repo
-        self.bundled = bundled
+        self.include_runtime = include_runtime
 
     def scan_roots(self) -> list[Path]:
-        runtime_roots = [] if self.bundled else [self.repo]
+        runtime_roots = [self.repo] if self.include_runtime else []
         return runtime_roots + [
             self.introspect_home,
             self.home / "Projects",
@@ -54,7 +54,6 @@ class SurfaceHarness:
     def is_project_root(self, path: Path) -> bool:
         marker_files = [
             ".git",
-            "Package.swift",
             "package.json",
             "pyproject.toml",
             "Cargo.toml",
@@ -152,24 +151,14 @@ def assert_source_contract() -> None:
         return
     source = SOURCE.read_text(encoding="utf-8")
     required = [
-        '["AGENTS.md", "AGENTS.override.md", "CLAUDE.md", "CLAUDE.local.md"]',
-        'url.path.contains("/.claude/rules/")',
-        'url.lastPathComponent == "SKILL.md" && url.path.contains("/skills/")',
-        'for globalDirectory in [".codex", ".claude", ".agents"]',
-        '"Package.swift"',
-        '"package.json"',
-        '"pyproject.toml"',
-        '"Cargo.toml"',
-        'path.contains("/.agents/skills/")',
-        'path.contains("/.claude/skills/")',
-        'path.contains("/.opencode/skills/")',
-        'path.hasPrefix(homePath + "/.agents/skills/")',
-        'path.hasPrefix(homePath + "/.claude/skills/")',
-        'path.hasPrefix(homePath + "/.config/opencode/skills/")',
-        'homeURL.appendingPathComponent(".config/opencode")',
-        'shouldSkipSurfaceDirectory(entry)',
-        'homeURL.appendingPathComponent(".codex/skills")',
-        'String(path.dropFirst(rootPath.count + 1))',
+        '{"AGENTS.md", "AGENTS.override.md", "CLAUDE.md", "CLAUDE.local.md"}',
+        'path_contains(path, (".claude", "rules"))',
+        'name == "SKILL.md" and "skills" in path.parts',
+        'home / ".config" / "opencode"',
+        'should_skip_surface_directory(entry)',
+        'home / ".codex"',
+        'home / ".claude"',
+        'home / ".agents"',
     ]
     for needle in required:
         if needle not in source:

@@ -72,21 +72,9 @@ if [[ -n "${INTROSPECT_FEEDBACK_DIR:-}" ]]; then
 elif [[ -n "$CONFIGURED_FEEDBACK_DIR" ]]; then
   FEEDBACK_DIR="$CONFIGURED_FEEDBACK_DIR"
 else
-  case "$RUNTIME_REPO" in
-    *.app/Contents/Resources)
-      FEEDBACK_DIR="$INTROSPECT_HOME_DIR/feedback"
-      ;;
-    *)
-      FEEDBACK_DIR="$RUNTIME_REPO/feedback"
-      ;;
-  esac
+  FEEDBACK_DIR="$INTROSPECT_HOME_DIR/feedback"
 fi
-BUILT_NOTIFICATION_HELPER="$REPO/.build/Introspect.app/Contents/MacOS/Introspect"
-INSTALLED_NOTIFICATION_HELPER="/Applications/Introspect.app/Contents/MacOS/Introspect"
-NOTIFICATION_HELPER="$BUILT_NOTIFICATION_HELPER"
-if [[ -x "$INSTALLED_NOTIFICATION_HELPER" ]]; then
-  NOTIFICATION_HELPER="$INSTALLED_NOTIFICATION_HELPER"
-fi
+NOTIFICATION_COMMAND="$(command -v osascript || true)"
 
 check_link() {
   local label="$1"
@@ -291,21 +279,10 @@ elif [[ "$notify_setting" == "disabled" ]]; then
 else
   printf "ok   reflector notifications enabled in %s\n" "$HOME_SETTINGS"
 fi
-if [[ -x "$NOTIFICATION_HELPER" ]]; then
-  helper_status="$("$NOTIFICATION_HELPER" --notification-status 2>/dev/null | head -n 1 || true)"
-  case "$helper_status" in
-    "allowed by macOS"|"delivered quietly by macOS"|"temporarily allowed by macOS")
-      printf "ok   notifications post through Introspect.app -> %s\n" "$NOTIFICATION_HELPER"
-      ;;
-    "not requested yet")
-      printf "warn Introspect.app notification permission not requested yet -> %s\n" "$NOTIFICATION_HELPER"
-      ;;
-    *)
-      printf "warn Introspect.app notification helper blocked by macOS (%s)\n" "${helper_status:-unknown}"
-      ;;
-  esac
+if [[ -n "$NOTIFICATION_COMMAND" ]]; then
+  printf "ok   notifications post through osascript -> %s\n" "$NOTIFICATION_COMMAND"
 else
-  printf "warn Introspect.app notification helper missing\n"
+  printf "warn osascript missing; reflector notifications will be skipped\n"
 fi
 
 printf "\nskills:\n"

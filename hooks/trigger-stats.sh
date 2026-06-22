@@ -21,9 +21,7 @@ PROMPT_PATH = Path(
 
 
 def default_feedback_dir():
-    if REPO.endswith(".app/Contents/Resources"):
-        return os.path.join(INTROSPECT_HOME, "feedback")
-    return os.path.join(REPO, "feedback")
+    return os.path.join(INTROSPECT_HOME, "feedback")
 
 
 EVENTS = os.path.expanduser(os.environ.get("INTROSPECT_FEEDBACK_DIR", default_feedback_dir()))

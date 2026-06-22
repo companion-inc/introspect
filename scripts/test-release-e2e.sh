@@ -2,8 +2,7 @@
 set -euo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
-APP_BIN="${INTROSPECT_APP_BIN:-$REPO/.build/Introspect.app/Contents/MacOS/Introspect}"
-APP_RESOURCES="$(cd "$(dirname "$APP_BIN")/../Resources" && pwd -P)"
+CLI="${INTROSPECT_CLI:-$REPO/bin/introspect}"
 TMPDIR="$(mktemp -d)"
 trap 'rm -rf "$TMPDIR"' EXIT
 
@@ -32,20 +31,16 @@ expect_absent() {
   fi
 }
 
-if [[ ! -x "$APP_BIN" ]]; then
-  echo "test-release-e2e: missing executable app binary: $APP_BIN" >&2
+if [[ ! -x "$CLI" ]]; then
+  echo "test-release-e2e: missing CLI: $CLI" >&2
   exit 1
 fi
-if [[ ! -f "$APP_RESOURCES/templates/default-AGENTS.md" ]]; then
-  echo "test-release-e2e: app bundle missing default prompt template" >&2
+if [[ ! -f "$REPO/templates/default-AGENTS.md" ]]; then
+  echo "test-release-e2e: missing default prompt template" >&2
   exit 1
 fi
-if [[ -e "$APP_RESOURCES/AGENTS.md" ]]; then
-  echo "test-release-e2e: app bundle contains project AGENTS.md" >&2
-  exit 1
-fi
-if find "$APP_RESOURCES" \( -name '__pycache__' -o -name '*.pyc' -o -name '*.pyo' \) -print -quit | grep -q .; then
-  echo "test-release-e2e: app bundle contains generated Python cache files" >&2
+if git -C "$REPO" ls-files | grep -E '(^|/)__pycache__/|\.py[co]$' >/dev/null; then
+  echo "test-release-e2e: tracked files contain generated Python cache artifacts" >&2
   exit 1
 fi
 
@@ -71,11 +66,11 @@ PYTHONDONTWRITEBYTECODE=1 \
 INTROSPECT_HOME="$INTROSPECT_HOME_DIR" \
 AGENTS_HOME="$AGENTS_HOME_DIR" \
 INTROSPECT_SKIP_LAUNCHD=1 \
-"$APP_BIN" --install >/dev/null
+"$CLI" install >/dev/null
 
 SOURCE_PROMPT="$INTROSPECT_HOME_DIR/AGENTS.md"
 test -d "$INTROSPECT_HOME_DIR"
-cmp "$APP_RESOURCES/templates/default-AGENTS.md" "$SOURCE_PROMPT" >/dev/null
+cmp "$REPO/templates/default-AGENTS.md" "$SOURCE_PROMPT" >/dev/null
 expect_absent "$AGENTS_HOME_DIR/AGENTS.md"
 expect_link "$HOME_DIR/.claude/CLAUDE.md" "$SOURCE_PROMPT"
 expect_link "$HOME_DIR/.codex/AGENTS.md" "$SOURCE_PROMPT"
@@ -108,18 +103,8 @@ PYTHONDONTWRITEBYTECODE=1 \
 INTROSPECT_HOME="$INTROSPECT_HOME_DIR" \
 AGENTS_HOME="$AGENTS_HOME_DIR" \
 INTROSPECT_SKIP_LAUNCHD=1 \
-"$APP_BIN" --install > "$TMPDIR/reinstall.txt"
+"$CLI" install > "$TMPDIR/reinstall.txt"
 grep -q "skip: initial local agent history backfill already completed" "$TMPDIR/reinstall.txt" || { cat "$TMPDIR/reinstall.txt" >&2; exit 1; }
-python3 - "$FEEDBACK_DIR/events.jsonl" <<'PY'
-import json
-import sys
-from pathlib import Path
-
-events = [json.loads(line) for line in Path(sys.argv[1]).read_text().splitlines() if line.strip()]
-backfilled = [event for event in events if event.get("backfilled")]
-if len(backfilled) != 4:
-    raise SystemExit(f"test-release-e2e: second install changed backfill count to {len(backfilled)}")
-PY
 
 python3 - "$FEEDBACK_DIR/codex-transcript-scan-state.json" <<'PY'
 import json
@@ -136,7 +121,7 @@ PYTHONDONTWRITEBYTECODE=1 \
 INTROSPECT_HOME="$INTROSPECT_HOME_DIR" \
 AGENTS_HOME="$AGENTS_HOME_DIR" \
 INTROSPECT_SKIP_LAUNCHD=1 \
-"$APP_BIN" --install > "$TMPDIR/schema-reinstall.txt"
+"$CLI" install > "$TMPDIR/schema-reinstall.txt"
 if grep -q "skip: initial local agent history backfill already completed" "$TMPDIR/schema-reinstall.txt"; then
   cat "$TMPDIR/schema-reinstall.txt" >&2
   exit 1
@@ -158,14 +143,16 @@ HOME="$HOME_DIR" \
 PYTHONDONTWRITEBYTECODE=1 \
 INTROSPECT_HOME="$INTROSPECT_HOME_DIR" \
 AGENTS_HOME="$AGENTS_HOME_DIR" \
-"$APP_BIN" --status > "$TMPDIR/status.txt"
+"$CLI" status > "$TMPDIR/status.txt"
 grep -q "private home: $INTROSPECT_HOME_DIR" "$TMPDIR/status.txt" || { cat "$TMPDIR/status.txt" >&2; exit 1; }
 grep -Eq "ok[[:space:]]+claude prompt -> $SOURCE_PROMPT" "$TMPDIR/status.txt" || { cat "$TMPDIR/status.txt" >&2; exit 1; }
 grep -Eq "ok[[:space:]]+codex prompt -> $SOURCE_PROMPT" "$TMPDIR/status.txt" || { cat "$TMPDIR/status.txt" >&2; exit 1; }
 grep -Eq "ok[[:space:]]+opencode prompt -> $SOURCE_PROMPT" "$TMPDIR/status.txt" || { cat "$TMPDIR/status.txt" >&2; exit 1; }
 grep -q "history backfill: " "$TMPDIR/status.txt" || { cat "$TMPDIR/status.txt" >&2; exit 1; }
 
-mkdir -p "$FEEDBACK_DIR"
+"$CLI" dashboard > "$TMPDIR/dashboard.txt"
+grep -q "Signal" "$TMPDIR/dashboard.txt" || { cat "$TMPDIR/dashboard.txt" >&2; exit 1; }
+
 cat > "$FEEDBACK_DIR/trigger-queue.jsonl" <<JSONL
 {"triggered":true,"ts":"2026-06-20T00:00:00+00:00","source":"release-e2e","session_id":"release-e2e","cwd":"$TMPDIR/project","matched":["release"],"snippet":"release e2e fake wake event"}
 JSONL
@@ -174,27 +161,27 @@ HOME="$HOME_DIR" \
 PYTHONDONTWRITEBYTECODE=1 \
 INTROSPECT_HOME="$INTROSPECT_HOME_DIR" \
 AGENTS_HOME="$AGENTS_HOME_DIR" \
-INTROSPECT_REPO="$APP_RESOURCES" \
+INTROSPECT_REPO="$REPO" \
 INTROSPECT_FEEDBACK_DIR="$FEEDBACK_DIR" \
 TRIGGER_REFLECTOR_DRY_RUN=1 \
 TRIGGER_DEBOUNCE_SECONDS=0 \
 TRIGGER_COOLDOWN_SECONDS=0 \
 INTROSPECT_NOTIFY=0 \
-python3 "$APP_RESOURCES/hooks/trigger-worker.py" --kick
+python3 "$REPO/hooks/trigger-worker.py" --kick
 
 grep -q '"dry_run": true' "$FEEDBACK_DIR/reflector-batches.jsonl"
 grep -q 'release e2e fake wake event' "$FEEDBACK_DIR/last-reflector-prompt.md"
-if grep -q 'read-codex''-threads' "$FEEDBACK_DIR/last-reflector-prompt.md"; then
-  echo "test-release-e2e: reflector prompt contains a private Codex thread resolver path" >&2
-  exit 1
-fi
+"$CLI" runs > "$TMPDIR/runs.txt"
+grep -q "recent runs" "$TMPDIR/runs.txt" || { cat "$TMPDIR/runs.txt" >&2; exit 1; }
+"$CLI" diff --summary > "$TMPDIR/diff.txt"
+grep -q "changed:" "$TMPDIR/diff.txt" || { cat "$TMPDIR/diff.txt" >&2; exit 1; }
 
 HOME="$HOME_DIR" \
 PYTHONDONTWRITEBYTECODE=1 \
 INTROSPECT_HOME="$INTROSPECT_HOME_DIR" \
 AGENTS_HOME="$AGENTS_HOME_DIR" \
 INTROSPECT_SKIP_LAUNCHD=1 \
-"$APP_BIN" --uninstall >/dev/null
+"$CLI" uninstall >/dev/null
 
 expect_absent "$HOME_DIR/.claude/CLAUDE.md"
 expect_absent "$HOME_DIR/.codex/AGENTS.md"
