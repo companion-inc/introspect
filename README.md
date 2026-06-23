@@ -12,16 +12,24 @@ Introspect is local-first. Prompts, transcript-derived events, model scores, que
 curl -fsSL https://raw.githubusercontent.com/companion-inc/introspect/main/install.sh | bash
 ```
 
-Then start the terminal dashboard:
+Then run it:
 
 ```bash
 introspect
 ```
 
-Install hooks:
+On a fresh machine the first run is a guided setup. It shows what Introspect
+does, scans your local Claude/Codex history and reports how many past
+conversations it found, then (with your confirmation) links your agent
+prompts, installs the hooks and transcript watcher, and analyzes recent
+history to calibrate the wake detector. After setup, `introspect` opens the
+dashboard.
+
+Prefer a non-interactive install (CI, scripts, dotfiles)?
 
 ```bash
-introspect install
+introspect install            # scriptable, no prompts
+introspect onboard --yes      # the guided flow, auto-confirmed
 ```
 
 Check health:
@@ -34,7 +42,8 @@ introspect doctor
 ## CLI
 
 ```bash
-introspect                    # terminal dashboard
+introspect                    # guided setup on first run, dashboard after
+introspect onboard            # re-run the guided setup walkthrough
 introspect dashboard --watch  # live dashboard refresh
 introspect install            # prompt links, hooks, scanner, monitor, backfill
 introspect status             # setup and runtime status
@@ -42,6 +51,7 @@ introspect doctor             # status plus local tool checks
 introspect runs               # recent reflector runs
 introspect diff               # latest AGENTS/CLAUDE/skill diff
 introspect config             # print runtime settings
+introspect run                # run Introspect on recent transcript changes
 introspect uninstall          # remove hooks, scanner, monitor, prompt links
 ```
 
@@ -50,6 +60,7 @@ Examples:
 ```bash
 introspect install --reflect-mode immediate --runner codex
 introspect config --sensitivity sensitive --runner codex
+introspect run --host codex --event manual --force
 introspect runs -n 20
 introspect diff --summary
 ```

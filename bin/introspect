@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import datetime as dt
+import hashlib
 import json
 import os
 import shutil
@@ -19,6 +20,11 @@ REPO = Path(__file__).resolve().parents[1]
 DEFAULT_HOME = Path(os.environ.get("INTROSPECT_HOME", "~/.introspect")).expanduser()
 DEFAULT_FEEDBACK = Path(os.environ.get("INTROSPECT_FEEDBACK_DIR", str(DEFAULT_HOME / "feedback"))).expanduser()
 SETTINGS = DEFAULT_HOME / "settings.json"
+SCAN_STATE = DEFAULT_FEEDBACK / "codex-transcript-scan-state.json"
+CODEX_SESSIONS_DIR = Path(os.environ.get("INTROSPECT_CODEX_SESSIONS_DIR", "~/.codex/sessions")).expanduser()
+CLAUDE_PROJECTS_DIR = Path(os.environ.get("INTROSPECT_CLAUDE_PROJECTS_DIR", "~/.claude/projects")).expanduser()
+INTROSPECT_STATE_DIR = DEFAULT_HOME / "introspect"
+RUNS_DIR = DEFAULT_HOME / "runs"
 
 
 def run(cmd: list[str], *, env: dict[str, str] | None = None) -> int:
@@ -83,6 +89,34 @@ def parse_ts(value: object) -> dt.datetime | None:
     return parsed.astimezone(dt.timezone.utc)
 
 
+def iso_now() -> str:
+    return dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds")
+
+
+def file_stamp() -> str:
+    return dt.datetime.now(dt.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+
+
+def write_json(path: Path, payload: dict) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(path.suffix + f".{os.getpid()}.tmp")
+    tmp.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")
+    os.replace(tmp, path)
+
+
+def sha256_file(path: Path, *, max_bytes: int = 1024 * 1024) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as f:
+        remaining = max_bytes
+        while remaining > 0:
+            chunk = f.read(min(65536, remaining))
+            if not chunk:
+                break
+            digest.update(chunk)
+            remaining -= len(chunk)
+    return digest.hexdigest()
+
+
 def prompt_links() -> list[tuple[str, Path, bool]]:
     prompt = DEFAULT_HOME / "AGENTS.md"
     links = [
@@ -136,6 +170,361 @@ def doctor(args: argparse.Namespace) -> int:
     print(f"  runtime  {REPO}")
     print(f"  home     {DEFAULT_HOME}")
     print(f"  feedback {DEFAULT_FEEDBACK}")
+    return 0
+
+
+def rule(width: int, char: str = "=") -> str:
+    return char * min(width, 72)
+
+
+def plural(count: object, noun: str) -> str:
+    try:
+        number = int(count)
+    except (TypeError, ValueError):
+        number = 0
+    return f"{number} {noun}{'' if number == 1 else 's'}"
+
+
+def is_configured() -> bool:
+    """True once Introspect has been installed on this machine."""
+    if any(ok for _label, _path, ok in prompt_links()):
+        return True
+    return SCAN_STATE.exists()
+
+
+def count_transcripts() -> tuple[int, int]:
+    """Count local Codex and Claude conversation files, read-only."""
+
+    def count(directory: Path, pattern: str) -> int:
+        try:
+            return sum(1 for path in directory.rglob(pattern) if path.is_file())
+        except OSError:
+            return 0
+
+    return (
+        count(CODEX_SESSIONS_DIR, "rollout-*.jsonl"),
+        count(CLAUDE_PROJECTS_DIR, "*.jsonl"),
+    )
+
+
+def recent_transcript_files(host: str, *, limit: int = 20) -> list[Path]:
+    roots: list[tuple[Path, str]]
+    if host == "codex":
+        roots = [(CODEX_SESSIONS_DIR, "rollout-*.jsonl")]
+    elif host == "claude":
+        roots = [(CLAUDE_PROJECTS_DIR, "*.jsonl")]
+    else:
+        roots = [
+            (CODEX_SESSIONS_DIR, "rollout-*.jsonl"),
+            (CLAUDE_PROJECTS_DIR, "*.jsonl"),
+        ]
+    files: list[Path] = []
+    for root, pattern in roots:
+        try:
+            files.extend(path for path in root.rglob(pattern) if path.is_file())
+        except OSError:
+            continue
+    return sorted(files, key=lambda path: path.stat().st_mtime, reverse=True)[:limit]
+
+
+def transcript_snapshot(path: Path) -> dict:
+    stat = path.stat()
+    return {
+        "path": str(path),
+        "mtime_ns": stat.st_mtime_ns,
+        "size": stat.st_size,
+        "sha256_head": sha256_file(path),
+    }
+
+
+def changed_transcripts(paths: list[Path], index: dict) -> tuple[list[dict], list[dict]]:
+    known = index.get("transcripts")
+    if not isinstance(known, dict):
+        known = {}
+    changed: list[dict] = []
+    snapshots: list[dict] = []
+    for path in paths:
+        try:
+            snapshot = transcript_snapshot(path)
+        except OSError:
+            continue
+        previous = known.get(str(path))
+        snapshots.append(snapshot)
+        if not isinstance(previous, dict):
+            changed.append(snapshot)
+            continue
+        for key in ("mtime_ns", "size", "sha256_head"):
+            if previous.get(key) != snapshot.get(key):
+                changed.append(snapshot)
+                break
+    return changed, snapshots
+
+
+def write_introspect_result(result: dict, *, summary: str) -> Path:
+    run_id = result["run_id"]
+    run_dir = RUNS_DIR / run_id
+    run_dir.mkdir(parents=True, exist_ok=True)
+    write_json(run_dir / "result.json", result)
+    (run_dir / "summary.md").write_text(summary.rstrip() + "\n")
+    return run_dir
+
+
+def introspect_summary(result: dict) -> str:
+    changed = result.get("changed_transcripts") or []
+    lines = [
+        "# Introspect Run",
+        "",
+        f"- Status: {result.get('status')}",
+        f"- Host: {result.get('host')}",
+        f"- Event: {result.get('event')}",
+        f"- Changed transcripts: {len(changed)}",
+        f"- Message: {result.get('message')}",
+        "",
+        "## Changed Transcript Inputs",
+        "",
+    ]
+    if changed:
+        for item in changed:
+            lines.append(f"- {item.get('path')}")
+    else:
+        lines.append("- none")
+    lines.extend(
+        [
+            "",
+            "## Scope",
+            "",
+            "This run updated cadence/index artifacts only. It did not edit AGENTS.md, skills, memory, or classifier models.",
+        ]
+    )
+    return "\n".join(lines)
+
+
+def run_introspect(args: argparse.Namespace) -> int:
+    host = args.host
+    state_dir = INTROSPECT_STATE_DIR / host
+    state_path = state_dir / "state.json"
+    index_path = state_dir / "transcript-index.json"
+    state = read_json(state_path, {})
+    index = read_json(index_path, {})
+    now = iso_now()
+
+    turn_count = int(state.get("completed_turns_since_run") or 0)
+    if args.event == "stop":
+        turn_count += 1
+
+    transcript_paths = [Path(path).expanduser() for path in args.transcript_path]
+    if not transcript_paths:
+        transcript_paths = recent_transcript_files(host)
+    transcript_paths = [path for path in transcript_paths if path.exists()]
+    changed, snapshots = changed_transcripts(transcript_paths, index)
+
+    generation_id = args.generation_id or args.session_id or ""
+    last_generation_id = str(state.get("last_generation_id") or "")
+    last_run_at = parse_ts(state.get("last_run_at"))
+    minutes_since_run = None
+    if last_run_at is not None:
+        minutes_since_run = (
+            dt.datetime.now(dt.timezone.utc) - last_run_at
+        ).total_seconds() / 60
+
+    skip_reason = ""
+    if not args.force and args.event == "stop":
+        if generation_id and generation_id == last_generation_id:
+            skip_reason = "generation already processed"
+        elif turn_count < args.min_turns:
+            skip_reason = f"cadence needs {args.min_turns} completed turns"
+        elif minutes_since_run is not None and minutes_since_run < args.min_minutes:
+            skip_reason = f"cadence needs {args.min_minutes} minutes since last run"
+        elif not changed:
+            skip_reason = "no changed transcripts"
+
+    state.update(
+        {
+            "host": host,
+            "last_observed_at": now,
+            "completed_turns_since_run": turn_count,
+            "last_generation_id": generation_id or last_generation_id,
+            "last_cwd": args.cwd,
+        }
+    )
+
+    if skip_reason:
+        state["last_skip_reason"] = skip_reason
+        write_json(state_path, state)
+        payload = {
+            "status": "skipped",
+            "host": host,
+            "event": args.event,
+            "message": skip_reason,
+            "changed_transcript_count": len(changed),
+        }
+        if args.json:
+            print(json.dumps(payload, sort_keys=True))
+        else:
+            print(f"Introspect skipped: {skip_reason}")
+        return 0
+
+    known = index.get("transcripts")
+    if not isinstance(known, dict):
+        known = {}
+    for snapshot in snapshots:
+        known[str(snapshot["path"])] = snapshot
+    index = {
+        "host": host,
+        "updated_at": now,
+        "transcripts": known,
+    }
+    write_json(index_path, index)
+
+    run_id = f"{file_stamp()}-introspect-{host}"
+    result = {
+        "run_id": run_id,
+        "status": "no_change",
+        "host": host,
+        "event": args.event,
+        "cwd": args.cwd,
+        "session_id": args.session_id,
+        "generation_id": generation_id,
+        "apply": args.apply,
+        "message": "No high-signal memory updates.",
+        "changed_transcripts": changed,
+        "transcript_count": len(snapshots),
+        "changed_transcript_count": len(changed),
+        "mutated_targets": [],
+        "classifier_training": False,
+    }
+    run_dir = write_introspect_result(
+        result,
+        summary=introspect_summary(result),
+    )
+
+    state.update(
+        {
+            "last_run_at": now,
+            "completed_turns_since_run": 0,
+            "last_result": str(run_dir / "result.json"),
+            "last_summary": str(run_dir / "summary.md"),
+            "last_skip_reason": "",
+        }
+    )
+    write_json(state_path, state)
+
+    if args.json:
+        print(json.dumps(result, sort_keys=True))
+    else:
+        print(result["message"])
+        print(f"run: {run_dir}")
+    return 0
+
+
+def print_welcome(width: int) -> None:
+    print("Introspect")
+    print(rule(width))
+    print(
+        "Introspect watches your local Claude, Codex, and OpenCode sessions for\n"
+        "moments where the agent got stuck, ignored instructions, overclaimed, or\n"
+        "needed repeated correction. When it sees one, it runs a background\n"
+        "reflection pass and updates the right instruction file: a global or\n"
+        "project AGENTS.md, a skill, or local memory."
+    )
+    print()
+    print("Everything stays on this machine under ~/.introspect.")
+
+
+def onboard(args: argparse.Namespace) -> int:
+    width = terminal_width()
+    print_welcome(width)
+    print()
+
+    codex_n, claude_n = count_transcripts()
+    total = codex_n + claude_n
+    print("Scanning local agent history")
+    print(rule(width, "-"))
+    print(f"  Codex sessions        {codex_n}")
+    print(f"  Claude conversations  {claude_n}")
+    print(f"  {'-' * 20}")
+    if total:
+        print(f"  {total} past conversations found on this machine")
+    else:
+        print("  No local Claude/Codex history yet. Introspect will watch new")
+        print("  conversations as they happen.")
+    print()
+
+    already = is_configured()
+    if already and not getattr(args, "force", False):
+        print("Introspect is already set up here. Showing your dashboard.")
+        print()
+        render_dashboard()
+        return 0
+
+    interactive = sys.stdin.isatty() and sys.stdout.isatty()
+    print("Setup will:")
+    print("  - link ~/.claude/CLAUDE.md, ~/.codex/AGENTS.md, and")
+    print("    ~/.config/opencode/AGENTS.md to ~/.introspect/AGENTS.md")
+    print("    (any existing files are backed up first)")
+    print("  - install prompt hooks and an event-driven transcript watcher")
+    print("  - analyze your recent conversations to calibrate the wake detector")
+    print("    (old history is scored for signal only; it never rewrites your files)")
+    print()
+
+    if not getattr(args, "yes", False):
+        if not interactive:
+            print("Non-interactive shell. To set up, run:")
+            print("  introspect install        # scriptable, no prompts")
+            print("  introspect onboard --yes  # this guided flow, auto-confirmed")
+            return 0
+        try:
+            answer = input("Proceed? [Y/n] ").strip().lower()
+        except EOFError:
+            answer = "n"
+        if answer in ("n", "no"):
+            print()
+            print("Skipped. When you're ready: introspect install")
+            return 0
+    print()
+
+    print("Setting up Introspect")
+    print(rule(width, "-"))
+    print("  Linking agent prompts, installing hooks and the transcript watcher,")
+    print("  then analyzing recent history. This takes a few seconds...")
+    print()
+    proc = subprocess.run(
+        [str(REPO / "scripts" / "install-hooks.sh")],
+        cwd=REPO,
+        capture_output=True,
+        text=True,
+    )
+
+    for label, _path, link_ok in prompt_links():
+        print(f"  [{'ok' if link_ok else '--'}] {label} prompt linked")
+    print(f"  [{'ok' if SCAN_STATE.exists() else '--'}] transcript watcher installed")
+    scan_state = read_json(SCAN_STATE, {})
+    if scan_state.get("last_backfill_at"):
+        print(
+            f"  [ok] analyzed {plural(scan_state.get('last_backfill_files'), 'recent conversation')}, "
+            f"scored {plural(scan_state.get('last_backfill_new_events'), 'message')}, "
+            f"flagged {plural(scan_state.get('last_backfill_triggered_events'), 'correction moment')}"
+        )
+    else:
+        print("  [--] history analysis skipped")
+
+    if proc.returncode != 0:
+        print()
+        print("  Setup reported a problem. Installer output:")
+        for line in (proc.stdout + proc.stderr).strip().splitlines()[-20:]:
+            print(f"    {line}")
+        return proc.returncode
+
+    print()
+    print("Introspect is now watching")
+    print(rule(width, "-"))
+    print("  It runs one reflection pass when it detects a correction in a live")
+    print("  session, then updates the right instruction file. You get a")
+    print("  notification when a run starts. Here is your dashboard:")
+    print()
+    print(rule(width))
+    print()
+    render_dashboard()
     return 0
 
 
@@ -467,6 +856,11 @@ def main(argv: list[str] | None = None) -> int:
     dash_parser.add_argument("--interval", type=float, default=3.0)
     dash_parser.set_defaults(func=dashboard)
 
+    onboard_parser = sub.add_parser("onboard", help="guided first-time setup")
+    onboard_parser.add_argument("--yes", action="store_true", help="skip the confirmation prompt")
+    onboard_parser.add_argument("--force", action="store_true", help="run setup even if already configured")
+    onboard_parser.set_defaults(func=onboard)
+
     runs_parser = sub.add_parser("runs", help="show recent reflector runs")
     runs_parser.add_argument("-n", "--limit", type=int, default=12)
     runs_parser.set_defaults(func=runs)
@@ -488,6 +882,20 @@ def main(argv: list[str] | None = None) -> int:
     config_parser.add_argument("--codex-model")
     config_parser.set_defaults(func=config)
 
+    run_parser = sub.add_parser("run", help="run Introspect on recent transcript changes")
+    run_parser.add_argument("--host", choices=["codex", "claude", "opencode", "cursor", "unknown"], default="unknown")
+    run_parser.add_argument("--event", choices=["stop", "manual"], default="manual")
+    run_parser.add_argument("--cwd", default=os.getcwd())
+    run_parser.add_argument("--transcript-path", action="append", default=[])
+    run_parser.add_argument("--session-id", default="")
+    run_parser.add_argument("--generation-id", default="")
+    run_parser.add_argument("--apply", choices=["auto", "proposal", "never"], default="proposal")
+    run_parser.add_argument("--min-turns", type=int, default=10)
+    run_parser.add_argument("--min-minutes", type=float, default=120.0)
+    run_parser.add_argument("--force", action="store_true")
+    run_parser.add_argument("--json", action="store_true")
+    run_parser.set_defaults(func=run_introspect)
+
     notify_parser = sub.add_parser("notify", help="send a best-effort macOS notification")
     notify_parser.add_argument("title")
     notify_parser.add_argument("message")
@@ -498,6 +906,8 @@ def main(argv: list[str] | None = None) -> int:
         subprocess.call(["git", "-C", str(REPO), "rev-parse", "--short", "HEAD"])
         return 0
     if not hasattr(args, "func"):
+        if not is_configured():
+            return onboard(argparse.Namespace(yes=False, force=False))
         args.watch = False
         args.interval = 3.0
         return dashboard(args)

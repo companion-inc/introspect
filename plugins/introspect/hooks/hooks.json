@@ -1,0 +1,16 @@
+{
+  "hooks": {
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/usr/bin/python3 \"$PLUGIN_ROOT/scripts/introspect-stop.py\"",
+            "timeout": 30,
+            "statusMessage": "Checking Introspect"
+          }
+        ]
+      }
+    ]
+  }
+}

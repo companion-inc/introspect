@@ -153,6 +153,38 @@ grep -q "history backfill: " "$TMPDIR/status.txt" || { cat "$TMPDIR/status.txt" 
 "$CLI" dashboard > "$TMPDIR/dashboard.txt"
 grep -q "Signal" "$TMPDIR/dashboard.txt" || { cat "$TMPDIR/dashboard.txt" >&2; exit 1; }
 
+HOME="$HOME_DIR" \
+PYTHONDONTWRITEBYTECODE=1 \
+INTROSPECT_HOME="$INTROSPECT_HOME_DIR" \
+AGENTS_HOME="$AGENTS_HOME_DIR" \
+"$CLI" run \
+  --host codex \
+  --event manual \
+  --transcript-path "$SESSION_FILE" \
+  --force \
+  --json > "$TMPDIR/introspect-run.json"
+python3 - "$TMPDIR/introspect-run.json" "$INTROSPECT_HOME_DIR" "$SESSION_FILE" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+payload = json.loads(Path(sys.argv[1]).read_text())
+home = Path(sys.argv[2])
+session_file = Path(sys.argv[3])
+if payload.get("status") != "no_change":
+    raise SystemExit(f"test-release-e2e: unexpected Introspect status: {payload}")
+if payload.get("classifier_training") is not False:
+    raise SystemExit("test-release-e2e: Introspect trained a classifier")
+run_id = payload.get("run_id")
+if not run_id:
+    raise SystemExit("test-release-e2e: Introspect missing run_id")
+if not (home / "runs" / run_id / "result.json").is_file():
+    raise SystemExit("test-release-e2e: Introspect missing result artifact")
+index = json.loads((home / "introspect" / "codex" / "transcript-index.json").read_text())
+if str(session_file) not in index.get("transcripts", {}):
+    raise SystemExit("test-release-e2e: Introspect did not index transcript")
+PY
+
 cat > "$FEEDBACK_DIR/trigger-queue.jsonl" <<JSONL
 {"triggered":true,"ts":"2026-06-20T00:00:00+00:00","source":"release-e2e","session_id":"release-e2e","cwd":"$TMPDIR/project","matched":["release"],"snippet":"release e2e fake wake event"}
 JSONL

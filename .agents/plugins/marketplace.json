@@ -1,0 +1,20 @@
+{
+  "name": "introspect-local",
+  "interface": {
+    "displayName": "Introspect Local"
+  },
+  "plugins": [
+    {
+      "name": "introspect",
+      "source": {
+        "source": "local",
+        "path": "./plugins/introspect"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Productivity"
+    }
+  ]
+}
