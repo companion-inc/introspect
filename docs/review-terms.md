@@ -7,9 +7,9 @@ The optional `~/.introspect/trigger-words.txt` file is only review metadata. It 
 The normal wake path is:
 
 1. Score the prompt with `~/.introspect/models/wake-logreg-v2-round4.json`.
-2. Queue the event when the score meets the production model threshold, currently `0.675`.
-3. Keep scores from the review threshold, currently `0.30`, up to `0.675` as review-only telemetry.
-4. Record optional review metadata when `trigger-words.txt` exists.
-5. Use `INTROSPECT_TRIGGER_WORD_FALLBACK=1` only as an explicit emergency fallback.
+2. Compute the effective wake threshold from the installed sensitivity setting. The bundled model threshold is `0.64`; the live `sensitive` setting maps to `0.40`.
+3. Queue the event when the score meets the effective wake threshold.
+4. Keep scores from the review threshold, currently `0.30`, up to the effective wake threshold as review-only telemetry.
+5. Record optional review metadata when `trigger-words.txt` exists.
 
 Codex Desktop still has a scanner backstop because changed command hooks can be skipped until the hook definition is trusted or the app session reloads config. The scanner reads recent `~/.codex/sessions/**/rollout-*.jsonl` files, ignores Codex control/context records, dedupes transcript lines, and queues missed classifier-triggered prompts through the same single-worker cooldown path.
