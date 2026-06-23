@@ -210,15 +210,28 @@ if REFLECT_MODE != "immediate":
     sys.exit(0)
 
 try:
-    subprocess.Popen(
-        [sys.executable, WORKER, "--kick"],
-        cwd=REPO,
-        env=os.environ.copy(),
-        stdin=subprocess.DEVNULL,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-        start_new_session=True,
-    )
+    command = [sys.executable, WORKER, "--kick"]
+    if os.environ.get("TRIGGER_WORKER_SYNC") == "1":
+        subprocess.run(
+            command,
+            cwd=REPO,
+            env=os.environ.copy(),
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=float(os.environ.get("TRIGGER_WORKER_SYNC_TIMEOUT", "30")),
+            check=False,
+        )
+    else:
+        subprocess.Popen(
+            command,
+            cwd=REPO,
+            env=os.environ.copy(),
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            start_new_session=True,
+        )
 except Exception:
     try:
         json_append(

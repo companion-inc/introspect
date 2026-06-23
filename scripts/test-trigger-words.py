@@ -110,6 +110,7 @@ def run_case(
                 "TRIGGER_REFLECTOR_DRY_RUN": "1",
                 "TRIGGER_DEBOUNCE_SECONDS": "0",
                 "TRIGGER_DISABLE_SCHEDULE": "1",
+                "TRIGGER_WORKER_SYNC": "1",
             }
         )
         if reflect_mode:
