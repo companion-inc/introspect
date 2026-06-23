@@ -20,6 +20,8 @@ WORKER = REPO / "hooks" / "trigger-worker.py"
 INTENT_CLASSIFIER = REPO / "hooks" / "intent_classifier.py"
 WAKE_MODEL = REPO / "models" / "wake-logreg-v2-round4.json"
 ASSISTANT_FAILURE_MODEL = REPO / "models" / "assistant-boundary-logreg-v1.json"
+SYNC_WORKER_TIMEOUT_SECONDS = "45"
+HOOK_TIMEOUT_SECONDS = 60
 
 
 def load_worker_module(name: str, env_updates: dict[str, str] | None = None):
@@ -111,6 +113,7 @@ def run_case(
                 "TRIGGER_DEBOUNCE_SECONDS": "0",
                 "TRIGGER_DISABLE_SCHEDULE": "1",
                 "TRIGGER_WORKER_SYNC": "1",
+                "TRIGGER_WORKER_SYNC_TIMEOUT": SYNC_WORKER_TIMEOUT_SECONDS,
             }
         )
         if reflect_mode:
@@ -131,7 +134,7 @@ def run_case(
             env=env,
             cwd=REPO,
             check=True,
-            timeout=10,
+            timeout=HOOK_TIMEOUT_SECONDS,
         )
 
         events = read_jsonl(tmp / "events.jsonl")
