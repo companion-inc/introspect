@@ -33,6 +33,33 @@ Contract:
 - `source_records` can grow, but queueing happens once per canonical event.
 - Control messages and reflector prompts are excluded before canonicalization.
 
+## Repetition Pressure
+
+```json
+{
+  "wake_reason": "repetition_pressure",
+  "repetition_pressure": {
+    "version": "repetition-pressure-v1",
+    "eligible": true,
+    "triggered": true,
+    "score": 0.72,
+    "similarity_threshold": 0.46,
+    "repeat_count": 2,
+    "similar_count": 1,
+    "min_repeats": 2,
+    "window_seconds": 1800,
+    "similar_event_ids": ["..."]
+  }
+}
+```
+
+Contract:
+
+- Repetition pressure only amplifies user prompts that already meet the classifier review threshold.
+- Repetition state is local and bounded under `feedback/repetition-state.json`; it stores hashed comparison features, not raw prompt text.
+- Backfill, control phrases, pasted context, and duplicate hook/scanner observations do not increment pressure.
+- A repeated-pressure event queues through the same `trigger-queue.jsonl` and worker path as classifier-triggered events.
+
 ## Trigger Batch
 
 ```json

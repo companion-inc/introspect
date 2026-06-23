@@ -443,6 +443,284 @@ def run_sensitivity_case() -> None:
         raise AssertionError(f"custom threshold did not apply: {custom}")
 
 
+def repetition_env(tmp: Path) -> dict[str, str]:
+    env = os.environ.copy()
+    env.update(
+        {
+            "INTROSPECT_REPO": str(REPO),
+            "INTROSPECT_PROMPT": str(REPO / "AGENTS.md"),
+            "INTROSPECT_SKILLS_DIR": str(REPO / "skills"),
+            "INTROSPECT_FEEDBACK_DIR": str(tmp / "feedback"),
+            "INTROSPECT_WAKE_MODEL": str(WAKE_MODEL),
+            "INTROSPECT_ASSISTANT_FAILURE_MODEL": str(ASSISTANT_FAILURE_MODEL),
+            "INTROSPECT_REFLECT_MODE": "nightly",
+            "TRIGGER_REFLECTOR_DRY_RUN": "1",
+            "TRIGGER_DEBOUNCE_SECONDS": "0",
+            "TRIGGER_DISABLE_SCHEDULE": "1",
+            "INTROSPECT_REPETITION_PRESSURE": "1",
+            "INTROSPECT_REPETITION_MIN_REPEATS": "2",
+            "INTROSPECT_REPETITION_WINDOW_SECONDS": "600",
+            "INTROSPECT_REPETITION_DUPLICATE_SECONDS": "60",
+        }
+    )
+    return env
+
+
+def run_hook_prompt(tmp: Path, prompt: str, *, session_id: str = "repeat-session") -> None:
+    subprocess.run(
+        [sys.executable, str(HOOK)],
+        input=json.dumps(
+            {
+                "prompt": prompt,
+                "source": "codex",
+                "session_id": session_id,
+                "cwd": str(REPO),
+                "transcript_path": "",
+            }
+        ),
+        text=True,
+        env=repetition_env(tmp),
+        cwd=REPO,
+        check=True,
+        timeout=HOOK_TIMEOUT_SECONDS,
+    )
+
+
+def run_repetition_pressure_hook_case() -> None:
+    with tempfile.TemporaryDirectory(prefix="agent-loop-repeat-hook-") as tmp_raw:
+        tmp = Path(tmp_raw)
+        first = "you used the wrong tool and ignored the DGX instructions, keep going and fix it"
+        second = "you ignored the DGX instructions and used the wrong tool again, fix it"
+        run_hook_prompt(tmp, first)
+        run_hook_prompt(tmp, second)
+        run_hook_prompt(tmp, "go on", session_id="repeat-control")
+        run_hook_prompt(tmp, "go on", session_id="repeat-control")
+        pasted = (
+            "<environment_context>\n"
+            "user said: you used the wrong tool and ignored the DGX instructions, keep going and fix it\n"
+            "</environment_context>"
+        )
+        run_hook_prompt(tmp, pasted, session_id="repeat-pasted")
+        run_hook_prompt(tmp, pasted, session_id="repeat-pasted")
+
+        events = read_jsonl(tmp / "feedback" / "events.jsonl")
+        queue = read_jsonl(tmp / "feedback" / "trigger-queue.jsonl")
+        if len(events) != 6:
+            raise AssertionError(f"repetition hook expected six events, got {events}")
+        if events[0].get("triggered") or not events[0].get("review_triggered"):
+            raise AssertionError(f"first review-tier prompt should not wake: {events[0]}")
+        if not events[1].get("triggered") or events[1].get("wake_reason") != "repetition_pressure":
+            raise AssertionError(f"second review-tier prompt should wake through repetition: {events[1]}")
+        if events[1].get("repetition_pressure", {}).get("repeat_count") != 2:
+            raise AssertionError(f"repetition count did not include the prior related prompt: {events[1]}")
+        if any(event.get("triggered") for event in events[2:]):
+            raise AssertionError(f"control and pasted repeats should not wake: {events[2:]}")
+        if {
+            event.get("repetition_pressure", {}).get("suppressed_reason")
+            for event in events[4:]
+        } != {"pasted_context"}:
+            raise AssertionError(f"pasted context should be suppressed by repetition pressure: {events[4:]}")
+        if len(queue) != 1 or queue[0].get("wake_reason") != "repetition_pressure":
+            raise AssertionError(f"repetition hook expected one queued pressure event, got {queue}")
+
+
+def run_repetition_pressure_scanner_case() -> None:
+    with tempfile.TemporaryDirectory(prefix="agent-loop-repeat-scan-") as tmp_raw:
+        tmp = Path(tmp_raw)
+        sessions = tmp / "sessions" / "2026" / "06" / "23"
+        sessions.mkdir(parents=True)
+        rollout = sessions / "rollout-2026-06-23T00-00-00-repeat.jsonl"
+        base_ts = time.time()
+
+        def ts(offset: int) -> str:
+            return time.strftime("%Y-%m-%dT%H:%M:%S.000Z", time.gmtime(base_ts + offset))
+
+        rows = [
+            {
+                "timestamp": ts(0),
+                "type": "session_meta",
+                "payload": {"id": "scan-repeat-session", "cwd": str(REPO)},
+            },
+            {
+                "timestamp": ts(1),
+                "type": "response_item",
+                "payload": {
+                    "type": "message",
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "input_text",
+                            "text": "you used the wrong tool and ignored the DGX instructions, keep going and fix it",
+                        }
+                    ],
+                },
+            },
+            {
+                "timestamp": ts(2),
+                "type": "response_item",
+                "payload": {
+                    "type": "message",
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "input_text",
+                            "text": "you ignored the DGX instructions and used the wrong tool again, fix it",
+                        }
+                    ],
+                },
+            },
+        ]
+        rollout.write_text("\n".join(json.dumps(row) for row in rows) + "\n")
+        now = time.time()
+        os.utime(rollout, (now, now))
+
+        env = repetition_env(tmp)
+        env.update(
+            {
+                "INTROSPECT_CODEX_SESSIONS_DIR": str(tmp / "sessions"),
+                "INTROSPECT_CLAUDE_PROJECTS_DIR": str(tmp / "claude-projects"),
+            }
+        )
+        for _ in range(2):
+            subprocess.run(
+                [sys.executable, str(SCANNER), "--since-minutes", "60"],
+                text=True,
+                env=env,
+                cwd=REPO,
+                check=True,
+                timeout=10,
+            )
+
+        events = read_jsonl(tmp / "feedback" / "events.jsonl")
+        queue = read_jsonl(tmp / "feedback" / "trigger-queue.jsonl")
+        if len(events) != 2:
+            raise AssertionError(f"scanner repetition expected two events, got {events}")
+        if events[0].get("triggered"):
+            raise AssertionError(f"first scanner repetition event should not wake: {events[0]}")
+        if not events[1].get("triggered") or events[1].get("wake_reason") != "repetition_pressure":
+            raise AssertionError(f"second scanner repetition event should wake: {events[1]}")
+        if len(queue) != 1 or queue[0].get("wake_reason") != "repetition_pressure":
+            raise AssertionError(f"scanner repetition expected one queued pressure event, got {queue}")
+
+
+def run_repetition_pressure_hook_scanner_duplicate_case() -> None:
+    with tempfile.TemporaryDirectory(prefix="agent-loop-repeat-duplicate-") as tmp_raw:
+        tmp = Path(tmp_raw)
+        prompt = "you used the wrong tool and ignored the DGX instructions, keep going and fix it"
+        run_hook_prompt(tmp, prompt, session_id="duplicate-repeat-session")
+
+        sessions = tmp / "sessions" / "2026" / "06" / "23"
+        sessions.mkdir(parents=True)
+        rollout = sessions / "rollout-2026-06-23T00-00-00-duplicate.jsonl"
+        timestamp = time.strftime("%Y-%m-%dT%H:%M:%S.000Z", time.gmtime())
+        rows = [
+            {
+                "timestamp": timestamp,
+                "type": "session_meta",
+                "payload": {"id": "duplicate-repeat-session", "cwd": str(REPO)},
+            },
+            {
+                "timestamp": timestamp,
+                "type": "response_item",
+                "payload": {
+                    "type": "message",
+                    "role": "user",
+                    "content": [{"type": "input_text", "text": prompt}],
+                },
+            },
+        ]
+        rollout.write_text("\n".join(json.dumps(row) for row in rows) + "\n")
+        now = time.time()
+        os.utime(rollout, (now, now))
+
+        env = repetition_env(tmp)
+        env.update(
+            {
+                "INTROSPECT_CODEX_SESSIONS_DIR": str(tmp / "sessions"),
+                "INTROSPECT_CLAUDE_PROJECTS_DIR": str(tmp / "claude-projects"),
+            }
+        )
+        subprocess.run(
+            [sys.executable, str(SCANNER), "--since-minutes", "60"],
+            text=True,
+            env=env,
+            cwd=REPO,
+            check=True,
+            timeout=10,
+        )
+
+        events = read_jsonl(tmp / "feedback" / "events.jsonl")
+        queue = read_jsonl(tmp / "feedback" / "trigger-queue.jsonl")
+        if len(events) != 2:
+            raise AssertionError(f"duplicate case expected hook and scanner events, got {events}")
+        scanner_event = events[1]
+        if scanner_event.get("triggered"):
+            raise AssertionError(f"scanner duplicate should not wake through repetition: {scanner_event}")
+        if not scanner_event.get("repetition_pressure", {}).get("duplicate"):
+            raise AssertionError(f"scanner duplicate was not marked duplicate: {scanner_event}")
+        if queue:
+            raise AssertionError(f"duplicate hook+scanner prompt should not queue, got {queue}")
+
+
+def run_repetition_pressure_scanner_duplicate_rows_case() -> None:
+    with tempfile.TemporaryDirectory(prefix="agent-loop-repeat-rows-") as tmp_raw:
+        tmp = Path(tmp_raw)
+        sessions = tmp / "sessions" / "2026" / "06" / "23"
+        sessions.mkdir(parents=True)
+        rollout = sessions / "rollout-2026-06-23T00-00-00-rows.jsonl"
+        timestamp = time.strftime("%Y-%m-%dT%H:%M:%S.000Z", time.gmtime())
+        prompt = "you used the wrong tool and ignored the DGX instructions, keep going and fix it"
+        rows = [
+            {
+                "timestamp": timestamp,
+                "type": "session_meta",
+                "payload": {"id": "duplicate-row-session", "cwd": str(REPO)},
+            }
+        ]
+        for _ in range(3):
+            rows.append(
+                {
+                    "timestamp": timestamp,
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "user",
+                        "content": [{"type": "input_text", "text": prompt}],
+                    },
+                }
+            )
+        rollout.write_text("\n".join(json.dumps(row) for row in rows) + "\n")
+        now = time.time()
+        os.utime(rollout, (now, now))
+
+        env = repetition_env(tmp)
+        env.update(
+            {
+                "INTROSPECT_CODEX_SESSIONS_DIR": str(tmp / "sessions"),
+                "INTROSPECT_CLAUDE_PROJECTS_DIR": str(tmp / "claude-projects"),
+            }
+        )
+        subprocess.run(
+            [sys.executable, str(SCANNER), "--since-minutes", "60"],
+            text=True,
+            env=env,
+            cwd=REPO,
+            check=True,
+            timeout=10,
+        )
+
+        events = read_jsonl(tmp / "feedback" / "events.jsonl")
+        queue = read_jsonl(tmp / "feedback" / "trigger-queue.jsonl")
+        if len(events) != 3:
+            raise AssertionError(f"scanner duplicate rows expected three logged events, got {events}")
+        if any(event.get("triggered") for event in events):
+            raise AssertionError(f"scanner duplicate rows should not wake: {events}")
+        if not all(event.get("repetition_pressure", {}).get("duplicate") for event in events[1:]):
+            raise AssertionError(f"scanner duplicate rows were not suppressed as duplicates: {events}")
+        if queue:
+            raise AssertionError(f"scanner duplicate rows should not queue, got {queue}")
+
+
 def run_codex_scanner_case() -> None:
     with tempfile.TemporaryDirectory(prefix="agent-loop-codex-scan-") as tmp_raw:
         tmp = Path(tmp_raw)
@@ -916,14 +1194,18 @@ def main() -> int:
     run_shadow_model_case()
     run_prompt_version_case()
     run_sensitivity_case()
+    run_repetition_pressure_hook_case()
     run_codex_scanner_case()
+    run_repetition_pressure_scanner_case()
+    run_repetition_pressure_hook_scanner_duplicate_case()
+    run_repetition_pressure_scanner_duplicate_rows_case()
     run_history_backfill_scanner_case()
     run_worker_notification_summary_case()
     run_worker_command_model_case()
     run_worker_restore_failed_surface_case()
     run_worker_state_preserves_invocation_case()
     run_worker_retry_policy_case()
-    print(f"test-trigger-words: ok ({len(cases) + 13} cases)")
+    print(f"test-trigger-words: ok ({len(cases) + 17} cases)")
     return 0
 
 

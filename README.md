@@ -112,14 +112,15 @@ Running `introspect` shows:
 2. The hook records prompt metadata into `~/.introspect/feedback`.
 3. A local classifier scores whether this looks like negative feedback or an agent-boundary failure.
 4. Low scores are logged for audit only.
-5. High-confidence events are appended to `trigger-queue.jsonl`.
-6. Immediate mode kicks one locked worker; nightly mode waits for the scheduled reflector.
-7. The worker batches nearby events, applies cooldowns, snapshots relevant agent surfaces, and runs one reflector process.
-8. The reflector inspects the original thread and chooses one target: no change, global prompt, project prompt, home memory, user skill, project skill, or skill pruning.
-9. The worker records the prompt, output, status, notification result, and exact surface diff.
-10. The CLI reads those local artifacts through `introspect runs` and `introspect diff`.
+5. Review-tier near-repeat corrections in the same session/project can wake through local repetition pressure.
+6. High-confidence or repeated-pressure events are appended to `trigger-queue.jsonl`.
+7. Immediate mode kicks one locked worker; nightly mode waits for the scheduled reflector.
+8. The worker batches nearby events, applies cooldowns, snapshots relevant agent surfaces, and runs one reflector process.
+9. The reflector inspects the original thread and chooses one target: no change, global prompt, project prompt, home memory, user skill, project skill, or skill pruning.
+10. The worker records the prompt, output, status, notification result, and exact surface diff.
+11. The CLI reads those local artifacts through `introspect runs` and `introspect diff`.
 
-The classifier uses word and character features because the signal is not only exact words; it also needs to catch misspellings, repeated corrections, punctuation-heavy frustration, and phrases it has not seen verbatim. That is scoring, not a hardcoded slur list.
+The classifier uses word and character features because the signal is not only exact words; it also needs to catch misspellings, punctuation-heavy frustration, and phrases it has not seen verbatim. Repetition pressure is a separate temporal signal: it counts similar review-tier complaints across distinct recent turns, stores hashed local features under the feedback directory, and ignores control phrases, pasted context, and hook/scanner duplicate observations.
 
 ## Agent File Scopes
 
@@ -186,6 +187,7 @@ INTROSPECT_SKILLS_DIR="$PWD/skills" /usr/bin/python3 scripts/validate-skills.py
 - `hooks/codex-transcript-scan.py`: transcript scanner and install backfill.
 - `hooks/trigger-worker.py`: locked background batch worker.
 - `hooks/intent_classifier.py`: local wake classifier runtime.
+- `hooks/repetition_pressure.py`: local review-tier repetition pressure runtime.
 - `models/`: bundled classifier models.
 - `scripts/install-hooks.sh`: installer for prompt links, hooks, scanner, monitor, and backfill.
 - `scripts/introspect-status.sh`: end-to-end local status check.

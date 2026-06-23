@@ -26,6 +26,10 @@ try:
     from intent_classifier import score_prompt
 except Exception:
     score_prompt = None
+try:
+    from repetition_pressure import score_repetition_pressure
+except Exception:
+    score_repetition_pressure = None
 
 if os.environ.get("INTROSPECT_REFLECTOR") == "1":
     # The background reflector prompt contains trigger snippets. Do not let
@@ -52,6 +56,7 @@ FEEDBACK_DIR = os.path.expanduser(
 )
 EVENTS = os.path.join(FEEDBACK_DIR, "events.jsonl")
 QUEUE = os.path.join(FEEDBACK_DIR, "trigger-queue.jsonl")
+REPETITION_STATE = os.path.join(FEEDBACK_DIR, "repetition-state.json")
 WORKER = os.path.join(REPO, "hooks", "trigger-worker.py")
 TRIGGER_WORDS_FILE = os.path.join(INTROSPECT_HOME, "trigger-words.txt")
 REFLECT_MODE = (
@@ -178,6 +183,23 @@ try:
         event["message_locator"] = source_message_id
     if matches:
         event["matched"] = matches
+    if score_repetition_pressure is not None and classifier_available:
+        try:
+            repetition = score_repetition_pressure(
+                prompt,
+                event,
+                classifier,
+                state_path=REPETITION_STATE,
+            )
+            event["repetition_pressure"] = repetition
+            if repetition.get("triggered") and not triggered:
+                triggered = True
+                wake_reason = "repetition_pressure"
+                event["triggered"] = True
+                event["wake_reason"] = wake_reason
+                event["review_triggered"] = True
+        except Exception as exc:
+            event["repetition_pressure"] = {"error": f"{type(exc).__name__}: {str(exc)[:160]}"}
     if matches or triggered or event.get("review_triggered"):
         event["snippet"] = prompt[:300]
     json_append(EVENTS, event)

@@ -27,6 +27,10 @@ try:
 except Exception:
     score_prompt = None
     score_assistant_failure = None
+try:
+    from repetition_pressure import score_repetition_pressure
+except Exception:
+    score_repetition_pressure = None
 DEFAULT_REPO = Path(__file__).resolve().parent.parent
 REPO = Path(os.path.expanduser(os.environ.get("INTROSPECT_REPO", str(DEFAULT_REPO))))
 AGENTS_HOME = Path(os.path.expanduser(os.environ.get("AGENTS_HOME") or "~/.agents"))
@@ -46,6 +50,7 @@ FEEDBACK_DIR = Path(
 EVENTS = FEEDBACK_DIR / "events.jsonl"
 QUEUE = FEEDBACK_DIR / "trigger-queue.jsonl"
 STATE = FEEDBACK_DIR / "codex-transcript-scan-state.json"
+REPETITION_STATE = FEEDBACK_DIR / "repetition-state.json"
 WORKER = REPO / "hooks" / "trigger-worker.py"
 HOOK = REPO / "hooks" / "trigger-reflect.sh"
 TRIGGER_WORDS_FILE = INTROSPECT_HOME / "trigger-words.txt"
@@ -322,6 +327,27 @@ def build_event(
         event["assistant_failure"] = {"label": "assistant_withheld_authorized_work"}
     if matches:
         event["matched"] = matches
+    if (
+        role == "user"
+        and not backfill
+        and classifier_available
+        and score_repetition_pressure is not None
+    ):
+        try:
+            repetition = score_repetition_pressure(
+                prompt,
+                event,
+                classifier,
+                state_path=REPETITION_STATE,
+            )
+            event["repetition_pressure"] = repetition
+            if repetition.get("triggered") and not triggered:
+                triggered = True
+                event["triggered"] = True
+                event["wake_reason"] = "repetition_pressure"
+                event["review_triggered"] = True
+        except Exception as exc:
+            event["repetition_pressure"] = {"error": f"{type(exc).__name__}: {str(exc)[:160]}"}
     if matches or triggered or event.get("review_triggered"):
         event["snippet"] = prompt[:300]
     return event, triggered, matches
