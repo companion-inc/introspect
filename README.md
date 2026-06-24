@@ -86,7 +86,7 @@ It wires each agent to that home:
 It also installs:
 
 - foreground hooks for Claude and Codex prompts
-- an event-driven transcript scanner for missed Desktop sessions and assistant-output failures
+- an event-driven transcript scanner for missed direct user messages in Desktop sessions
 - a login health check that repairs drift in links, hooks, scanner state, and skill links
 - a bounded one-time backfill over recent local Claude/Codex transcripts
 - best-effort macOS notifications through `osascript` when a reflector run starts
@@ -98,7 +98,7 @@ The backfill scores recent local history into `~/.introspect/feedback/events.jso
 Running `introspect` shows:
 
 - install mode, runner, and wake sensitivity
-- logged, woke, review-only, backfilled, and assistant-output event counts
+- logged, woke, review-only, backfilled, direct-user, and raw event counts
 - queue and lock state
 - last scanner and backfill timestamps
 - latest reflector invocation status
@@ -109,8 +109,8 @@ Running `introspect` shows:
 ## How It Works
 
 1. A Claude, Codex, or OpenCode prompt is submitted.
-2. The hook records prompt metadata into `~/.introspect/feedback`.
-3. A local classifier scores whether this looks like negative feedback or an agent-boundary failure.
+2. The hook records direct user prompt metadata into `~/.introspect/feedback`.
+3. A local classifier scores whether the direct user message looks like negative feedback or an agent-boundary failure.
 4. Low scores are logged for audit only.
 5. Review-tier near-repeat corrections in the same session/project can wake through local repetition pressure.
 6. High-confidence or repeated-pressure events are appended to `trigger-queue.jsonl`.
@@ -120,7 +120,7 @@ Running `introspect` shows:
 10. The worker records the prompt, output, status, notification result, and exact surface diff.
 11. The CLI reads those local artifacts through `introspect runs` and `introspect diff`.
 
-The classifier uses word and character features because the signal is not only exact words; it also needs to catch misspellings, punctuation-heavy frustration, and phrases it has not seen verbatim. Repetition pressure is a separate temporal signal: it counts similar review-tier complaints across distinct recent turns, stores hashed local features under the feedback directory, and ignores control phrases, pasted context, and hook/scanner duplicate observations.
+The classifier uses word and character features because the signal is not only exact words; it also needs to catch misspellings, punctuation-heavy frustration, and phrases it has not seen verbatim. Repetition pressure is a separate temporal signal: it counts similar review-tier complaints across distinct recent user turns, stores hashed local features under the feedback directory, and ignores assistant messages, Codex file/context wrappers, control phrases, pasted context, and hook/scanner duplicate observations.
 
 ## Agent File Scopes
 

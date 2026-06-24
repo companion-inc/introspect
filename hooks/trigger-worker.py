@@ -23,6 +23,38 @@ import sys
 import time
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+try:
+    from event_filters import (
+        event_count_key,
+        event_counts_as_direct_user,
+        is_codex_control_message as shared_is_codex_control_message,
+    )
+except Exception:
+    def shared_is_codex_control_message(prompt: str) -> bool:
+        stripped = prompt.lstrip().lower()
+        return (
+            stripped.startswith("# agents.md instructions")
+            or stripped.startswith("# files mentioned by the user:")
+            or stripped.startswith("# files mentioned by user:")
+            or stripped.startswith("## codex-clipboard-")
+            or stripped.startswith("<codex_internal_context")
+            or stripped.startswith("<environment_context>")
+            or stripped.startswith("<instructions>")
+            or stripped.startswith("<turn_aborted>")
+            or stripped.startswith("you are the introspect trigger reflector.")
+        )
+
+    def event_counts_as_direct_user(event: dict) -> bool:
+        role = " ".join(str(event.get("role") or "").split()).lower()
+        if role and role != "user":
+            return False
+        text = str(event.get("prompt") or event.get("snippet") or "")
+        return not shared_is_codex_control_message(text)
+
+    def event_count_key(event: dict, *, bucket_seconds: int = 120) -> str:
+        return str(event.get("event_id") or event.get("dedupe_key") or event.get("prompt_hash") or "")
+
 
 DEFAULT_REPO = Path(__file__).resolve().parent.parent
 REPO = Path(os.path.expanduser(os.environ.get("INTROSPECT_REPO", str(DEFAULT_REPO))))
@@ -558,12 +590,7 @@ def prompt_text_from_codex_content(content) -> str:
 
 
 def is_codex_control_message(prompt: str) -> bool:
-    stripped = prompt.lstrip()
-    return (
-        stripped.startswith("# AGENTS.md instructions")
-        or stripped.startswith("<codex_internal_context ")
-        or stripped.startswith("<turn_aborted>")
-    )
+    return shared_is_codex_control_message(prompt)
 
 
 def recent_jsonl_files(root: Path, pattern: str, cutoff: dt.datetime) -> list[Path]:
@@ -821,14 +848,28 @@ def take_queue() -> list[dict]:
         return []
 
     events: list[dict] = []
+    seen: set[str] = set()
+    dropped = 0
     with processing.open() as f:
         for line in f:
             try:
                 event = json.loads(line)
             except Exception:
                 continue
-            if event.get("triggered"):
-                events.append(event)
+            if not event.get("triggered"):
+                continue
+            if not event_counts_as_direct_user(event):
+                dropped += 1
+                continue
+            key = event_count_key(event)
+            if key and key in seen:
+                dropped += 1
+                continue
+            if key:
+                seen.add(key)
+            events.append(event)
+    if dropped:
+        log(f"dropped {dropped} non-user/control/duplicate queued event(s)")
     try:
         processing.unlink()
     except FileNotFoundError:

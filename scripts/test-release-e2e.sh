@@ -86,8 +86,8 @@ queue_path = Path(sys.argv[2])
 expected_version = sys.argv[3]
 events = [json.loads(line) for line in events_path.read_text().splitlines() if line.strip()]
 backfilled = [event for event in events if event.get("backfilled")]
-if len(backfilled) != 4:
-    raise SystemExit(f"test-release-e2e: expected 4 backfilled events, got {len(backfilled)}")
+if len(backfilled) != 3:
+    raise SystemExit(f"test-release-e2e: expected 3 direct-user backfilled events, got {len(backfilled)}")
 versions = {event.get("version") for event in backfilled}
 if versions != {expected_version}:
     raise SystemExit(f"test-release-e2e: expected prompt version {expected_version}, got {versions}")
@@ -133,9 +133,9 @@ from pathlib import Path
 
 state = json.loads(Path(sys.argv[1]).read_text())
 events = [json.loads(line) for line in Path(sys.argv[2]).read_text().splitlines() if line.strip()]
-if state.get("last_backfill_schema_version") != 4:
+if state.get("last_backfill_schema_version") != 5:
     raise SystemExit(f"test-release-e2e: schema reinstall did not update version: {state}")
-if len([event for event in events if event.get("backfilled")]) != 4:
+if len([event for event in events if event.get("backfilled")]) != 3:
     raise SystemExit("test-release-e2e: schema reinstall duplicated backfilled events")
 PY
 

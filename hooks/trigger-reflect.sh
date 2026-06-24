@@ -27,6 +27,22 @@ try:
 except Exception:
     score_prompt = None
 try:
+    from event_filters import is_codex_control_message
+except Exception:
+    def is_codex_control_message(prompt: str) -> bool:
+        stripped = prompt.lstrip().lower()
+        return (
+            stripped.startswith("# agents.md instructions")
+            or stripped.startswith("# files mentioned by the user:")
+            or stripped.startswith("# files mentioned by user:")
+            or stripped.startswith("## codex-clipboard-")
+            or stripped.startswith("<codex_internal_context")
+            or stripped.startswith("<environment_context>")
+            or stripped.startswith("<instructions>")
+            or stripped.startswith("<turn_aborted>")
+            or stripped.startswith("you are the introspect trigger reflector.")
+        )
+try:
     from repetition_pressure import score_repetition_pressure
 except Exception:
     score_repetition_pressure = None
@@ -69,6 +85,8 @@ except Exception:
     sys.exit(0)
 
 prompt = data.get("prompt") or ""
+if is_codex_control_message(prompt):
+    sys.exit(0)
 
 
 def normalize_words(values):

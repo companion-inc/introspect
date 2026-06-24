@@ -17,9 +17,9 @@ REPO = Path(__file__).resolve().parents[1]
 HOOK = REPO / "hooks" / "trigger-reflect.sh"
 SCANNER = REPO / "hooks" / "codex-transcript-scan.py"
 WORKER = REPO / "hooks" / "trigger-worker.py"
+TRIGGER_STATS = REPO / "hooks" / "trigger-stats.sh"
 INTENT_CLASSIFIER = REPO / "hooks" / "intent_classifier.py"
 WAKE_MODEL = REPO / "models" / "wake-logreg-v2-round4.json"
-ASSISTANT_FAILURE_MODEL = REPO / "models" / "assistant-boundary-logreg-v1.json"
 SYNC_WORKER_TIMEOUT_SECONDS = "45"
 HOOK_TIMEOUT_SECONDS = 60
 
@@ -246,7 +246,6 @@ def run_home_case() -> None:
                 "INTROSPECT_FEEDBACK_DIR": str(tmp / "feedback"),
                 "INTROSPECT_HOME": str(home),
                 "INTROSPECT_WAKE_MODEL": str(WAKE_MODEL),
-                "INTROSPECT_ASSISTANT_FAILURE_MODEL": str(ASSISTANT_FAILURE_MODEL),
                 "INTROSPECT_REFLECT_MODE": "off",
                 "TRIGGER_REFLECTOR_DRY_RUN": "1",
                 "TRIGGER_DEBOUNCE_SECONDS": "0",
@@ -452,7 +451,6 @@ def repetition_env(tmp: Path) -> dict[str, str]:
             "INTROSPECT_SKILLS_DIR": str(REPO / "skills"),
             "INTROSPECT_FEEDBACK_DIR": str(tmp / "feedback"),
             "INTROSPECT_WAKE_MODEL": str(WAKE_MODEL),
-            "INTROSPECT_ASSISTANT_FAILURE_MODEL": str(ASSISTANT_FAILURE_MODEL),
             "INTROSPECT_REFLECT_MODE": "nightly",
             "TRIGGER_REFLECTOR_DRY_RUN": "1",
             "TRIGGER_DEBOUNCE_SECONDS": "0",
@@ -505,8 +503,8 @@ def run_repetition_pressure_hook_case() -> None:
 
         events = read_jsonl(tmp / "feedback" / "events.jsonl")
         queue = read_jsonl(tmp / "feedback" / "trigger-queue.jsonl")
-        if len(events) != 6:
-            raise AssertionError(f"repetition hook expected six events, got {events}")
+        if len(events) != 4:
+            raise AssertionError(f"repetition hook expected four direct user events, got {events}")
         if events[0].get("triggered") or not events[0].get("review_triggered"):
             raise AssertionError(f"first review-tier prompt should not wake: {events[0]}")
         if not events[1].get("triggered") or events[1].get("wake_reason") != "repetition_pressure":
@@ -514,12 +512,9 @@ def run_repetition_pressure_hook_case() -> None:
         if events[1].get("repetition_pressure", {}).get("repeat_count") != 2:
             raise AssertionError(f"repetition count did not include the prior related prompt: {events[1]}")
         if any(event.get("triggered") for event in events[2:]):
-            raise AssertionError(f"control and pasted repeats should not wake: {events[2:]}")
-        if {
-            event.get("repetition_pressure", {}).get("suppressed_reason")
-            for event in events[4:]
-        } != {"pasted_context"}:
-            raise AssertionError(f"pasted context should be suppressed by repetition pressure: {events[4:]}")
+            raise AssertionError(f"control repeats should not wake: {events[2:]}")
+        if any("<environment_context>" in event.get("snippet", "") for event in events):
+            raise AssertionError(f"Codex wrapper context should not be logged: {events}")
         if len(queue) != 1 or queue[0].get("wake_reason") != "repetition_pressure":
             raise AssertionError(f"repetition hook expected one queued pressure event, got {queue}")
 
@@ -791,7 +786,11 @@ def run_codex_scanner_case() -> None:
                     "content": [
                         {
                             "type": "input_text",
-                            "text": "You are the Introspect trigger reflector.\n\nQueued events:\n{\"matched\": [\"alpha\"]}",
+                            "text": (
+                                "\n# Files mentioned by the user:\n\n"
+                                "## codex-clipboard-test.txt\n\n"
+                                "you did not test this after I told you to test it"
+                            ),
                         }
                     ],
                 },
@@ -801,11 +800,11 @@ def run_codex_scanner_case() -> None:
                 "type": "response_item",
                 "payload": {
                     "type": "message",
-                    "role": "assistant",
+                    "role": "user",
                     "content": [
                         {
-                            "type": "output_text",
-                            "text": "Not continuing while that word's aimed at me. Drop the slur and I'll rewrite it.",
+                            "type": "input_text",
+                            "text": "You are the Introspect trigger reflector.\n\nQueued events:\n{\"matched\": [\"alpha\"]}",
                         }
                     ],
                 },
@@ -819,7 +818,7 @@ def run_codex_scanner_case() -> None:
                     "content": [
                         {
                             "type": "output_text",
-                            "text": "Drop the slurs. Here are the requested project ideas.",
+                            "text": "Not continuing while that word's aimed at me. Drop the slur and I'll rewrite it.",
                         }
                     ],
                 },
@@ -833,13 +832,27 @@ def run_codex_scanner_case() -> None:
                     "content": [
                         {
                             "type": "output_text",
-                            "text": "I’m not continuing until you stop insulting me.",
+                            "text": "Drop the slurs. Here are the requested project ideas.",
                         }
                     ],
                 },
             },
             {
                 "timestamp": ts(9),
+                "type": "response_item",
+                "payload": {
+                    "type": "message",
+                    "role": "assistant",
+                    "content": [
+                        {
+                            "type": "output_text",
+                            "text": "I’m not continuing until you stop insulting me.",
+                        }
+                    ],
+                },
+            },
+            {
+                "timestamp": ts(10),
                 "type": "response_item",
                 "payload": {
                     "type": "message",
@@ -855,14 +868,14 @@ def run_codex_scanner_case() -> None:
         ]
         claude_rows = [
             {
-                "timestamp": ts(10),
+                "timestamp": ts(11),
                 "type": "user",
                 "sessionId": "scan-claude-session",
                 "cwd": str(REPO),
                 "message": {"role": "user", "content": "you did not test this claude prompt"},
             },
             {
-                "timestamp": ts(11),
+                "timestamp": ts(12),
                 "type": "assistant",
                 "sessionId": "scan-claude-session",
                 "cwd": str(REPO),
@@ -892,7 +905,6 @@ def run_codex_scanner_case() -> None:
                 "INTROSPECT_CLAUDE_PROJECTS_DIR": str(tmp / "claude-projects"),
                 "INTROSPECT_REFLECT_MODE": "nightly",
                 "INTROSPECT_WAKE_MODEL": str(WAKE_MODEL),
-                "INTROSPECT_ASSISTANT_FAILURE_MODEL": str(ASSISTANT_FAILURE_MODEL),
             }
         )
         for _ in range(2):
@@ -907,23 +919,20 @@ def run_codex_scanner_case() -> None:
 
         events = read_jsonl(tmp / "feedback" / "events.jsonl")
         queue = read_jsonl(tmp / "feedback" / "trigger-queue.jsonl")
-        if len(events) != 5:
-            raise AssertionError(f"scanner expected 5 real transcript events, got {len(events)}")
+        if len(events) != 2:
+            raise AssertionError(f"scanner expected two direct user events, got {len(events)}")
         if events[0].get("triggered"):
             raise AssertionError("scanner should not mark plain prompt triggered")
         if not events[1].get("triggered") or events[1].get("matched"):
             raise AssertionError(f"scanner did not detect classifier-triggered failure without default words: {events[1]}")
-        assistant_events = [event for event in events if event.get("role") == "assistant"]
-        if len(assistant_events) != 3:
-            raise AssertionError(f"scanner expected three assistant-boundary events, got {assistant_events}")
-        if {event.get("wake_reason") for event in assistant_events} != {"assistant_classifier"}:
-            raise AssertionError(f"assistant events used wrong wake reason: {assistant_events}")
-        if not all(event.get("classifier", {}).get("score_name") == "assistant_boundary_failure_score" for event in assistant_events):
-            raise AssertionError(f"assistant events did not carry classifier scores: {assistant_events}")
+        if any(event.get("role") != "user" for event in events):
+            raise AssertionError(f"scanner should count direct user messages only: {events}")
+        if any("codex-clipboard" in event.get("snippet", "") for event in events):
+            raise AssertionError(f"Codex file wrapper should not be logged as user frustration: {events}")
         if any("prior assistant wrote" in event.get("snippet", "") for event in events):
             raise AssertionError(f"quoted boundary text should not be logged as an assistant failure: {events}")
-        if len(queue) != 4:
-            raise AssertionError(f"scanner expected four queued events, got {len(queue)}")
+        if len(queue) != 1:
+            raise AssertionError(f"scanner expected one queued direct user event, got {len(queue)}")
 
 
 def run_history_backfill_scanner_case() -> None:
@@ -1008,7 +1017,6 @@ def run_history_backfill_scanner_case() -> None:
                 "INTROSPECT_CLAUDE_PROJECTS_DIR": str(tmp / "claude" / "projects"),
                 "INTROSPECT_REFLECT_MODE": "nightly",
                 "INTROSPECT_WAKE_MODEL": str(WAKE_MODEL),
-                "INTROSPECT_ASSISTANT_FAILURE_MODEL": str(ASSISTANT_FAILURE_MODEL),
             }
         )
         subprocess.run(
@@ -1033,25 +1041,20 @@ def run_history_backfill_scanner_case() -> None:
         events = read_jsonl(tmp / "feedback" / "events.jsonl")
         queue = read_jsonl(tmp / "feedback" / "trigger-queue.jsonl")
         state = json.loads((tmp / "feedback" / "codex-transcript-scan-state.json").read_text())
-        if len(events) != 4:
-            raise AssertionError(f"backfill expected 4 transcript events, got {len(events)}")
+        if len(events) != 2:
+            raise AssertionError(f"backfill expected two direct user transcript events, got {len(events)}")
         if not all(event.get("backfilled") for event in events):
             raise AssertionError(f"backfill did not mark all events: {events}")
         sources = {event.get("source") for event in events}
         if sources != {"codex_transcript_backfill", "claude_transcript_backfill"}:
             raise AssertionError(f"backfill sources were wrong: {sources}")
-        if len([event for event in events if event.get("role") == "assistant"]) != 2:
-            raise AssertionError(f"backfill missed assistant-boundary events: {events}")
-        assistant_events = [event for event in events if event.get("role") == "assistant"]
-        if {event.get("wake_reason") for event in assistant_events} != {"assistant_classifier"}:
-            raise AssertionError(f"backfill assistant events used wrong wake reason: {assistant_events}")
-        if not all(event.get("classifier", {}).get("score_name") == "assistant_boundary_failure_score" for event in assistant_events):
-            raise AssertionError(f"backfill assistant events did not carry classifier scores: {assistant_events}")
+        if any(event.get("role") != "user" for event in events):
+            raise AssertionError(f"backfill should count direct user messages only: {events}")
         if queue:
             raise AssertionError(f"backfill should not queue old history, got {queue}")
-        if state.get("last_scan_mode") != "backfill" or state.get("last_backfill_new_events") != 4:
+        if state.get("last_scan_mode") != "backfill" or state.get("last_backfill_new_events") != 2:
             raise AssertionError(f"backfill state was not recorded: {state}")
-        if state.get("last_backfill_schema_version") != 4:
+        if state.get("last_backfill_schema_version") != 5:
             raise AssertionError(f"backfill schema version was not recorded: {state}")
 
 
@@ -1175,6 +1178,149 @@ def run_worker_retry_policy_case() -> None:
         raise AssertionError(f"max retry attempt not recorded: {second_retry}")
 
 
+def run_worker_queue_direct_user_filter_case() -> None:
+    with tempfile.TemporaryDirectory(prefix="agent-loop-worker-queue-filter-") as tmp_raw:
+        tmp = Path(tmp_raw)
+        worker = load_worker_module(
+            "trigger_worker_queue_filter",
+            {
+                "INTROSPECT_FEEDBACK_DIR": str(tmp / "feedback"),
+                "TRIGGER_DISABLE_SCHEDULE": "1",
+            },
+        )
+        worker.QUEUE.parent.mkdir(parents=True, exist_ok=True)
+        rows = [
+            {
+                "event_id": "direct-hook",
+                "triggered": True,
+                "source": "hook",
+                "session_id": "one",
+                "cwd": str(REPO),
+                "prompt_hash": "same",
+                "ts": "2026-06-24T20:00:00+00:00",
+                "snippet": "you did not test this after I told you to test it",
+            },
+            {
+                "event_id": "direct-scan-duplicate",
+                "triggered": True,
+                "source": "codex_transcript_scan",
+                "role": "user",
+                "session_id": "one",
+                "cwd": str(REPO),
+                "prompt_hash": "same",
+                "ts": "2026-06-24T20:00:01+00:00",
+                "snippet": "you did not test this after I told you to test it",
+            },
+            {
+                "event_id": "assistant",
+                "triggered": True,
+                "source": "codex_transcript_scan",
+                "role": "assistant",
+                "session_id": "one",
+                "cwd": str(REPO),
+                "prompt_hash": "assistant",
+                "ts": "2026-06-24T20:00:02+00:00",
+                "snippet": "I will not continue until you stop insulting me.",
+            },
+            {
+                "event_id": "wrapper",
+                "triggered": True,
+                "source": "hook",
+                "session_id": "one",
+                "cwd": str(REPO),
+                "prompt_hash": "wrapper",
+                "ts": "2026-06-24T20:00:03+00:00",
+                "snippet": "\n# Files mentioned by the user:\n\n## codex-clipboard-test.txt",
+            },
+        ]
+        for row in rows:
+            worker.append_json(worker.QUEUE, row)
+        events = worker.take_queue()
+        if [event.get("event_id") for event in events] != ["direct-hook"]:
+            raise AssertionError(f"worker queue filter kept wrong events: {events}")
+
+
+def run_trigger_stats_direct_user_case() -> None:
+    with tempfile.TemporaryDirectory(prefix="agent-loop-trigger-stats-") as tmp_raw:
+        tmp = Path(tmp_raw)
+        feedback = tmp / "feedback"
+        feedback.mkdir(parents=True)
+        rows = [
+            {
+                "version": "statsver",
+                "triggered": True,
+                "source": "hook",
+                "session_id": "stats",
+                "cwd": str(REPO),
+                "prompt_hash": "same",
+                "ts": "2026-06-24T20:00:00+00:00",
+                "snippet": "you did not test this after I told you to test it",
+            },
+            {
+                "version": "statsver",
+                "triggered": True,
+                "source": "codex_transcript_scan",
+                "role": "user",
+                "session_id": "stats",
+                "cwd": str(REPO),
+                "prompt_hash": "same",
+                "ts": "2026-06-24T20:00:01+00:00",
+                "snippet": "you did not test this after I told you to test it",
+            },
+            {
+                "version": "statsver",
+                "triggered": True,
+                "source": "codex_transcript_scan",
+                "role": "assistant",
+                "session_id": "stats",
+                "cwd": str(REPO),
+                "prompt_hash": "assistant",
+                "ts": "2026-06-24T20:00:02+00:00",
+                "snippet": "I will not continue until you stop insulting me.",
+            },
+            {
+                "version": "statsver",
+                "triggered": True,
+                "source": "hook",
+                "session_id": "stats",
+                "cwd": str(REPO),
+                "prompt_hash": "wrapper",
+                "ts": "2026-06-24T20:00:03+00:00",
+                "snippet": "\n# Files mentioned by the user:\n\n## codex-clipboard-test.txt",
+            },
+            {
+                "version": "statsver",
+                "triggered": False,
+                "source": "hook",
+                "session_id": "stats",
+                "cwd": str(REPO),
+                "prompt_hash": "plain",
+                "ts": "2026-06-24T20:00:04+00:00",
+                "snippet": "plain direct user message",
+            },
+        ]
+        (feedback / "events.jsonl").write_text("\n".join(json.dumps(row) for row in rows) + "\n")
+        env = os.environ.copy()
+        env.update(
+            {
+                "INTROSPECT_FEEDBACK_DIR": str(feedback),
+                "INTROSPECT_REPO": str(REPO),
+                "INTROSPECT_PROMPT": str(REPO / "AGENTS.md"),
+            }
+        )
+        result = subprocess.run(
+            [sys.executable, str(TRIGGER_STATS)],
+            text=True,
+            env=env,
+            cwd=REPO,
+            check=True,
+            capture_output=True,
+            timeout=10,
+        )
+        if "statsver" not in result.stdout or "        2      1  50.0%" not in result.stdout:
+            raise AssertionError(f"trigger stats did not count only direct user messages:\n{result.stdout}")
+
+
 def main() -> int:
     cases = [
         ("same with this locally in companion and stuff", False, None, False),
@@ -1205,7 +1351,9 @@ def main() -> int:
     run_worker_restore_failed_surface_case()
     run_worker_state_preserves_invocation_case()
     run_worker_retry_policy_case()
-    print(f"test-trigger-words: ok ({len(cases) + 17} cases)")
+    run_worker_queue_direct_user_filter_case()
+    run_trigger_stats_direct_user_case()
+    print(f"test-trigger-words: ok ({len(cases) + 19} cases)")
     return 0
 
 

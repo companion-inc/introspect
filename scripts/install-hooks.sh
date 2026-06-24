@@ -288,11 +288,6 @@ ensure_home_files() {
   if [[ ! -f "$INTROSPECT_HOME_DIR/models/wake-logreg-v2-round4.json" && -f "$REPO/models/wake-logreg-v2-round4.json" ]]; then
     cp "$REPO/models/wake-logreg-v2-round4.json" "$INTROSPECT_HOME_DIR/models/wake-logreg-v2-round4.json"
   fi
-  if [[ -f "$REPO/models/assistant-boundary-logreg-v1.json" ]]; then
-    if [[ ! -f "$INTROSPECT_HOME_DIR/models/assistant-boundary-logreg-v1.json" ]] || ! cmp -s "$REPO/models/assistant-boundary-logreg-v1.json" "$INTROSPECT_HOME_DIR/models/assistant-boundary-logreg-v1.json"; then
-      cp "$REPO/models/assistant-boundary-logreg-v1.json" "$INTROSPECT_HOME_DIR/models/assistant-boundary-logreg-v1.json"
-    fi
-  fi
   if [[ ! -f "$INTROSPECT_HOME_DIR/settings.json" ]]; then
     cat > "$INTROSPECT_HOME_DIR/settings.json" <<JSON
 {
@@ -362,107 +357,6 @@ PY
   fi
 }
 
-migrate_stale_assistant_classifier_feedback() {
-  local scorer_python="${INTROSPECT_SCORER_PYTHON:-$SETUP_PYTHON}"
-  PYTHONDONTWRITEBYTECODE=1 "$scorer_python" - "$FEEDBACK_DIR/events.jsonl" "$FEEDBACK_DIR/trigger-queue.jsonl" "$INTROSPECT_HOME_DIR/models/assistant-boundary-logreg-v1.json" "$REPO" "$STAMP" <<'PY'
-import json
-import os
-import sys
-from pathlib import Path
-
-events_path = Path(sys.argv[1])
-queue_path = Path(sys.argv[2])
-model_path = Path(sys.argv[3])
-repo = Path(sys.argv[4])
-stamp = sys.argv[5]
-
-if not model_path.exists():
-    raise SystemExit(0)
-
-os.environ["INTROSPECT_ASSISTANT_FAILURE_MODEL"] = str(model_path)
-sys.path.insert(0, str(repo / "hooks"))
-try:
-    from intent_classifier import load_model, score_assistant_failure
-except Exception:
-    raise SystemExit(0)
-
-try:
-    current_model_type = str(load_model(str(model_path)).get("model_type") or "")
-except Exception:
-    raise SystemExit(0)
-
-
-def migrate(path: Path, *, queue: bool) -> tuple[int, int, int]:
-    if not path.exists() or path.stat().st_size == 0:
-        return 0, 0, 0
-    output: list[str] = []
-    changed = 0
-    rescored = 0
-    dropped = 0
-    for raw in path.read_text().splitlines():
-        if not raw.strip():
-            continue
-        try:
-            row = json.loads(raw)
-        except Exception:
-            output.append(raw)
-            continue
-        classifier = row.get("classifier") if isinstance(row.get("classifier"), dict) else {}
-        stale = (
-            row.get("role") == "assistant"
-            and row.get("wake_reason") in {"assistant_classifier", "assistant_boundary_refusal"}
-            and str(classifier.get("model_type") or "") != current_model_type
-        )
-        if not stale:
-            output.append(json.dumps(row, ensure_ascii=False))
-            continue
-        text = row.get("prompt") or row.get("snippet") or ""
-        if not isinstance(text, str) or not text.strip():
-            output.append(json.dumps(row, ensure_ascii=False))
-            continue
-        try:
-            scored = score_assistant_failure(text, source=str(row.get("source") or "assistant"))
-        except Exception:
-            output.append(json.dumps(row, ensure_ascii=False))
-            continue
-        rescored += 1
-        triggered = bool(scored.get("triggered"))
-        review = bool(scored.get("review"))
-        if not review or (queue and not triggered):
-            changed += 1
-            dropped += 1
-            continue
-        row["classifier"] = scored
-        row["wake_reason"] = "assistant_classifier"
-        row["triggered"] = triggered
-        row["review_triggered"] = review
-        if triggered:
-            row["assistant_failure"] = {"label": "assistant_withheld_authorized_work"}
-        else:
-            row.pop("assistant_failure", None)
-        output.append(json.dumps(row, ensure_ascii=False))
-        changed += 1
-
-    if changed:
-        backup = path.with_name(f"{path.name}.assistant-model-migration.{stamp}.bak")
-        backup.write_text(path.read_text())
-        tmp = path.with_suffix(path.suffix + f".{os.getpid()}.tmp")
-        tmp.write_text("\n".join(output) + ("\n" if output else ""))
-        os.replace(tmp, path)
-    return changed, rescored, dropped
-
-
-event_changed, event_rescored, event_dropped = migrate(events_path, queue=False)
-queue_changed, queue_rescored, queue_dropped = migrate(queue_path, queue=True)
-if event_changed or queue_changed:
-    print(
-        "migrated stale assistant classifier feedback: "
-        f"events_rescored={event_rescored} events_dropped={event_dropped} "
-        f"queue_rescored={queue_rescored} queue_dropped={queue_dropped}"
-    )
-PY
-}
-
 if [[ "$MODE" == "install" ]]; then
   migrate_previous_home
   ensure_home_files
@@ -489,10 +383,6 @@ if [[ -z "$FEEDBACK_DIR" ]]; then
   FEEDBACK_DIR="$INTROSPECT_HOME_DIR/feedback"
 fi
 FEEDBACK_DIR="$(expand_path "$FEEDBACK_DIR")"
-
-if [[ "$MODE" == "install" ]]; then
-  migrate_stale_assistant_classifier_feedback
-fi
 
 discover_shadow_models() {
   if [[ -n "$WAKE_SHADOW_MODELS" ]]; then
@@ -587,7 +477,7 @@ else
   INTROSPECT_HOME="$INTROSPECT_HOME_DIR" INTROSPECT_USER_SKILLS_DIR="$USER_SKILLS_DIR" /bin/bash "$SKILL_SYNC" --unlink
 fi
 
-HOOK_COMMAND="env PYTHONDONTWRITEBYTECODE=1 INTROSPECT_REFLECT_MODE=$(quote "$REFLECT_MODE") INTROSPECT_REPO=$(quote "$REPO") AGENTS_HOME=$(quote "$AGENTS_HOME_DIR") INTROSPECT_PROMPT=$(quote "$PROMPT") INTROSPECT_SKILLS_DIR=$(quote "$SKILLS_DIR") INTROSPECT_USER_SKILLS_DIR=$(quote "$USER_SKILLS_DIR") INTROSPECT_FEEDBACK_DIR=$(quote "$FEEDBACK_DIR") INTROSPECT_HOME=$(quote "$INTROSPECT_HOME_DIR") INTROSPECT_WAKE_MODEL=$(quote "$INTROSPECT_HOME_DIR/models/wake-logreg-v2-round4.json") INTROSPECT_ASSISTANT_FAILURE_MODEL=$(quote "$INTROSPECT_HOME_DIR/models/assistant-boundary-logreg-v1.json") INTROSPECT_WAKE_SHADOW_MODELS=$(quote "$WAKE_SHADOW_MODELS") INTROSPECT_WAKE_SENSITIVITY=$(quote "$WAKE_SENSITIVITY") INTROSPECT_WAKE_THRESHOLD=$(quote "$WAKE_THRESHOLD") $(quote "$SETUP_PYTHON") $(quote "$HOOK")"
+HOOK_COMMAND="env PYTHONDONTWRITEBYTECODE=1 INTROSPECT_REFLECT_MODE=$(quote "$REFLECT_MODE") INTROSPECT_REPO=$(quote "$REPO") AGENTS_HOME=$(quote "$AGENTS_HOME_DIR") INTROSPECT_PROMPT=$(quote "$PROMPT") INTROSPECT_SKILLS_DIR=$(quote "$SKILLS_DIR") INTROSPECT_USER_SKILLS_DIR=$(quote "$USER_SKILLS_DIR") INTROSPECT_FEEDBACK_DIR=$(quote "$FEEDBACK_DIR") INTROSPECT_HOME=$(quote "$INTROSPECT_HOME_DIR") INTROSPECT_WAKE_MODEL=$(quote "$INTROSPECT_HOME_DIR/models/wake-logreg-v2-round4.json") INTROSPECT_WAKE_SHADOW_MODELS=$(quote "$WAKE_SHADOW_MODELS") INTROSPECT_WAKE_SENSITIVITY=$(quote "$WAKE_SENSITIVITY") INTROSPECT_WAKE_THRESHOLD=$(quote "$WAKE_THRESHOLD") $(quote "$SETUP_PYTHON") $(quote "$HOOK")"
 HOOK_MODE="$MODE"
 if [[ "$MODE" == "install" && "$REFLECT_MODE" == "off" ]]; then
   HOOK_MODE="uninstall"
@@ -733,7 +623,6 @@ data = {
         "INTROSPECT_FEEDBACK_DIR": feedback_dir,
         "INTROSPECT_HOME": home_dir,
         "INTROSPECT_WAKE_MODEL": str(Path(home_dir) / "models" / "wake-logreg-v2-round4.json"),
-        "INTROSPECT_ASSISTANT_FAILURE_MODEL": str(Path(home_dir) / "models" / "assistant-boundary-logreg-v1.json"),
         "INTROSPECT_REFLECTOR_RUNNER": runner,
         "INTROSPECT_REFLECTOR_CLAUDE_MODEL": claude_model,
         "INTROSPECT_REFLECTOR_CLAUDE_FALLBACK_MODEL": claude_fallback_model,
@@ -799,7 +688,6 @@ data = {
         "INTROSPECT_FEEDBACK_DIR": feedback_dir,
         "INTROSPECT_HOME": home_dir,
         "INTROSPECT_WAKE_MODEL": str(Path(home_dir) / "models" / "wake-logreg-v2-round4.json"),
-        "INTROSPECT_ASSISTANT_FAILURE_MODEL": str(Path(home_dir) / "models" / "assistant-boundary-logreg-v1.json"),
         "INTROSPECT_REFLECTOR_RUNNER": runner,
         "INTROSPECT_REFLECTOR_CLAUDE_MODEL": claude_model,
         "INTROSPECT_REFLECTOR_CLAUDE_FALLBACK_MODEL": claude_fallback_model,
@@ -812,8 +700,7 @@ data = {
     },
     # Event-driven, not polled: launchd wakes the scanner when Codex writes
     # session history or Claude writes project history. Codex's own hook can
-    # be skipped, and assistant-output failures never pass through user-prompt
-    # hooks, so the transcript scanner is the backstop without a timer.
+    # be skipped, so the transcript scanner is the user-message backstop.
     "WatchPaths": [
         str(Path.home() / ".codex" / "history.jsonl"),
         str(Path.home() / ".codex" / "sessions"),
@@ -878,7 +765,6 @@ PY
     INTROSPECT_FEEDBACK_DIR="$FEEDBACK_DIR" \
     INTROSPECT_HOME="$INTROSPECT_HOME_DIR" \
     INTROSPECT_WAKE_MODEL="$INTROSPECT_HOME_DIR/models/wake-logreg-v2-round4.json" \
-    INTROSPECT_ASSISTANT_FAILURE_MODEL="$INTROSPECT_HOME_DIR/models/assistant-boundary-logreg-v1.json" \
     INTROSPECT_WAKE_SHADOW_MODELS="$WAKE_SHADOW_MODELS" \
     INTROSPECT_WAKE_SENSITIVITY="$WAKE_SENSITIVITY" \
     INTROSPECT_WAKE_THRESHOLD="$WAKE_THRESHOLD" \

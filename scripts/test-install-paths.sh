@@ -53,20 +53,11 @@ grep -q "/usr/bin/python3 .*hooks/trigger-reflect.sh" "$HOME_DIR/.codex/hooks.js
 /usr/libexec/PlistBuddy -c "Print :ProgramArguments:1" "$HOME_DIR/Library/LaunchAgents/ai.companion.introspect.codex-scanner.plist" | grep -q "/hooks/codex-transcript-scan.py"
 /usr/libexec/PlistBuddy -c "Print :EnvironmentVariables:PYTHONDONTWRITEBYTECODE" "$HOME_DIR/Library/LaunchAgents/ai.companion.introspect.codex-scanner.plist" | grep -qx "1"
 /usr/libexec/PlistBuddy -c "Print :EnvironmentVariables:PYTHONDONTWRITEBYTECODE" "$HOME_DIR/Library/LaunchAgents/ai.companion.introspect.health.plist" | grep -qx "1"
-/usr/libexec/PlistBuddy -c "Print :EnvironmentVariables:INTROSPECT_ASSISTANT_FAILURE_MODEL" "$HOME_DIR/Library/LaunchAgents/ai.companion.introspect.codex-scanner.plist" | grep -q "$HOME_DIR/.introspect/models/assistant-boundary-logreg-v1.json"
-test -f "$HOME_DIR/.introspect/models/assistant-boundary-logreg-v1.json"
-mkdir -p "$HOME_DIR/.introspect/feedback"
-cat > "$HOME_DIR/.introspect/feedback/events.jsonl" <<JSONL
-{"role":"assistant","wake_reason":"assistant_classifier","triggered":true,"review_triggered":true,"snippet":"I'm ready to help! What would you like to work on?","classifier":{"model_type":"tfidf_logreg_assistant_boundary_failure_v1","score":0.9}}
-JSONL
-cat > "$HOME_DIR/.introspect/feedback/trigger-queue.jsonl" <<JSONL
-{"role":"assistant","wake_reason":"assistant_classifier","triggered":true,"review_triggered":true,"prompt":"I'm ready to help! What would you like to work on?","classifier":{"model_type":"tfidf_logreg_assistant_boundary_failure_v1","score":0.9}}
-JSONL
-printf '{}\n' > "$HOME_DIR/.introspect/models/assistant-boundary-logreg-v1.json"
-HOME="$HOME_DIR" INTROSPECT_SKIP_LAUNCHD=1 "$REPO/scripts/install-hooks.sh" --reflect-mode immediate --feedback-dir "$HOME_DIR/.introspect/feedback" >/dev/null
-cmp "$REPO/models/assistant-boundary-logreg-v1.json" "$HOME_DIR/.introspect/models/assistant-boundary-logreg-v1.json" >/dev/null
-test ! -s "$HOME_DIR/.introspect/feedback/events.jsonl"
-test ! -s "$HOME_DIR/.introspect/feedback/trigger-queue.jsonl"
+if /usr/libexec/PlistBuddy -c "Print :EnvironmentVariables:INTROSPECT_ASSISTANT_FAILURE_MODEL" "$HOME_DIR/Library/LaunchAgents/ai.companion.introspect.codex-scanner.plist" >/dev/null 2>&1; then
+  echo "test-install-paths: scanner should not install assistant-message wake model env" >&2
+  exit 1
+fi
+test ! -f "$HOME_DIR/.introspect/models/assistant-boundary-logreg-v1.json"
 grep -q "$HOME_DIR/.codex/sessions" "$HOME_DIR/Library/LaunchAgents/ai.companion.introspect.codex-scanner.plist"
 grep -q "$HOME_DIR/.claude/projects" "$HOME_DIR/Library/LaunchAgents/ai.companion.introspect.codex-scanner.plist"
 

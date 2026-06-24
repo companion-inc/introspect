@@ -9,6 +9,16 @@ import subprocess
 import sys
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+try:
+    from event_filters import event_count_key, event_counts_as_direct_user
+except Exception:
+    def event_counts_as_direct_user(event):
+        return event.get("role") in (None, "", "user")
+
+    def event_count_key(event, *, bucket_seconds=120):
+        return str(event.get("event_id") or event.get("dedupe_key") or event.get("prompt_hash") or "")
+
 DEFAULT_REPO = str(Path(__file__).resolve().parent.parent)
 REPO = os.path.expanduser(os.environ.get("INTROSPECT_REPO", DEFAULT_REPO))
 AGENTS_HOME = os.path.expanduser(os.environ.get("AGENTS_HOME") or "~/.agents")
@@ -56,13 +66,21 @@ if not os.path.exists(EVENTS):
     print("No events logged yet.")
     sys.exit(0)
 
-stats = {}   # version -> [prompts, triggers, first_ts, last_ts]
+stats = {}   # version -> [direct_user_prompts, triggers, first_ts, last_ts]
 order = []
+seen = set()
 for line in open(EVENTS):
     try:
         e = json.loads(line)
     except Exception:
         continue
+    if not event_counts_as_direct_user(e):
+        continue
+    key = event_count_key(e)
+    if key and key in seen:
+        continue
+    if key:
+        seen.add(key)
     v = e.get("version", "unknown")
     if v not in stats:
         stats[v] = [0, 0, e.get("ts", ""), e.get("ts", "")]
@@ -79,7 +97,7 @@ def subject(version):
     return git_output(PROMPT_REPO, "log", "-1", "--format=%s", version)[:60]
 
 
-print(f"{'version':<10} {'prompts':>7} {'trig':>6} {'rate':>6}  first..last (UTC)        commit subject")
+print(f"{'version':<10} {'user_msgs':>9} {'trig':>6} {'rate':>6}  first..last (UTC)        commit subject")
 best = None
 for v in order:
     p, f, first, last = stats[v]
@@ -87,7 +105,7 @@ for v in order:
     if v != "unknown" and p >= 5 and (best is None or rate < best[1]):
         best = (v, rate)
     span = f"{first[5:16]}..{last[5:16]}"
-    print(f"{v:<10} {p:>7} {f:>6} {rate:>6.1%}  {span:<24}  {subject(v)}")
+    print(f"{v:<10} {p:>9} {f:>6} {rate:>6.1%}  {span:<24}  {subject(v)}")
 
 if best:
     print(f"\nBest version with >=5 prompts: {best[0]} ({best[1]:.1%}).")

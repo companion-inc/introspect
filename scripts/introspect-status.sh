@@ -123,7 +123,6 @@ fallback = value("INTROSPECT_REFLECTOR_CLAUDE_FALLBACK_MODEL").strip()
 codex = model(value("INTROSPECT_REFLECTOR_CODEX_MODEL"))
 shadow = value("INTROSPECT_WAKE_SHADOW_MODELS")
 shadow_count = len([item for item in shadow.split(",") if item.strip()])
-assistant_model = Path(value("INTROSPECT_ASSISTANT_FAILURE_MODEL")).name or "missing"
 sensitivity = value("INTROSPECT_WAKE_SENSITIVITY", "balanced")
 threshold = value("INTROSPECT_WAKE_THRESHOLD")
 configured_threshold = threshold.strip() if threshold.strip() else "model"
@@ -141,7 +140,6 @@ parts = [
     f"codex_model={codex}",
     f"sensitivity={sensitivity}",
     f"effective_threshold={effective_threshold}",
-    f"assistant_failure_model={assistant_model}",
     f"shadow_models={shadow_count}",
 ]
 if sensitivity == "custom":
@@ -290,7 +288,7 @@ printf "\nskills:\n"
 
 printf "\nfeedback:\n"
 if [[ -f "$FEEDBACK_DIR/events.jsonl" ]]; then
-  "$SETUP_PYTHON" - "$FEEDBACK_DIR" "$INTROSPECT_HOME_DIR" <<'PY'
+  "$SETUP_PYTHON" - "$FEEDBACK_DIR" "$INTROSPECT_HOME_DIR" "$RUNTIME_REPO" <<'PY'
 import json
 import re
 import sys
@@ -299,7 +297,31 @@ from pathlib import Path
 
 feedback = Path(sys.argv[1])
 home = Path(sys.argv[2])
+runtime_repo = Path(sys.argv[3])
 repo = feedback.parent
+sys.path.insert(0, str(runtime_repo / "hooks"))
+try:
+    from event_filters import event_count_key, event_counts_as_direct_user, is_codex_control_message
+except Exception:
+    def event_counts_as_direct_user(event):
+        return event.get("role") in (None, "", "user")
+
+    def event_count_key(event, *, bucket_seconds=120):
+        return str(event.get("event_id") or event.get("dedupe_key") or event.get("prompt_hash") or "")
+
+    def is_codex_control_message(prompt):
+        stripped = str(prompt or "").lstrip().lower()
+        return (
+            stripped.startswith("# agents.md instructions")
+            or stripped.startswith("# files mentioned by the user:")
+            or stripped.startswith("# files mentioned by user:")
+            or stripped.startswith("## codex-clipboard-")
+            or stripped.startswith("<codex_internal_context")
+            or stripped.startswith("<environment_context>")
+            or stripped.startswith("<instructions>")
+            or stripped.startswith("<turn_aborted>")
+            or stripped.startswith("you are the introspect trigger reflector.")
+        )
 active_words = set()
 words_file = home / "trigger-words.txt"
 if words_file.exists():
@@ -316,11 +338,26 @@ for line in (feedback / "events.jsonl").read_text().splitlines():
     except Exception:
         pass
 
-triggered = [event for event in events if event.get("triggered")]
-print(f"events: {len(events)} total, {len(triggered)} triggered")
+seen_count_keys = set()
+counted_events = []
+for event in events:
+    if not event_counts_as_direct_user(event):
+        continue
+    key = event_count_key(event)
+    if key and key in seen_count_keys:
+        continue
+    if key:
+        seen_count_keys.add(key)
+    counted_events.append(event)
+
+triggered = [event for event in counted_events if event.get("triggered")]
+print(
+    f"events: {len(counted_events)} direct-user counted, {len(triggered)} triggered "
+    f"({len(events)} raw rows)"
+)
 classifier_events = [
     event
-    for event in events
+    for event in counted_events
     if isinstance(event.get("classifier"), dict) and "score" in event["classifier"]
 ]
 sensitivities = sorted(
@@ -352,8 +389,8 @@ print(
     f"{len(shadow_models)} candidate model(s), "
     f"sensitivities={','.join(sensitivities) if sensitivities else 'unknown'}"
 )
-if events:
-    latest_event = max(events, key=lambda event: str(event.get("observed_at") or event.get("ts") or ""))
+if counted_events:
+    latest_event = max(counted_events, key=lambda event: str(event.get("observed_at") or event.get("ts") or ""))
     latest_observed_at = latest_event.get("observed_at") or latest_event.get("ts")
     print(
         "latest event: "
@@ -410,10 +447,28 @@ if state_path.exists():
 
 queue_path = feedback / "trigger-queue.jsonl"
 if queue_path.exists():
-    queued = sum(1 for line in queue_path.read_text().splitlines() if line.strip())
+    queue_rows = []
+    for line in queue_path.read_text().splitlines():
+        if not line.strip():
+            continue
+        try:
+            queue_rows.append(json.loads(line))
+        except Exception:
+            pass
 else:
-    queued = 0
-print(f"queued events: {queued}")
+    queue_rows = []
+seen_queue_keys = set()
+counted_queue = []
+for event in queue_rows:
+    if not event_counts_as_direct_user(event):
+        continue
+    key = event_count_key(event)
+    if key and key in seen_queue_keys:
+        continue
+    if key:
+        seen_queue_keys.add(key)
+    counted_queue.append(event)
+print(f"queued events: {len(counted_queue)} counted ({len(queue_rows)} raw rows)")
 print(f"lock present: {(feedback / 'reflector.lock').exists()}")
 
 scan_state_path = feedback / "codex-transcript-scan-state.json"
@@ -461,13 +516,7 @@ def prompt_text(content):
     return "\n".join(parts)
 
 def is_control(prompt):
-    stripped = prompt.lstrip()
-    return (
-        stripped.startswith("# AGENTS.md instructions for ")
-        or stripped.startswith("<codex_internal_context ")
-        or stripped.startswith("<turn_aborted>")
-        or stripped.startswith("You are the Introspect trigger reflector.")
-    )
+    return is_codex_control_message(prompt)
 
 latest_codex = None
 sessions_dir = Path.home() / ".codex" / "sessions"

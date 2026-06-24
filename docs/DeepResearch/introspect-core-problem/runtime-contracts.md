@@ -31,7 +31,8 @@ Contract:
 
 - `prompt_hash` is over normalized user-visible prompt text.
 - `source_records` can grow, but queueing happens once per canonical event.
-- Control messages and reflector prompts are excluded before canonicalization.
+- Assistant messages, Codex file/context wrappers, control messages, pasted context, and reflector prompts are excluded before canonicalization.
+- Trigger-rate stats and worker queue intake count direct user messages only and collapse hook/scanner duplicate observations.
 
 ## Repetition Pressure
 
@@ -57,7 +58,7 @@ Contract:
 
 - Repetition pressure only amplifies user prompts that already meet the classifier review threshold.
 - Repetition state is local and bounded under `feedback/repetition-state.json`; it stores hashed comparison features, not raw prompt text.
-- Backfill, control phrases, pasted context, and duplicate hook/scanner observations do not increment pressure.
+- Assistant messages, backfill, Codex file/context wrappers, control phrases, pasted context, and duplicate hook/scanner observations do not increment pressure.
 - A repeated-pressure event queues through the same `trigger-queue.jsonl` and worker path as classifier-triggered events.
 
 ## Trigger Batch
