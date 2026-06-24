@@ -18,14 +18,14 @@ except Exception:  # pragma: no cover - fallback for non-POSIX development hosts
     fcntl = None
 
 
-VERSION = "repetition-pressure-v1"
+VERSION = "repetition-pressure-v2"
 DEFAULT_WINDOW_SECONDS = 30 * 60
 DEFAULT_DUPLICATE_SECONDS = 10 * 60
 DEFAULT_MIN_SIMILARITY = 0.46
 DEFAULT_MIN_REPEATS = 2
 DEFAULT_MIN_CHARS = 24
 DEFAULT_MIN_TERMS = 4
-MAX_ENTRIES_PER_SCOPE = 50
+MAX_ENTRIES_PER_SCOPE = 75
 MAX_SEEN_KEYS = 5000
 
 TOKEN_RE = re.compile(r"(?u)\b[\w']+\b")
@@ -182,14 +182,36 @@ def looks_like_pasted_context(text: str) -> bool:
     return False
 
 
-def scope_id(event: dict[str, Any]) -> str:
+def scope_candidates(event: dict[str, Any]) -> list[tuple[str, str]]:
+    cwd = compact_text(event.get("cwd"))
+    transcript_path = compact_text(event.get("transcript_path"))
+    raw_scopes: list[tuple[str, str]] = []
+    if cwd:
+        raw_scopes.append(("project", f"{VERSION}\0project\0{cwd}"))
+    elif transcript_path:
+        raw_scopes.append((
+            "transcript_parent",
+            f"{VERSION}\0transcript_parent\0{str(Path(transcript_path).parent)}",
+        ))
+
+    candidates: list[tuple[str, str]] = []
+    seen: set[str] = set()
+    for kind, raw in raw_scopes:
+        key = hash_value(raw or "unknown-scope")
+        if key in seen:
+            continue
+        seen.add(key)
+        candidates.append((kind, key))
+    return candidates
+
+
+def duplicate_scope_id(event: dict[str, Any]) -> str:
     session_id = compact_text(event.get("session_id"))
     cwd = compact_text(event.get("cwd"))
     transcript_path = compact_text(event.get("transcript_path"))
-    if not session_id and not cwd and transcript_path:
+    if not session_id and transcript_path:
         session_id = transcript_path
-    raw = "\0".join([session_id, cwd])
-    return hash_value(raw or "unknown-scope")
+    return hash_value("\0".join([session_id, cwd]) or "unknown-duplicate-scope")
 
 
 def message_key(event: dict[str, Any], prompt_hash: str) -> str:
@@ -276,11 +298,14 @@ def duplicate_observation(
     *,
     now: dt.datetime,
     prompt_hash: str,
+    duplicate_scope: str,
     duplicate_seconds: int,
 ) -> bool:
     cutoff = now - dt.timedelta(seconds=duplicate_seconds)
     for entry in reversed(entries):
         if entry.get("prompt_hash") != prompt_hash:
+            continue
+        if compact_text(entry.get("duplicate_scope")) != duplicate_scope:
             continue
         if parse_ts(entry.get("observed_at") or entry.get("ts")) < cutoff:
             continue
@@ -354,8 +379,9 @@ def score_repetition_pressure(
         result["classifier_score"] = classifier_score
         result["review_threshold"] = review_threshold
         return result
-    if not any(compact_text(event.get(name)) for name in ("session_id", "cwd", "transcript_path")):
-        result["suppressed_reason"] = "scope_unavailable"
+    scopes = scope_candidates(event)
+    if not scopes:
+        result["suppressed_reason"] = "project_scope_unavailable"
         result["classifier_score"] = classifier_score
         result["review_threshold"] = review_threshold
         return result
@@ -365,19 +391,24 @@ def score_repetition_pressure(
         result["suppressed_reason"] = "too_few_features"
         return result
 
-    key = scope_id(event)
+    duplicate_scope = duplicate_scope_id(event)
     locator = compact_text(event.get("message_locator") or event.get("dedupe_key"))
     has_locator = bool(locator)
-    observation_key = hash_value(f"{key}\0{message_key(event, prompt_hash)}", length=32)
+    observation_key = hash_value(f"{duplicate_scope}\0{message_key(event, prompt_hash)}", length=32)
     path = Path(state_path)
     with locked_state(path) as state:
         prune_state(state, now, window_seconds, duplicate_seconds)
         seen = state.setdefault("seen", {})
-        entries = state.setdefault("scopes", {}).setdefault(key, [])
+        state_scopes = state.setdefault("scopes", {})
+        scope_entries = [
+            (kind, key, state_scopes.setdefault(key, []))
+            for kind, key in scopes
+        ]
         if observation_key in seen or duplicate_observation(
-            entries,
+            [entry for _kind, _key, entries in scope_entries for entry in entries],
             now=now,
             prompt_hash=prompt_hash,
+            duplicate_scope=duplicate_scope,
             duplicate_seconds=duplicate_seconds,
         ):
             result["eligible"] = True
@@ -385,18 +416,32 @@ def score_repetition_pressure(
             result["suppressed_reason"] = "duplicate_observation"
             return result
 
+        best_scope_kind = scopes[0][0]
+        best_scope_key = scopes[0][1]
         scored: list[tuple[float, dict[str, Any]]] = []
-        for entry in entries:
-            previous = set(entry.get("features") or [])
-            similarity = jaccard(features, previous)
-            if similarity >= min_similarity:
-                scored.append((similarity, entry))
-        scored.sort(key=lambda item: item[0], reverse=True)
+        for kind, key, entries in scope_entries:
+            current_scored: list[tuple[float, dict[str, Any]]] = []
+            for entry in entries:
+                previous = set(entry.get("features") or [])
+                similarity = jaccard(features, previous)
+                if similarity >= min_similarity:
+                    current_scored.append((similarity, entry))
+            current_scored.sort(key=lambda item: item[0], reverse=True)
+            if len(current_scored) > len(scored) or (
+                len(current_scored) == len(scored)
+                and current_scored
+                and (not scored or current_scored[0][0] > scored[0][0])
+            ):
+                best_scope_kind = kind
+                best_scope_key = key
+                scored = current_scored
         repeat_count = 1 + len(scored)
         max_similarity = scored[0][0] if scored else 0.0
         result.update(
             {
                 "eligible": True,
+                "scope": best_scope_kind,
+                "scope_id": best_scope_key,
                 "score": round(max_similarity, 4),
                 "repeat_count": repeat_count,
                 "similar_count": len(scored),
@@ -410,18 +455,19 @@ def score_repetition_pressure(
         if repeat_count >= min_repeats and not bool(classifier.get("triggered")):
             result["triggered"] = True
 
-        entries.append(
-            {
-                "event_id": compact_text(event.get("event_id"))[:160],
-                "ts": iso_ts(parse_ts(event.get("ts"))),
-                "observed_at": iso_ts(now),
-                "prompt_hash": prompt_hash,
-                "has_locator": has_locator,
-                "score": classifier_score,
-                "features": sorted(features),
-            }
-        )
-        state["scopes"][key] = entries[-MAX_ENTRIES_PER_SCOPE:]
+        current_entry = {
+            "event_id": compact_text(event.get("event_id"))[:160],
+            "ts": iso_ts(parse_ts(event.get("ts"))),
+            "observed_at": iso_ts(now),
+            "prompt_hash": prompt_hash,
+            "has_locator": has_locator,
+            "duplicate_scope": duplicate_scope,
+            "score": classifier_score,
+            "features": sorted(features),
+        }
+        for _kind, key, entries in scope_entries:
+            entries.append(dict(current_entry))
+            state["scopes"][key] = entries[-MAX_ENTRIES_PER_SCOPE:]
         seen[observation_key] = iso_ts(now)
         state["version"] = VERSION
         state["updated_at"] = iso_ts(now)

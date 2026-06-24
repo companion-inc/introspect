@@ -464,7 +464,13 @@ def repetition_env(tmp: Path) -> dict[str, str]:
     return env
 
 
-def run_hook_prompt(tmp: Path, prompt: str, *, session_id: str = "repeat-session") -> None:
+def run_hook_prompt(
+    tmp: Path,
+    prompt: str,
+    *,
+    session_id: str = "repeat-session",
+    cwd: str | None = None,
+) -> None:
     subprocess.run(
         [sys.executable, str(HOOK)],
         input=json.dumps(
@@ -472,7 +478,7 @@ def run_hook_prompt(tmp: Path, prompt: str, *, session_id: str = "repeat-session
                 "prompt": prompt,
                 "source": "codex",
                 "session_id": session_id,
-                "cwd": str(REPO),
+                "cwd": cwd or str(REPO),
                 "transcript_path": "",
             }
         ),
@@ -517,6 +523,70 @@ def run_repetition_pressure_hook_case() -> None:
             raise AssertionError(f"Codex wrapper context should not be logged: {events}")
         if len(queue) != 1 or queue[0].get("wake_reason") != "repetition_pressure":
             raise AssertionError(f"repetition hook expected one queued pressure event, got {queue}")
+
+
+def run_repetition_pressure_cross_chat_project_case() -> None:
+    with tempfile.TemporaryDirectory(prefix="agent-loop-repeat-cross-chat-") as tmp_raw:
+        tmp = Path(tmp_raw)
+        first = "you used the wrong tool and ignored the DGX instructions, keep going and fix it"
+        second = "you ignored the DGX instructions and used the wrong tool again, fix it"
+        run_hook_prompt(tmp, first, session_id="repeat-chat-one")
+        run_hook_prompt(tmp, second, session_id="repeat-chat-two")
+
+        events = read_jsonl(tmp / "feedback" / "events.jsonl")
+        queue = read_jsonl(tmp / "feedback" / "trigger-queue.jsonl")
+        if len(events) != 2:
+            raise AssertionError(f"cross-chat repetition expected two events, got {events}")
+        pressure = events[1].get("repetition_pressure", {})
+        if not events[1].get("triggered") or events[1].get("wake_reason") != "repetition_pressure":
+            raise AssertionError(f"second chat should wake through project repetition: {events[1]}")
+        if pressure.get("scope") != "project" or pressure.get("repeat_count") != 2:
+            raise AssertionError(f"cross-chat repetition used wrong scope/count: {pressure}")
+        if len(queue) != 1 or queue[0].get("wake_reason") != "repetition_pressure":
+            raise AssertionError(f"cross-chat repetition expected one queued event, got {queue}")
+
+
+def run_repetition_pressure_cross_project_nonwake_case() -> None:
+    with tempfile.TemporaryDirectory(prefix="agent-loop-repeat-cross-project-") as tmp_raw:
+        tmp = Path(tmp_raw)
+        project_a = str(tmp / "project-a")
+        project_b = str(tmp / "project-b")
+        first = "you used the wrong tool and ignored the DGX instructions, keep going and fix it"
+        second = "you ignored the DGX instructions and used the wrong tool again, fix it"
+        run_hook_prompt(tmp, first, session_id="repeat-project-one", cwd=project_a)
+        run_hook_prompt(tmp, second, session_id="repeat-project-two", cwd=project_b)
+
+        events = read_jsonl(tmp / "feedback" / "events.jsonl")
+        queue = read_jsonl(tmp / "feedback" / "trigger-queue.jsonl")
+        if len(events) != 2:
+            raise AssertionError(f"cross-project repetition expected two events, got {events}")
+        if any(event.get("triggered") for event in events):
+            raise AssertionError(f"different projects should not wake through project repetition: {events}")
+        pressure = events[1].get("repetition_pressure", {})
+        if pressure.get("scope") != "project" or pressure.get("repeat_count") != 1:
+            raise AssertionError(f"different-project repetition used wrong scope/count: {pressure}")
+        if queue:
+            raise AssertionError(f"different projects should not queue repetition wake, got {queue}")
+
+
+def run_repetition_pressure_exact_repeat_cross_chat_case() -> None:
+    with tempfile.TemporaryDirectory(prefix="agent-loop-repeat-exact-cross-chat-") as tmp_raw:
+        tmp = Path(tmp_raw)
+        prompt = "you used the wrong tool and ignored the DGX instructions, keep going and fix it"
+        run_hook_prompt(tmp, prompt, session_id="repeat-exact-one")
+        run_hook_prompt(tmp, prompt, session_id="repeat-exact-two")
+
+        events = read_jsonl(tmp / "feedback" / "events.jsonl")
+        queue = read_jsonl(tmp / "feedback" / "trigger-queue.jsonl")
+        if len(events) != 2:
+            raise AssertionError(f"exact cross-chat repetition expected two events, got {events}")
+        pressure = events[1].get("repetition_pressure", {})
+        if pressure.get("duplicate"):
+            raise AssertionError(f"same prompt in a different chat should not be duplicate: {pressure}")
+        if not events[1].get("triggered") or pressure.get("repeat_count") != 2:
+            raise AssertionError(f"same prompt in a different chat should count as repetition: {events[1]}")
+        if len(queue) != 1 or queue[0].get("wake_reason") != "repetition_pressure":
+            raise AssertionError(f"exact cross-chat repetition expected one queued event, got {queue}")
 
 
 def run_repetition_pressure_scanner_case() -> None:
@@ -596,6 +666,95 @@ def run_repetition_pressure_scanner_case() -> None:
             raise AssertionError(f"second scanner repetition event should wake: {events[1]}")
         if len(queue) != 1 or queue[0].get("wake_reason") != "repetition_pressure":
             raise AssertionError(f"scanner repetition expected one queued pressure event, got {queue}")
+
+
+def run_repetition_pressure_scanner_cross_chat_case() -> None:
+    with tempfile.TemporaryDirectory(prefix="agent-loop-repeat-scan-cross-chat-") as tmp_raw:
+        tmp = Path(tmp_raw)
+        sessions = tmp / "sessions" / "2026" / "06" / "23"
+        sessions.mkdir(parents=True)
+        first_rollout = sessions / "rollout-2026-06-23T00-00-00-repeat-a.jsonl"
+        second_rollout = sessions / "rollout-2026-06-23T00-01-00-repeat-b.jsonl"
+        base_ts = time.time()
+
+        def ts(offset: int) -> str:
+            return time.strftime("%Y-%m-%dT%H:%M:%S.000Z", time.gmtime(base_ts + offset))
+
+        first_rows = [
+            {
+                "timestamp": ts(0),
+                "type": "session_meta",
+                "payload": {"id": "scan-repeat-chat-one", "cwd": str(REPO)},
+            },
+            {
+                "timestamp": ts(1),
+                "type": "response_item",
+                "payload": {
+                    "type": "message",
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "input_text",
+                            "text": "you used the wrong tool and ignored the DGX instructions, keep going and fix it",
+                        }
+                    ],
+                },
+            },
+        ]
+        second_rows = [
+            {
+                "timestamp": ts(2),
+                "type": "session_meta",
+                "payload": {"id": "scan-repeat-chat-two", "cwd": str(REPO)},
+            },
+            {
+                "timestamp": ts(3),
+                "type": "response_item",
+                "payload": {
+                    "type": "message",
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "input_text",
+                            "text": "you ignored the DGX instructions and used the wrong tool again, fix it",
+                        }
+                    ],
+                },
+            },
+        ]
+        first_rollout.write_text("\n".join(json.dumps(row) for row in first_rows) + "\n")
+        second_rollout.write_text("\n".join(json.dumps(row) for row in second_rows) + "\n")
+        now = time.time()
+        os.utime(first_rollout, (now, now))
+        os.utime(second_rollout, (now + 1, now + 1))
+
+        env = repetition_env(tmp)
+        env.update(
+            {
+                "INTROSPECT_CODEX_SESSIONS_DIR": str(tmp / "sessions"),
+                "INTROSPECT_CLAUDE_PROJECTS_DIR": str(tmp / "claude-projects"),
+            }
+        )
+        subprocess.run(
+            [sys.executable, str(SCANNER), "--since-minutes", "60"],
+            text=True,
+            env=env,
+            cwd=REPO,
+            check=True,
+            timeout=10,
+        )
+
+        events = read_jsonl(tmp / "feedback" / "events.jsonl")
+        queue = read_jsonl(tmp / "feedback" / "trigger-queue.jsonl")
+        if len(events) != 2:
+            raise AssertionError(f"scanner cross-chat repetition expected two events, got {events}")
+        pressure = events[1].get("repetition_pressure", {})
+        if not events[1].get("triggered") or events[1].get("wake_reason") != "repetition_pressure":
+            raise AssertionError(f"second scanner chat should wake through project repetition: {events[1]}")
+        if pressure.get("scope") != "project" or pressure.get("repeat_count") != 2:
+            raise AssertionError(f"scanner cross-chat repetition used wrong scope/count: {pressure}")
+        if len(queue) != 1 or queue[0].get("wake_reason") != "repetition_pressure":
+            raise AssertionError(f"scanner cross-chat repetition expected one queued event, got {queue}")
 
 
 def run_repetition_pressure_hook_scanner_duplicate_case() -> None:
@@ -1341,8 +1500,12 @@ def main() -> int:
     run_prompt_version_case()
     run_sensitivity_case()
     run_repetition_pressure_hook_case()
+    run_repetition_pressure_cross_chat_project_case()
+    run_repetition_pressure_cross_project_nonwake_case()
+    run_repetition_pressure_exact_repeat_cross_chat_case()
     run_codex_scanner_case()
     run_repetition_pressure_scanner_case()
+    run_repetition_pressure_scanner_cross_chat_case()
     run_repetition_pressure_hook_scanner_duplicate_case()
     run_repetition_pressure_scanner_duplicate_rows_case()
     run_history_backfill_scanner_case()
@@ -1353,7 +1516,7 @@ def main() -> int:
     run_worker_retry_policy_case()
     run_worker_queue_direct_user_filter_case()
     run_trigger_stats_direct_user_case()
-    print(f"test-trigger-words: ok ({len(cases) + 19} cases)")
+    print(f"test-trigger-words: ok ({len(cases) + 23} cases)")
     return 0
 
 

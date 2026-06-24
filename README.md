@@ -112,7 +112,7 @@ Running `introspect` shows:
 2. The hook records direct user prompt metadata into `~/.introspect/feedback`.
 3. A local classifier scores whether the direct user message looks like negative feedback or an agent-boundary failure.
 4. Low scores are logged for audit only.
-5. Review-tier near-repeat corrections in the same session/project can wake through local repetition pressure.
+5. Review-tier near-repeat corrections across chats in the same project can wake through local repetition pressure.
 6. High-confidence or repeated-pressure events are appended to `trigger-queue.jsonl`.
 7. Immediate mode kicks one locked worker; nightly mode waits for the scheduled reflector.
 8. The worker batches nearby events, applies cooldowns, snapshots relevant agent surfaces, and runs one reflector process.
@@ -120,7 +120,7 @@ Running `introspect` shows:
 10. The worker records the prompt, output, status, notification result, and exact surface diff.
 11. The CLI reads those local artifacts through `introspect runs` and `introspect diff`.
 
-The classifier uses word and character features because the signal is not only exact words; it also needs to catch misspellings, punctuation-heavy frustration, and phrases it has not seen verbatim. Repetition pressure is a separate temporal signal: it counts similar review-tier complaints across distinct recent user turns, stores hashed local features under the feedback directory, and ignores assistant messages, Codex file/context wrappers, control phrases, pasted context, and hook/scanner duplicate observations.
+The classifier uses word and character features because the signal is not only exact words; it also needs to catch misspellings, punctuation-heavy frustration, and phrases it has not seen verbatim. Repetition pressure is a separate temporal signal: it counts similar review-tier complaints across distinct recent user turns in the same project, stores hashed local features under the feedback directory, and ignores assistant messages, Codex file/context wrappers, control phrases, pasted context, and hook/scanner duplicate observations. Session identity is used for duplicate suppression, not for the pressure scope.
 
 ## Agent File Scopes
 

@@ -40,9 +40,10 @@ Contract:
 {
   "wake_reason": "repetition_pressure",
   "repetition_pressure": {
-    "version": "repetition-pressure-v1",
+    "version": "repetition-pressure-v2",
     "eligible": true,
     "triggered": true,
+    "scope": "project",
     "score": 0.72,
     "similarity_threshold": 0.46,
     "repeat_count": 2,
@@ -57,7 +58,9 @@ Contract:
 Contract:
 
 - Repetition pressure only amplifies user prompts that already meet the classifier review threshold.
+- Repetition pressure is scoped by project, not chat session, so repeated review-tier complaints can accumulate across many chats in the same repo.
 - Repetition state is local and bounded under `feedback/repetition-state.json`; it stores hashed comparison features, not raw prompt text.
+- Session/message identity is used for duplicate suppression, not for the pressure scope.
 - Assistant messages, backfill, Codex file/context wrappers, control phrases, pasted context, and duplicate hook/scanner observations do not increment pressure.
 - A repeated-pressure event queues through the same `trigger-queue.jsonl` and worker path as classifier-triggered events.
 
