@@ -118,6 +118,7 @@ def model(raw):
     return cleaned if cleaned else "CLI default"
 
 runner = value("INTROSPECT_REFLECTOR_RUNNER", "default")
+apply_mode = value("INTROSPECT_REFLECTOR_APPLY_MODE", "proposal")
 claude = model(value("INTROSPECT_REFLECTOR_CLAUDE_MODEL"))
 fallback = value("INTROSPECT_REFLECTOR_CLAUDE_FALLBACK_MODEL").strip()
 codex = model(value("INTROSPECT_REFLECTOR_CODEX_MODEL"))
@@ -136,6 +137,7 @@ else:
     effective_threshold = "model"
 parts = [
     f"runner={runner}",
+    f"apply={apply_mode}",
     f"claude_model={claude}",
     f"codex_model={codex}",
     f"sensitivity={sensitivity}",

@@ -21,6 +21,7 @@ REFLECT_MODE="immediate"
 NIGHTLY_HOUR=3
 NIGHTLY_MINUTE=0
 REFLECTOR_RUNNER="default"
+REFLECTOR_APPLY_MODE="${INTROSPECT_REFLECTOR_APPLY_MODE:-proposal}"
 REFLECTOR_CLAUDE_MODEL=""
 REFLECTOR_CLAUDE_FALLBACK_MODEL=""
 REFLECTOR_CODEX_MODEL=""
@@ -44,13 +45,14 @@ DEFAULT_PROMPT_TEMPLATE="$REPO/templates/default-AGENTS.md"
 
 usage() {
   cat <<EOF
-Usage: $0 [--uninstall] [--prompt PATH] [--skills PATH] [--user-skills PATH] [--feedback-dir PATH] [--home PATH] [--agents-home PATH] [--reflect-mode immediate|nightly|off] [--nightly-hour H] [--nightly-minute M] [--runner default|claude|codex] [--claude-model MODEL] [--codex-model MODEL] [--wake-sensitivity quiet|balanced|sensitive|custom] [--wake-threshold DECIMAL] [--backfill-days DAYS] [--backfill-max-events N] [--no-backfill] [--force-backfill]
+Usage: $0 [--uninstall] [--prompt PATH] [--skills PATH] [--user-skills PATH] [--feedback-dir PATH] [--home PATH] [--agents-home PATH] [--reflect-mode immediate|nightly|off] [--apply-mode proposal|auto|never] [--nightly-hour H] [--nightly-minute M] [--runner default|claude|codex] [--claude-model MODEL] [--codex-model MODEL] [--wake-sensitivity quiet|balanced|sensitive|custom] [--wake-threshold DECIMAL] [--backfill-days DAYS] [--backfill-max-events N] [--no-backfill] [--force-backfill]
 
 install          Link native Claude/Codex/OpenCode prompt files and configure hooks.
 --uninstall      Remove Introspect prompt links, hooks, scanner, monitor, and reflector LaunchAgents.
 --home           Introspect private home. Default: ~/.introspect.
 --agents-home    Agent-compatible skill export home. Default: ~/.agents.
 --reflect-mode   immediate kicks the locked worker after trigger; nightly queues for the LaunchAgent; off removes hooks but keeps prompt links.
+--apply-mode     proposal writes project-level changes as proposals; auto edits/commits the target repo; never records only.
 --runner         Reflector runner. default picks the installed agent with the most recent local usage; claude/codex force one.
 --claude-model   Optional Claude model alias/id for reflector runs. Blank/default/auto uses Claude CLI default.
 --codex-model    Optional Codex model id for reflector runs. Blank/default/auto uses Codex CLI default.
@@ -103,6 +105,10 @@ while [[ $# -gt 0 ]]; do
       REFLECT_MODE="${2:-}"
       shift
       shift
+      ;;
+    --apply-mode)
+      REFLECTOR_APPLY_MODE="${2:-}"
+      shift 2
       ;;
     --nightly)
       REFLECT_MODE="nightly"
@@ -213,7 +219,7 @@ uninstall_link() {
 }
 
 reflector_model_summary() {
-  local summary="reflector models: claude=${REFLECTOR_CLAUDE_MODEL:-default} codex=${REFLECTOR_CODEX_MODEL:-default}"
+  local summary="reflector apply=$REFLECTOR_APPLY_MODE models: claude=${REFLECTOR_CLAUDE_MODEL:-default} codex=${REFLECTOR_CODEX_MODEL:-default}"
   if [[ -n "$REFLECTOR_CLAUDE_FALLBACK_MODEL" ]]; then
     summary="$summary claude_cli_fallback_model=$REFLECTOR_CLAUDE_FALLBACK_MODEL"
   fi
@@ -224,6 +230,13 @@ case "$WAKE_SENSITIVITY" in
   quiet|balanced|sensitive|custom) ;;
   *)
     echo "invalid wake sensitivity: $WAKE_SENSITIVITY" >&2
+    exit 2
+    ;;
+esac
+case "$REFLECTOR_APPLY_MODE" in
+  proposal|auto|never) ;;
+  *)
+    echo "invalid --apply-mode: $REFLECTOR_APPLY_MODE" >&2
     exit 2
     ;;
 esac
@@ -293,6 +306,7 @@ ensure_home_files() {
 {
   "notifications_enabled": true,
   "reflect_mode": "$REFLECT_MODE",
+  "reflector_apply_mode": "$REFLECTOR_APPLY_MODE",
   "reflector_runner": "$REFLECTOR_RUNNER",
   "reflector_claude_model": "",
   "reflector_claude_fallback_model": "",
@@ -355,6 +369,40 @@ PY
   if [[ -z "$(git -C "$INTROSPECT_HOME_DIR" config --local user.email 2>/dev/null || true)" ]]; then
     git -C "$INTROSPECT_HOME_DIR" config --local user.email "introspect@local"
   fi
+}
+
+update_home_settings() {
+  "$SETUP_PYTHON" - "$INTROSPECT_HOME_DIR/settings.json" "$REFLECT_MODE" "$REFLECTOR_APPLY_MODE" "$REFLECTOR_RUNNER" "$REFLECTOR_CLAUDE_MODEL" "$REFLECTOR_CLAUDE_FALLBACK_MODEL" "$REFLECTOR_CODEX_MODEL" "$WAKE_SENSITIVITY" "${WAKE_THRESHOLD:-0.64}" "$NIGHTLY_HOUR" "$NIGHTLY_MINUTE" <<'PY'
+import json
+import os
+import sys
+from pathlib import Path
+
+path = Path(sys.argv[1])
+keys = {
+    "reflect_mode": sys.argv[2],
+    "reflector_apply_mode": sys.argv[3],
+    "reflector_runner": sys.argv[4],
+    "reflector_claude_model": sys.argv[5],
+    "reflector_claude_fallback_model": sys.argv[6],
+    "reflector_codex_model": sys.argv[7],
+    "wake_sensitivity": sys.argv[8],
+    "wake_custom_threshold": float(sys.argv[9]),
+    "nightly_hour": int(sys.argv[10]),
+    "nightly_minute": int(sys.argv[11]),
+}
+try:
+    data = json.loads(path.read_text())
+except Exception:
+    data = {}
+if not isinstance(data, dict):
+    data = {}
+data.setdefault("notifications_enabled", True)
+data.update(keys)
+tmp = path.with_suffix(path.suffix + f".{os.getpid()}.tmp")
+tmp.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n")
+os.replace(tmp, path)
+PY
 }
 
 if [[ "$MODE" == "install" ]]; then
@@ -434,6 +482,10 @@ if [[ "$REFLECTOR_RUNNER" != "default" && "$REFLECTOR_RUNNER" != "claude" && "$R
   echo "invalid --runner: $REFLECTOR_RUNNER" >&2
   exit 2
 fi
+if [[ "$REFLECTOR_APPLY_MODE" != "proposal" && "$REFLECTOR_APPLY_MODE" != "auto" && "$REFLECTOR_APPLY_MODE" != "never" ]]; then
+  echo "invalid --apply-mode: $REFLECTOR_APPLY_MODE" >&2
+  exit 2
+fi
 normalize_model_setting() {
   case "$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')" in
     ""|"default"|"auto")
@@ -458,6 +510,13 @@ case "$SETUP_PYTHON" in
     SETUP_PYTHON="$(command -v "$SETUP_PYTHON")"
     ;;
 esac
+if [[ "$MODE" == "install" ]]; then
+  update_home_settings
+  git -C "$INTROSPECT_HOME_DIR" add settings.json >/dev/null 2>&1 || true
+  if [[ -d "$INTROSPECT_HOME_DIR/.git" ]] && [[ -n "$(git -C "$INTROSPECT_HOME_DIR" status --porcelain -- settings.json 2>/dev/null || true)" ]]; then
+    git -C "$INTROSPECT_HOME_DIR" commit -m "Update Introspect settings" >/dev/null 2>&1 || true
+  fi
+fi
 
 chmod +x "$REPO/bin/introspect" "$HOOK" "$WORKER" "$SCANNER" "$MONITOR" "$SKILL_SYNC" "$REPO/hooks/trigger-stats.sh" "$REPO/scripts/introspect-status.sh" "$REPO/scripts/test-trigger-words.py" "$REPO/scripts/test-surface-scopes.py" "$REPO/scripts/test-reflector-prompt-contract.py" "$REPO/scripts/test-user-skill-sync.sh" "$REPO/scripts/test-install-paths.sh"
 
@@ -477,7 +536,7 @@ else
   INTROSPECT_HOME="$INTROSPECT_HOME_DIR" INTROSPECT_USER_SKILLS_DIR="$USER_SKILLS_DIR" /bin/bash "$SKILL_SYNC" --unlink
 fi
 
-HOOK_COMMAND="env PYTHONDONTWRITEBYTECODE=1 INTROSPECT_REFLECT_MODE=$(quote "$REFLECT_MODE") INTROSPECT_REPO=$(quote "$REPO") AGENTS_HOME=$(quote "$AGENTS_HOME_DIR") INTROSPECT_PROMPT=$(quote "$PROMPT") INTROSPECT_SKILLS_DIR=$(quote "$SKILLS_DIR") INTROSPECT_USER_SKILLS_DIR=$(quote "$USER_SKILLS_DIR") INTROSPECT_FEEDBACK_DIR=$(quote "$FEEDBACK_DIR") INTROSPECT_HOME=$(quote "$INTROSPECT_HOME_DIR") INTROSPECT_WAKE_MODEL=$(quote "$INTROSPECT_HOME_DIR/models/wake-logreg-v2-round4.json") INTROSPECT_WAKE_SHADOW_MODELS=$(quote "$WAKE_SHADOW_MODELS") INTROSPECT_WAKE_SENSITIVITY=$(quote "$WAKE_SENSITIVITY") INTROSPECT_WAKE_THRESHOLD=$(quote "$WAKE_THRESHOLD") $(quote "$SETUP_PYTHON") $(quote "$HOOK")"
+HOOK_COMMAND="env PYTHONDONTWRITEBYTECODE=1 INTROSPECT_REFLECT_MODE=$(quote "$REFLECT_MODE") INTROSPECT_REFLECTOR_APPLY_MODE=$(quote "$REFLECTOR_APPLY_MODE") INTROSPECT_REPO=$(quote "$REPO") AGENTS_HOME=$(quote "$AGENTS_HOME_DIR") INTROSPECT_PROMPT=$(quote "$PROMPT") INTROSPECT_SKILLS_DIR=$(quote "$SKILLS_DIR") INTROSPECT_USER_SKILLS_DIR=$(quote "$USER_SKILLS_DIR") INTROSPECT_FEEDBACK_DIR=$(quote "$FEEDBACK_DIR") INTROSPECT_HOME=$(quote "$INTROSPECT_HOME_DIR") INTROSPECT_WAKE_MODEL=$(quote "$INTROSPECT_HOME_DIR/models/wake-logreg-v2-round4.json") INTROSPECT_WAKE_SHADOW_MODELS=$(quote "$WAKE_SHADOW_MODELS") INTROSPECT_WAKE_SENSITIVITY=$(quote "$WAKE_SENSITIVITY") INTROSPECT_WAKE_THRESHOLD=$(quote "$WAKE_THRESHOLD") $(quote "$SETUP_PYTHON") $(quote "$HOOK")"
 HOOK_MODE="$MODE"
 if [[ "$MODE" == "install" && "$REFLECT_MODE" == "off" ]]; then
   HOOK_MODE="uninstall"
@@ -601,13 +660,13 @@ PY
 
 install_launch_agent() {
   mkdir -p "$HOME/Library/LaunchAgents" "$FEEDBACK_DIR"
-  "$SETUP_PYTHON" - "$LAUNCH_LABEL" "$SETUP_PYTHON" "$REPO" "$WORKER" "$PROMPT" "$SKILLS_DIR" "$USER_SKILLS_DIR" "$FEEDBACK_DIR" "$AGENTS_HOME_DIR" "$INTROSPECT_HOME_DIR" "$NIGHTLY_HOUR" "$NIGHTLY_MINUTE" "$REFLECTOR_RUNNER" "$REFLECTOR_CLAUDE_MODEL" "$REFLECTOR_CLAUDE_FALLBACK_MODEL" "$REFLECTOR_CODEX_MODEL" "$WAKE_SENSITIVITY" "$WAKE_THRESHOLD" "$LAUNCHD_PATH" "$LAUNCH_PLIST" <<'PY'
+  "$SETUP_PYTHON" - "$LAUNCH_LABEL" "$SETUP_PYTHON" "$REPO" "$WORKER" "$PROMPT" "$SKILLS_DIR" "$USER_SKILLS_DIR" "$FEEDBACK_DIR" "$AGENTS_HOME_DIR" "$INTROSPECT_HOME_DIR" "$NIGHTLY_HOUR" "$NIGHTLY_MINUTE" "$REFLECTOR_RUNNER" "$REFLECTOR_APPLY_MODE" "$REFLECTOR_CLAUDE_MODEL" "$REFLECTOR_CLAUDE_FALLBACK_MODEL" "$REFLECTOR_CODEX_MODEL" "$WAKE_SENSITIVITY" "$WAKE_THRESHOLD" "$LAUNCHD_PATH" "$LAUNCH_PLIST" <<'PY'
 import plistlib
 import os
 import sys
 from pathlib import Path
 
-label, python, repo, worker, prompt, skills_dir, user_skills_dir, feedback_dir, agents_home_dir, home_dir, hour, minute, runner, claude_model, claude_fallback_model, codex_model, wake_sensitivity, wake_threshold, launchd_path, plist_path = sys.argv[1:]
+label, python, repo, worker, prompt, skills_dir, user_skills_dir, feedback_dir, agents_home_dir, home_dir, hour, minute, runner, apply_mode, claude_model, claude_fallback_model, codex_model, wake_sensitivity, wake_threshold, launchd_path, plist_path = sys.argv[1:]
 data = {
     "Label": label,
     "ProgramArguments": [python, worker, "--nightly"],
@@ -624,6 +683,7 @@ data = {
         "INTROSPECT_HOME": home_dir,
         "INTROSPECT_WAKE_MODEL": str(Path(home_dir) / "models" / "wake-logreg-v2-round4.json"),
         "INTROSPECT_REFLECTOR_RUNNER": runner,
+        "INTROSPECT_REFLECTOR_APPLY_MODE": apply_mode,
         "INTROSPECT_REFLECTOR_CLAUDE_MODEL": claude_model,
         "INTROSPECT_REFLECTOR_CLAUDE_FALLBACK_MODEL": claude_fallback_model,
         "INTROSPECT_REFLECTOR_CODEX_MODEL": codex_model,
@@ -666,13 +726,13 @@ uninstall_launch_agent() {
 
 install_scan_agent() {
   mkdir -p "$HOME/Library/LaunchAgents" "$FEEDBACK_DIR"
-  "$SETUP_PYTHON" - "$SCAN_LABEL" "$SETUP_PYTHON" "$REPO" "$SCANNER" "$PROMPT" "$SKILLS_DIR" "$USER_SKILLS_DIR" "$FEEDBACK_DIR" "$AGENTS_HOME_DIR" "$INTROSPECT_HOME_DIR" "$REFLECT_MODE" "$REFLECTOR_RUNNER" "$REFLECTOR_CLAUDE_MODEL" "$REFLECTOR_CLAUDE_FALLBACK_MODEL" "$REFLECTOR_CODEX_MODEL" "$WAKE_SHADOW_MODELS" "$WAKE_SENSITIVITY" "$WAKE_THRESHOLD" "$LAUNCHD_PATH" "$SCAN_PLIST" <<'PY'
+  "$SETUP_PYTHON" - "$SCAN_LABEL" "$SETUP_PYTHON" "$REPO" "$SCANNER" "$PROMPT" "$SKILLS_DIR" "$USER_SKILLS_DIR" "$FEEDBACK_DIR" "$AGENTS_HOME_DIR" "$INTROSPECT_HOME_DIR" "$REFLECT_MODE" "$REFLECTOR_RUNNER" "$REFLECTOR_APPLY_MODE" "$REFLECTOR_CLAUDE_MODEL" "$REFLECTOR_CLAUDE_FALLBACK_MODEL" "$REFLECTOR_CODEX_MODEL" "$WAKE_SHADOW_MODELS" "$WAKE_SENSITIVITY" "$WAKE_THRESHOLD" "$LAUNCHD_PATH" "$SCAN_PLIST" <<'PY'
 import plistlib
 import os
 import sys
 from pathlib import Path
 
-label, python, repo, scanner, prompt, skills_dir, user_skills_dir, feedback_dir, agents_home_dir, home_dir, reflect_mode, runner, claude_model, claude_fallback_model, codex_model, wake_shadow_models, wake_sensitivity, wake_threshold, launchd_path, plist_path = sys.argv[1:]
+label, python, repo, scanner, prompt, skills_dir, user_skills_dir, feedback_dir, agents_home_dir, home_dir, reflect_mode, runner, apply_mode, claude_model, claude_fallback_model, codex_model, wake_shadow_models, wake_sensitivity, wake_threshold, launchd_path, plist_path = sys.argv[1:]
 data = {
     "Label": label,
     "ProgramArguments": [python, scanner],
@@ -689,6 +749,7 @@ data = {
         "INTROSPECT_HOME": home_dir,
         "INTROSPECT_WAKE_MODEL": str(Path(home_dir) / "models" / "wake-logreg-v2-round4.json"),
         "INTROSPECT_REFLECTOR_RUNNER": runner,
+        "INTROSPECT_REFLECTOR_APPLY_MODE": apply_mode,
         "INTROSPECT_REFLECTOR_CLAUDE_MODEL": claude_model,
         "INTROSPECT_REFLECTOR_CLAUDE_FALLBACK_MODEL": claude_fallback_model,
         "INTROSPECT_REFLECTOR_CODEX_MODEL": codex_model,

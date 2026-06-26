@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/bin/python3
 """Shared event filters for direct user-authored Introspect wake signals."""
 
 from __future__ import annotations

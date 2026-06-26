@@ -75,8 +75,8 @@ expect_absent "$AGENTS_HOME_DIR/AGENTS.md"
 expect_link "$HOME_DIR/.claude/CLAUDE.md" "$SOURCE_PROMPT"
 expect_link "$HOME_DIR/.codex/AGENTS.md" "$SOURCE_PROMPT"
 expect_link "$HOME_DIR/.config/opencode/AGENTS.md" "$SOURCE_PROMPT"
-HOME_PROMPT_VERSION="$(git -C "$INTROSPECT_HOME_DIR" rev-parse --short HEAD)"
-python3 - "$FEEDBACK_DIR/events.jsonl" "$FEEDBACK_DIR/trigger-queue.jsonl" "$HOME_PROMPT_VERSION" <<'PY'
+HOME_PROMPT_VERSION="$(git -C "$INTROSPECT_HOME_DIR" log -1 --format=%h -- AGENTS.md)"
+/usr/bin/python3 - "$FEEDBACK_DIR/events.jsonl" "$FEEDBACK_DIR/trigger-queue.jsonl" "$HOME_PROMPT_VERSION" <<'PY'
 import json
 import sys
 from pathlib import Path
@@ -106,7 +106,7 @@ INTROSPECT_SKIP_LAUNCHD=1 \
 "$CLI" install > "$TMPDIR/reinstall.txt"
 grep -q "skip: initial local agent history backfill already completed" "$TMPDIR/reinstall.txt" || { cat "$TMPDIR/reinstall.txt" >&2; exit 1; }
 
-python3 - "$FEEDBACK_DIR/codex-transcript-scan-state.json" <<'PY'
+/usr/bin/python3 - "$FEEDBACK_DIR/codex-transcript-scan-state.json" <<'PY'
 import json
 import sys
 from pathlib import Path
@@ -126,7 +126,7 @@ if grep -q "skip: initial local agent history backfill already completed" "$TMPD
   cat "$TMPDIR/schema-reinstall.txt" >&2
   exit 1
 fi
-python3 - "$FEEDBACK_DIR/codex-transcript-scan-state.json" "$FEEDBACK_DIR/events.jsonl" <<'PY'
+/usr/bin/python3 - "$FEEDBACK_DIR/codex-transcript-scan-state.json" "$FEEDBACK_DIR/events.jsonl" <<'PY'
 import json
 import sys
 from pathlib import Path
@@ -157,13 +157,14 @@ HOME="$HOME_DIR" \
 PYTHONDONTWRITEBYTECODE=1 \
 INTROSPECT_HOME="$INTROSPECT_HOME_DIR" \
 AGENTS_HOME="$AGENTS_HOME_DIR" \
-"$CLI" run \
+  "$CLI" run \
   --host codex \
   --event manual \
   --transcript-path "$SESSION_FILE" \
+  --apply never \
   --force \
   --json > "$TMPDIR/introspect-run.json"
-python3 - "$TMPDIR/introspect-run.json" "$INTROSPECT_HOME_DIR" "$SESSION_FILE" <<'PY'
+/usr/bin/python3 - "$TMPDIR/introspect-run.json" "$INTROSPECT_HOME_DIR" "$SESSION_FILE" <<'PY'
 import json
 import sys
 from pathlib import Path
@@ -171,7 +172,7 @@ from pathlib import Path
 payload = json.loads(Path(sys.argv[1]).read_text())
 home = Path(sys.argv[2])
 session_file = Path(sys.argv[3])
-if payload.get("status") != "no_change":
+if payload.get("status") != "indexed":
     raise SystemExit(f"test-release-e2e: unexpected Introspect status: {payload}")
 if payload.get("classifier_training") is not False:
     raise SystemExit("test-release-e2e: Introspect trained a classifier")
@@ -199,7 +200,7 @@ TRIGGER_REFLECTOR_DRY_RUN=1 \
 TRIGGER_DEBOUNCE_SECONDS=0 \
 TRIGGER_COOLDOWN_SECONDS=0 \
 INTROSPECT_NOTIFY=0 \
-python3 "$REPO/hooks/trigger-worker.py" --kick
+/usr/bin/python3 "$REPO/hooks/trigger-worker.py" --kick
 
 grep -q '"dry_run": true' "$FEEDBACK_DIR/reflector-batches.jsonl"
 grep -q 'release e2e fake wake event' "$FEEDBACK_DIR/last-reflector-prompt.md"

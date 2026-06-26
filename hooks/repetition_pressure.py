@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/bin/python3
 """Local repetition-pressure scorer for review-tier Introspect wake events."""
 
 from __future__ import annotations

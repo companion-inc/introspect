@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/bin/python3
 """Regression checks for agent prompt and skill surface classification."""
 
 from __future__ import annotations

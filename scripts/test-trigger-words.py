@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/bin/python3
 """Regression tests for foreground wake-intent detection."""
 
 from __future__ import annotations
@@ -1235,6 +1235,7 @@ def run_worker_command_model_case() -> None:
     worker = load_worker_module(
         "trigger_worker_models",
         {
+            "INTROSPECT_REFLECTOR_APPLY_MODE": "proposal",
             "INTROSPECT_REFLECTOR_CLAUDE_MODEL": "sonnet-test",
             "INTROSPECT_REFLECTOR_CLAUDE_FALLBACK_MODEL": "haiku-test",
             "INTROSPECT_REFLECTOR_CODEX_MODEL": "gpt-test",
@@ -1266,6 +1267,17 @@ def run_worker_command_model_case() -> None:
     for removed in ("--ask-for-approval", "--search", "--dangerously-bypass-approvals-and-sandbox"):
         if removed in codex_cmd:
             raise AssertionError(f"codex command still uses removed flag {removed}: {codex_cmd}")
+
+    auto_worker = load_worker_module(
+        "trigger_worker_models_auto",
+        {
+            "INTROSPECT_REFLECTOR_APPLY_MODE": "auto",
+            "INTROSPECT_REFLECTOR_CODEX_MODEL": "gpt-test",
+        },
+    )
+    auto_codex_cmd = auto_worker.build_reflector_command("codex", "/usr/local/bin/codex", "prompt", "Read")
+    if 'sandbox_mode="danger-full-access"' not in auto_codex_cmd:
+        raise AssertionError(f"auto apply command should use wider sandbox: {auto_codex_cmd}")
 
 
 def run_worker_restore_failed_surface_case() -> None:
@@ -1408,6 +1420,9 @@ def run_worker_retry_policy_case() -> None:
     auth_output = "Failed to authenticate. API Error: 401 Invalid authentication credentials"
     if not worker.is_nonretryable_runner_output(auth_output):
         raise AssertionError("worker did not classify CLI auth failure as non-retryable")
+    transport_auth_output = "Transport channel closed, when Auth(AuthorizationRequired)"
+    if not worker.is_nonretryable_runner_output(transport_auth_output):
+        raise AssertionError("worker did not classify Codex transport auth failure as non-retryable")
     weekly_limit_output = "You've hit your weekly limit · resets Jun 27 at 11am"
     if not worker.is_nonretryable_runner_output(weekly_limit_output):
         raise AssertionError("worker did not classify CLI weekly limit as non-retryable")

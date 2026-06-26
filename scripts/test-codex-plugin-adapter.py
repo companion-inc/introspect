@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/bin/python3
 """Regression checks for the Codex plugin Stop hook adapter."""
 
 from __future__ import annotations

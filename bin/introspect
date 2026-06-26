@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/bin/python3
 """Introspect CLI and terminal dashboard."""
 
 from __future__ import annotations
@@ -138,6 +138,122 @@ def write_json(path: Path, payload: dict) -> None:
     tmp = path.with_suffix(path.suffix + f".{os.getpid()}.tmp")
     tmp.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")
     os.replace(tmp, path)
+
+
+def append_json(path: Path, payload: dict) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a") as f:
+        f.write(json.dumps(payload, ensure_ascii=False) + "\n")
+
+
+def git_short_head(path: Path) -> str:
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(path), "rev-parse", "--short", "HEAD"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=False,
+        )
+    except Exception:
+        return "unknown"
+    return result.stdout.strip() or "unknown"
+
+
+def prompt_version() -> str:
+    prompt = DEFAULT_HOME / "AGENTS.md"
+    try:
+        root = (
+            subprocess.run(
+                ["git", "-C", str(prompt.parent), "rev-parse", "--show-toplevel"],
+                capture_output=True,
+                text=True,
+                timeout=5,
+                check=False,
+            ).stdout.strip()
+        )
+        if root:
+            relative = prompt.resolve().relative_to(Path(root).resolve())
+            version = (
+                subprocess.run(
+                    ["git", "-C", root, "log", "-1", "--format=%h", "--", str(relative)],
+                    capture_output=True,
+                    text=True,
+                    timeout=5,
+                    check=False,
+                ).stdout.strip()
+                or "unknown"
+            )
+            if version != "unknown":
+                return version
+    except Exception:
+        pass
+    prompt_dir = prompt if prompt.is_dir() else prompt.parent
+    for candidate in (prompt_dir, REPO):
+        version = git_short_head(candidate)
+        if version != "unknown":
+            return version
+    return "unknown"
+
+
+def content_to_text(content: object) -> str:
+    if isinstance(content, str):
+        return content
+    if not isinstance(content, list):
+        return ""
+    parts: list[str] = []
+    for item in content:
+        if isinstance(item, str):
+            parts.append(item)
+        elif isinstance(item, dict):
+            text = item.get("text") or item.get("input_text")
+            if isinstance(text, str):
+                parts.append(text)
+    return "\n".join(part for part in parts if part).strip()
+
+
+def latest_user_message(path: Path) -> tuple[int | None, str]:
+    try:
+        lines = path.read_text(errors="replace").splitlines()
+    except OSError:
+        return None, ""
+    for line_no in range(len(lines), 0, -1):
+        raw = lines[line_no - 1]
+        try:
+            row = json.loads(raw)
+        except Exception:
+            continue
+        text = ""
+        if row.get("type") == "response_item":
+            payload = row.get("payload")
+            if isinstance(payload, dict) and payload.get("type") == "message" and payload.get("role") == "user":
+                text = content_to_text(payload.get("content"))
+        elif row.get("type") == "user":
+            payload = row.get("message")
+            if isinstance(payload, dict) and payload.get("role") == "user":
+                text = content_to_text(payload.get("content"))
+        if text:
+            return line_no, text
+    return None, ""
+
+
+def session_metadata(path: Path) -> tuple[str, str]:
+    try:
+        lines = path.read_text(errors="replace").splitlines()
+    except OSError:
+        return "", ""
+    for raw in lines:
+        try:
+            row = json.loads(raw)
+        except Exception:
+            continue
+        if row.get("type") == "session_meta":
+            payload = row.get("payload")
+            if isinstance(payload, dict):
+                return str(payload.get("id") or ""), str(payload.get("cwd") or "")
+        if row.get("sessionId"):
+            return str(row.get("sessionId") or ""), ""
+    return "", ""
 
 
 def sha256_file(path: Path, *, max_bytes: int = 1024 * 1024) -> str:
@@ -324,15 +440,84 @@ def introspect_summary(result: dict) -> str:
             lines.append(f"- {item.get('path')}")
     else:
         lines.append("- none")
-    lines.extend(
-        [
-            "",
-            "## Scope",
-            "",
-            "This run updated cadence/index artifacts only. It did not edit AGENTS.md, skills, memory, or classifier models.",
-        ]
-    )
+    lines.extend(["", "## Scope", ""])
+    if result.get("reflector_invoked"):
+        lines.append(
+            "This run queued changed transcript evidence and invoked the reflector "
+            f"in {result.get('apply')} mode."
+        )
+    else:
+        lines.append(
+            "This run updated cadence/index artifacts only. It did not edit AGENTS.md, "
+            "skills, memory, or classifier models."
+        )
     return "\n".join(lines)
+
+
+def build_manual_reflector_events(args: argparse.Namespace, snapshots: list[dict], run_id: str) -> list[dict]:
+    events: list[dict] = []
+    version = prompt_version()
+    for index, snapshot in enumerate(snapshots, 1):
+        path = Path(str(snapshot.get("path") or ""))
+        if not path.exists():
+            continue
+        line_no, prompt = latest_user_message(path)
+        session_id, transcript_cwd = session_metadata(path)
+        cwd = transcript_cwd or args.cwd
+        prompt_hash = hashlib.sha256(prompt.encode("utf-8", errors="ignore")).hexdigest() if prompt else ""
+        event_id = f"manual:{run_id}:{index}:{path}:{line_no or 0}"
+        event = {
+            "event_id": event_id,
+            "ts": iso_now(),
+            "source": "manual_run",
+            "version": version,
+            "triggered": True,
+            "wake_reason": "manual",
+            "review_triggered": True,
+            "session_id": args.session_id or session_id,
+            "cwd": cwd,
+            "transcript_path": str(path),
+            "dedupe_key": event_id,
+            "snippet": prompt[:300] if prompt else "",
+        }
+        if line_no is not None:
+            event["transcript_line"] = line_no
+            event["message_locator"] = f"{path}:{line_no}"
+        if prompt_hash:
+            event["prompt_hash"] = prompt_hash
+        if prompt:
+            event["prompt"] = prompt[:4000]
+        events.append(event)
+    return events
+
+
+def invoke_manual_reflector(args: argparse.Namespace) -> tuple[int, str]:
+    env = os.environ.copy()
+    env.update(
+        {
+            "PYTHONDONTWRITEBYTECODE": "1",
+            "INTROSPECT_REPO": str(REPO),
+            "INTROSPECT_HOME": str(DEFAULT_HOME),
+            "INTROSPECT_FEEDBACK_DIR": str(DEFAULT_FEEDBACK),
+            "INTROSPECT_PROMPT": str(DEFAULT_HOME / "AGENTS.md"),
+            "INTROSPECT_SKILLS_DIR": str(REPO / "skills"),
+            "INTROSPECT_USER_SKILLS_DIR": str(DEFAULT_HOME / "skills"),
+            "INTROSPECT_REFLECTOR_APPLY_MODE": args.apply,
+            "TRIGGER_DEBOUNCE_SECONDS": "0",
+            "TRIGGER_COOLDOWN_SECONDS": "0",
+            "TRIGGER_SESSION_COOLDOWN_SECONDS": "0",
+        }
+    )
+    result = subprocess.run(
+        ["/usr/bin/python3", str(REPO / "hooks" / "trigger-worker.py"), "--kick"],
+        cwd=REPO,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    output = "\n".join(part for part in [result.stdout.strip(), result.stderr.strip()] if part)
+    return result.returncode, output[-4000:]
 
 
 def run_introspect(args: argparse.Namespace) -> int:
@@ -413,19 +598,47 @@ def run_introspect(args: argparse.Namespace) -> int:
     write_json(index_path, index)
 
     run_id = f"{file_stamp()}-introspect-{host}"
+    reflector_events: list[dict] = []
+    reflector_exit_code: int | None = None
+    reflector_output = ""
+    if args.apply != "never":
+        event_snapshots = changed or snapshots
+        reflector_events = build_manual_reflector_events(args, event_snapshots, run_id)
+        for event in reflector_events:
+            append_json(DEFAULT_FEEDBACK / "trigger-queue.jsonl", event)
+        if reflector_events:
+            reflector_exit_code, reflector_output = invoke_manual_reflector(args)
+
+    if args.apply == "never":
+        status_value = "indexed"
+        message = "Indexed transcript changes; apply=never skipped the reflector."
+    elif not reflector_events:
+        status_value = "no_change"
+        message = "No user transcript turns to reflect."
+    elif reflector_exit_code == 0:
+        status_value = "completed"
+        message = f"Reflector completed in {args.apply} mode."
+    else:
+        status_value = "failed"
+        message = f"Reflector failed in {args.apply} mode."
+
     result = {
         "run_id": run_id,
-        "status": "no_change",
+        "status": status_value,
         "host": host,
         "event": args.event,
         "cwd": args.cwd,
         "session_id": args.session_id,
         "generation_id": generation_id,
         "apply": args.apply,
-        "message": "No high-signal memory updates.",
+        "message": message,
         "changed_transcripts": changed,
         "transcript_count": len(snapshots),
         "changed_transcript_count": len(changed),
+        "queued_event_count": len(reflector_events),
+        "reflector_invoked": bool(reflector_events),
+        "reflector_exit_code": reflector_exit_code,
+        "reflector_output": reflector_output,
         "mutated_targets": [],
         "classifier_training": False,
     }
@@ -835,8 +1048,10 @@ def diff(args: argparse.Namespace) -> int:
 
 
 def config(args: argparse.Namespace) -> int:
+    settings = read_json(SETTINGS, {})
     updates = {
         "--reflect-mode": args.mode,
+        "--apply-mode": args.apply_mode,
         "--runner": args.runner,
         "--wake-sensitivity": args.sensitivity,
         "--wake-threshold": args.threshold,
@@ -846,14 +1061,27 @@ def config(args: argparse.Namespace) -> int:
         "--claude-fallback-model": args.claude_fallback_model,
         "--codex-model": args.codex_model,
     }
-    install_args: list[str] = []
-    for flag, value in updates.items():
-        if value is not None:
+    if any(value is not None for value in updates.values()):
+        preserved = {
+            "--reflect-mode": settings.get("reflect_mode", "immediate"),
+            "--apply-mode": settings.get("reflector_apply_mode", "proposal"),
+            "--runner": settings.get("reflector_runner", "default"),
+            "--wake-sensitivity": settings.get("wake_sensitivity", "balanced"),
+            "--wake-threshold": settings.get("wake_custom_threshold", 0.64),
+            "--nightly-hour": settings.get("nightly_hour", 3),
+            "--nightly-minute": settings.get("nightly_minute", 0),
+            "--claude-model": settings.get("reflector_claude_model", ""),
+            "--claude-fallback-model": settings.get("reflector_claude_fallback_model", ""),
+            "--codex-model": settings.get("reflector_codex_model", ""),
+        }
+        install_args: list[str] = []
+        for flag, current in preserved.items():
+            value = updates.get(flag)
+            if value is None:
+                value = current
             install_args.extend([flag, str(value)])
-    if install_args:
         install_args.append("--no-backfill")
         return run([str(REPO / "scripts" / "install-hooks.sh"), *install_args])
-    settings = read_json(SETTINGS, {})
     print(json.dumps(settings, indent=2, sort_keys=True))
     return 0
 
@@ -911,6 +1139,7 @@ def main(argv: list[str] | None = None) -> int:
 
     config_parser = sub.add_parser("config", help="print or apply runtime config")
     config_parser.add_argument("--mode", choices=["immediate", "nightly", "off"])
+    config_parser.add_argument("--apply-mode", choices=["proposal", "auto", "never"])
     config_parser.add_argument("--runner", choices=["default", "claude", "codex"])
     config_parser.add_argument("--sensitivity", choices=["quiet", "balanced", "sensitive", "custom"])
     config_parser.add_argument("--threshold")

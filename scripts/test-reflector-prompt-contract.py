@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/bin/python3
 """Regression checks for the reflector's layer-selection prompt."""
 
 from __future__ import annotations
@@ -20,19 +20,20 @@ def fail(message: str) -> None:
     raise SystemExit(f"test-reflector-prompt-contract: {message}")
 
 
-def load_worker(home: Path, runtime: Path):
+def load_worker(home: Path, runtime: Path, extra_env: dict[str, str] | None = None):
     agents_home = home.parent / ".agents"
-    os.environ.update(
-        {
-            "INTROSPECT_REPO": str(runtime),
-            "AGENTS_HOME": str(agents_home),
-            "INTROSPECT_HOME": str(home),
-            "INTROSPECT_PROMPT": str(home / "AGENTS.md"),
-            "INTROSPECT_SKILLS_DIR": str(runtime / "skills"),
-            "INTROSPECT_USER_SKILLS_DIR": str(home / "skills"),
-            "INTROSPECT_FEEDBACK_DIR": str(home / "feedback"),
-        }
-    )
+    env = {
+        "INTROSPECT_REPO": str(runtime),
+        "AGENTS_HOME": str(agents_home),
+        "INTROSPECT_HOME": str(home),
+        "INTROSPECT_PROMPT": str(home / "AGENTS.md"),
+        "INTROSPECT_SKILLS_DIR": str(runtime / "skills"),
+        "INTROSPECT_USER_SKILLS_DIR": str(home / "skills"),
+        "INTROSPECT_FEEDBACK_DIR": str(home / "feedback"),
+    }
+    if extra_env:
+        env.update(extra_env)
+    os.environ.update(env)
     spec = importlib.util.spec_from_file_location("introspect_trigger_worker_contract", WORKER)
     if spec is None or spec.loader is None:
         fail(f"cannot load {WORKER}")
@@ -83,6 +84,7 @@ def main() -> None:
 
         required = [
             "Live global prompt:",
+            "Apply mode: proposal",
             f"- {prompt_path}",
             "Introspect home Git repo:",
             f"- {worker_home}",
@@ -90,11 +92,14 @@ def main() -> None:
             f"- {built_in_skills}",
             "User skill directory:",
             f"- {user_skills}",
+            f"Run /usr/bin/python3 {runtime_path}/hooks/trigger-stats.sh",
             f"Edit the live global prompt at {prompt_path}",
             f"do not edit Introspect runtime files under {runtime_path}",
-            "the target repo is the event cwd or the project proven by the transcript",
+            "The target repo is the event cwd or the project proven by the transcript",
+            "Proposal mode is enabled",
+            "write a proposal",
             "Export each skill to one native global namespace only",
-            f"commit in {worker_home}",
+            "Commit in Introspect home",
         ]
         for needle in required:
             if needle not in prompt:
@@ -120,6 +125,28 @@ def main() -> None:
             fail("codex reflector command leaked the prompt through argv")
         if "-" not in command:
             fail("codex reflector command should read the prompt from stdin")
+        if 'sandbox_mode="workspace-write"' not in command:
+            fail(f"proposal command should stay workspace-write: {command}")
+
+        auto_worker = load_worker(
+            home=home,
+            runtime=runtime,
+            extra_env={"INTROSPECT_REFLECTOR_APPLY_MODE": "auto"},
+        )
+        auto_prompt = auto_worker.build_prompt([event])
+        for needle in [
+            "Apply mode: auto",
+            "Auto-apply mode is enabled",
+            "edit the target repo's AGENTS.md/CLAUDE.md directly",
+        ]:
+            if needle not in auto_prompt:
+                fail(f"missing auto prompt contract: {needle}")
+        auto_roots = auto_worker.surface_scan_roots([event])
+        if project.resolve() not in auto_roots:
+            fail("auto-apply mode must snapshot the target project repo")
+        auto_command = auto_worker.build_reflector_command("codex", "/usr/local/bin/codex", "prompt", "Read")
+        if 'sandbox_mode="danger-full-access"' not in auto_command:
+            fail(f"auto command should use wider sandbox: {auto_command}")
 
         pid_file = base / "child.pid"
         child_script = (

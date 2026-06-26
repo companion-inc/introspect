@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/bin/python3
 # Trigger scoreboard: prompts, triggers, and rate per AGENTS.md version
 # (commit), from feedback/events.jsonl logged by trigger-reflect.sh.
 # The objective is to MINIMIZE the trigger rate. A version whose rate rose

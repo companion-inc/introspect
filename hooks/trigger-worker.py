@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/bin/python3
 """Single-worker batch reflector for trigger events.
 
 The UserPromptSubmit hook only logs and queues. This worker is the deterministic
@@ -65,6 +65,11 @@ PROMPT_PATH = Path(os.path.expanduser(os.environ.get("INTROSPECT_PROMPT", str(IN
 USER_SKILLS_DIR = Path(
     os.path.expanduser(os.environ.get("INTROSPECT_USER_SKILLS_DIR", str(INTROSPECT_HOME / "skills")))
 )
+REFLECTOR_APPLY_MODE = (
+    os.environ.get("INTROSPECT_REFLECTOR_APPLY_MODE", "proposal").strip().lower() or "proposal"
+)
+if REFLECTOR_APPLY_MODE not in {"proposal", "auto", "never"}:
+    REFLECTOR_APPLY_MODE = "proposal"
 
 
 def is_packaged_runtime(path: Path) -> bool:
@@ -117,6 +122,7 @@ NONRETRYABLE_RUNNER_MARKERS = (
     "failed to authenticate",
     "invalid authentication credentials",
     "api error: 401",
+    "authorizationrequired",
     "weekly limit",
 )
 SKIPPED_SURFACE_DIRS = {
@@ -145,6 +151,27 @@ def iso_now() -> str:
 
 def file_stamp() -> str:
     return utc_now().strftime("%Y%m%dT%H%M%SZ")
+
+
+def auto_apply_enabled() -> bool:
+    return REFLECTOR_APPLY_MODE == "auto"
+
+
+def git_root(path: Path) -> Path:
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(path), "rev-parse", "--show-toplevel"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=False,
+        )
+    except Exception:
+        return path
+    root = result.stdout.strip()
+    if result.returncode == 0 and root:
+        return Path(root).expanduser().resolve(strict=False)
+    return path
 
 
 def parse_ts(value: str | None) -> dt.datetime | None:
@@ -335,6 +362,7 @@ def trigger_words_text(events: list[dict]) -> str:
 def surface_scan_roots(events: list[dict] | None = None) -> list[Path]:
     home = Path.home()
     runtime_roots: list[Path] = []
+    target_roots: list[Path] = []
     repo_resolved = REPO.expanduser().resolve(strict=False)
     for event in events or []:
         cwd = event.get("cwd")
@@ -343,11 +371,13 @@ def surface_scan_roots(events: list[dict] | None = None) -> list[Path]:
         cwd_resolved = Path(os.path.expanduser(cwd.strip())).resolve(strict=False)
         if cwd_resolved == repo_resolved or repo_resolved in cwd_resolved.parents:
             runtime_roots = [REPO]
-            break
-    # The background reflector runs with REFLECTOR_CWD as its writable workspace and
-    # must not edit target product repos. Scanning event cwd roots can trap timeout
-    # cleanup in large product trees; project prompt changes are proposals in home.
-    roots = runtime_roots + [
+            continue
+        if auto_apply_enabled():
+            target_roots.append(git_root(cwd_resolved))
+    # In proposal mode the reflector is intentionally contained to Introspect
+    # home. In auto mode the target repo becomes part of the agent-surface
+    # snapshot so project AGENTS.md and project skills can be diffed/restored.
+    roots = runtime_roots + target_roots + [
         INTROSPECT_HOME,
         home / ".codex",
         home / ".claude",
@@ -818,13 +848,14 @@ def build_reflector_command(runner: str, runner_path: str, prompt: str, allowed_
         )
         return cmd
     if runner == "codex":
+        sandbox_mode = "danger-full-access" if auto_apply_enabled() else "workspace-write"
         cmd = [
             runner_path,
             "exec",
             "-c",
             'approval_policy="never"',
             "-c",
-            'sandbox_mode="workspace-write"',
+            f'sandbox_mode="{sandbox_mode}"',
             "-C",
             str(REFLECTOR_CWD),
         ]
@@ -1159,10 +1190,60 @@ def build_prompt(events: list[dict]) -> str:
 
     transcript_paths = sorted({event.get("transcript_path") for event in events if event.get("transcript_path")})
     transcript_block = "\n".join(f"- {path}" for path in transcript_paths) or "- none supplied; use session_id/cwd from events"
+    if REFLECTOR_APPLY_MODE == "auto":
+        project_prompt_instruction = (
+            "Use project_prompt for repo-specific behavior. The target repo is the event cwd or the "
+            "project proven by the transcript, not the Introspect runtime repo unless the failure is about "
+            "Introspect itself. Auto-apply mode is enabled: edit the target repo's AGENTS.md/CLAUDE.md "
+            "directly at the narrowest loading scope, verify with a behavior probe, then commit only the "
+            "prompt or skill slice you changed in that target repo."
+        )
+        project_skill_instruction = (
+            "Use project_skill_new or project_skill_update when the workflow belongs to one codebase; "
+            "write Codex/OpenCode project skills under .agents/skills/<slug>/SKILL.md and Claude project "
+            "skills under .claude/skills/<slug>/SKILL.md in that target repo, validate the SKILL.md "
+            "frontmatter, verify discoverability, then commit the skill slice in the target repo."
+        )
+        commit_instruction = (
+            "Commit in the repo you changed with a behavioral message. Core prompt, home memory, and "
+            "user-wide skill changes commit in Introspect home. Project prompt or project skill changes "
+            "commit in the target project repo. Do not commit runtime feedback, lock, run, proposal, or "
+            "model artifacts."
+        )
+    elif REFLECTOR_APPLY_MODE == "never":
+        project_prompt_instruction = (
+            "Use project_prompt for repo-specific behavior, but apply mode is never: do not edit files. "
+            "Log the exact target repo, target surface, and proposed change in the reflector output only."
+        )
+        project_skill_instruction = (
+            "Use project_skill_new or project_skill_update only as a classification in apply-never mode; "
+            "do not write skill files."
+        )
+        commit_instruction = "Do not commit; apply mode is never."
+    else:
+        project_prompt_instruction = (
+            "Use project_prompt for repo-specific behavior. The target repo is the event cwd or the "
+            "project proven by the transcript, not the Introspect runtime repo unless the failure is about "
+            "Introspect itself. Proposal mode is enabled: do not edit target project source or product "
+            "code; write a proposal under {home}/proposals/ when the project prompt needs a foreground "
+            "apply. Project AGENTS.md/CLAUDE.md edits outside {home} are for foreground auto-apply runs."
+        ).format(home=INTROSPECT_HOME)
+        project_skill_instruction = (
+            "Use project_skill_new or project_skill_update when the workflow belongs to one codebase; "
+            "in proposal mode, write a proposal under {home}/proposals/ instead of editing target project "
+            "skill files."
+        ).format(home=INTROSPECT_HOME)
+        commit_instruction = (
+            "Commit in Introspect home when you change the live global prompt, home memory, user-wide "
+            "skills, or proposals. Do not commit target project repos in proposal mode. Do not commit "
+            "runtime feedback, lock, run, or model artifacts."
+        )
 
     return f"""You are the Introspect trigger reflector.
 
 A batch of classifier wake events fired. Optional review terms are metadata only. Judge whether each event reflects a real agent-behavior failure or just casual register / external venting. Do not change anything for false positives.
+
+Apply mode: {REFLECTOR_APPLY_MODE}
 
 Queued events:
 {chr(10).join(event_lines)}
@@ -1191,17 +1272,17 @@ Codex thread evidence:
 
 Workflow:
 1. Read the exact message identified by message_locator / transcript_path + transcript_line when present, then the surrounding recent turns for that transcript/session. Identify the agent behavior that caused the trigger, not the wording of the user's message. The snippet is only a preview. A codex://threads/<id> link is local evidence, not an inaccessible external URL; use available local tooling to resolve it, and log the missing resolver when no resolver exists.
-2. Run {REPO}/hooks/trigger-stats.sh and compare the current prompt version against prior versions.
+2. Run /usr/bin/python3 {REPO}/hooks/trigger-stats.sh and compare the current prompt version against prior versions.
 3. Classify the change target as exactly one of: no_change, core_prompt, project_prompt, home_memory, skill_new, skill_update, project_skill_new, project_skill_update, skill_prune.
     4. Use core_prompt only for an always-loaded invariant that should apply across nearly every task. Edit the live global prompt at {PROMPT_PATH}; do not edit Introspect runtime files under {REPO} unless the source thread is about Introspect itself. Before editing the global prompt, read {SKILLS_DIR}/agent-md-creator/SKILL.md for placement and {SKILLS_DIR}/writing-agent-prompt/SKILL.md for wording, then verify with a realistic response probe drawn from the failure transcript.
-    5. Use project_prompt for repo-specific behavior. the target repo is the event cwd or the project proven by the transcript, not the Introspect runtime repo unless the failure is about Introspect itself. In the background reflector, do not edit target project source or product code; write a proposal under {INTROSPECT_HOME}/proposals/ when the project prompt needs a foreground apply. Project AGENTS.md/CLAUDE.md edits outside {INTROSPECT_HOME} are for foreground agents after the user asks to apply them.
+    5. {project_prompt_instruction}
     6. Use home_memory for durable facts, preferences, user vocabulary, or machine/project state that should be remembered but should not change agent behavior globally. Write it under {INTROSPECT_HOME}/memory only when it is directly supported by the transcript.
 7. Use skill_new or skill_update only for repeatable procedures, tool workflows, domain references, scripts, or assets that future agents should load on demand. Do not create a skill from one noisy event unless it captures a recurring workflow or a corrected procedure that will likely repeat.
-8. Prefer updating an existing umbrella skill or support file over creating a narrow duplicate. Use project_skill_new or project_skill_update when the workflow belongs to one codebase; write Codex/OpenCode project skills under .agents/skills/<slug>/SKILL.md and Claude project skills under .claude/skills/<slug>/SKILL.md in that target repo.
+8. Prefer updating an existing umbrella skill or support file over creating a narrow duplicate. {project_skill_instruction}
 9. Use skill_prune for stale, duplicated, overbroad, unsupported, or harmful skills. Before any skill operation, read skills/skill-creator/SKILL.md, its source map, the skills index, and the closest existing skill. Prefer updating or pruning a close skill over creating a duplicate.
-10. For user-wide skill changes, write or edit a self-contained <slug>/SKILL.md under {USER_SKILLS_DIR}, update {USER_SKILLS_DIR}/index.json, run INTROSPECT_SKILLS_DIR={USER_SKILLS_DIR} {REPO}/scripts/validate-skills.py, then run INTROSPECT_HOME={INTROSPECT_HOME} INTROSPECT_USER_SKILLS_DIR={USER_SKILLS_DIR} {REPO}/scripts/sync-user-skills.sh. Export each skill to one native global namespace only: default/compatibility=codex uses ~/.agents/skills for Codex and OpenCode, compatibility=claude uses ~/.claude/skills for Claude, and compatibility=opencode uses ~/.config/opencode/skills for OpenCode-only skills. Do not export the same skill name to multiple OpenCode-visible roots. Use {SKILLS_DIR} only for built-in Introspect core skills. For project skills, validate the SKILL.md frontmatter and verify the relevant agent can discover it. For skill_prune, prefer marking status deprecated or narrowing activation before deleting files.
+10. For user-wide skill changes, write or edit a self-contained <slug>/SKILL.md under {USER_SKILLS_DIR}, update {USER_SKILLS_DIR}/index.json, run INTROSPECT_SKILLS_DIR={USER_SKILLS_DIR} /usr/bin/python3 {REPO}/scripts/validate-skills.py, then run INTROSPECT_HOME={INTROSPECT_HOME} INTROSPECT_USER_SKILLS_DIR={USER_SKILLS_DIR} {REPO}/scripts/sync-user-skills.sh. Export each skill to one native global namespace only: default/compatibility=codex uses ~/.agents/skills for Codex and OpenCode, compatibility=claude uses ~/.claude/skills for Claude, and compatibility=opencode uses ~/.config/opencode/skills for OpenCode-only skills. Do not export the same skill name to multiple OpenCode-visible roots. Use {SKILLS_DIR} only for built-in Introspect core skills. For project skills, validate the SKILL.md frontmatter and verify the relevant agent can discover it. For skill_prune, prefer marking status deprecated or narrowing activation before deleting files.
 11. If the trigger rate rose after a recent AGENTS.md change, prefer reverting or narrowing that change over adding another rule.
-    12. Commit in the repo you changed with a behavioral message. For core_prompt or home_memory changes, commit in {INTROSPECT_HOME}. For project_prompt or project_skill changes, commit in the target project repo. Do not commit runtime feedback, lock, run, proposal, or model artifacts.
+    12. {commit_instruction}
 13. If no change is justified, make no file changes and say why in the log output.
 
 Constraints:
@@ -1230,6 +1311,7 @@ def invoke_reflector(events: list[dict]) -> int:
             "event_count": len(events),
             "matched": matched_words(events),
             "sessions": sorted({session_key(event) for event in events}),
+            "apply_mode": REFLECTOR_APPLY_MODE,
             "dry_run": DRY_RUN,
             "runner": "dry-run",
             "model": "",
@@ -1269,7 +1351,9 @@ def invoke_reflector(events: list[dict]) -> int:
             "WebSearch",
             "WebFetch",
             "Bash(git *)",
+            "Bash(/usr/bin/python3 *trigger-stats.sh)",
             "Bash(*trigger-stats.sh)",
+            "Bash(/usr/bin/python3 *validate-skills.py)",
             "Bash(*validate-skills.py)",
             "Bash(*sync-user-skills.sh)",
             "Bash(mkdir -p *)",
@@ -1291,6 +1375,7 @@ def invoke_reflector(events: list[dict]) -> int:
             "event_count": len(events),
             "matched": matched_words(events),
             "sessions": sorted({session_key(event) for event in events}),
+            "apply_mode": REFLECTOR_APPLY_MODE,
             "dry_run": DRY_RUN,
             "runner": runner,
             "model": model,

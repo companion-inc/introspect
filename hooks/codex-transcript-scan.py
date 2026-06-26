@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/bin/python3
 """Backstop scanner for Codex Desktop session transcripts.
 
 Codex command hooks can be skipped when a changed hook has not been trusted yet

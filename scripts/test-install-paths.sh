@@ -47,11 +47,14 @@ expect_link "$HOME_DIR/.codex/AGENTS.md" "$SOURCE_PROMPT"
 expect_link "$HOME_DIR/.config/opencode/AGENTS.md" "$SOURCE_PROMPT"
 grep -q "PYTHONDONTWRITEBYTECODE=1" "$HOME_DIR/.claude/settings.json"
 grep -q "PYTHONDONTWRITEBYTECODE=1" "$HOME_DIR/.codex/hooks.json"
+grep -q "INTROSPECT_REFLECTOR_APPLY_MODE=proposal" "$HOME_DIR/.claude/settings.json"
+grep -q "INTROSPECT_REFLECTOR_APPLY_MODE=proposal" "$HOME_DIR/.codex/hooks.json"
 grep -q "/usr/bin/python3 .*hooks/trigger-reflect.sh" "$HOME_DIR/.claude/settings.json"
 grep -q "/usr/bin/python3 .*hooks/trigger-reflect.sh" "$HOME_DIR/.codex/hooks.json"
 /usr/libexec/PlistBuddy -c "Print :ProgramArguments:0" "$HOME_DIR/Library/LaunchAgents/ai.companion.introspect.codex-scanner.plist" | grep -qx "/usr/bin/python3"
 /usr/libexec/PlistBuddy -c "Print :ProgramArguments:1" "$HOME_DIR/Library/LaunchAgents/ai.companion.introspect.codex-scanner.plist" | grep -q "/hooks/codex-transcript-scan.py"
 /usr/libexec/PlistBuddy -c "Print :EnvironmentVariables:PYTHONDONTWRITEBYTECODE" "$HOME_DIR/Library/LaunchAgents/ai.companion.introspect.codex-scanner.plist" | grep -qx "1"
+/usr/libexec/PlistBuddy -c "Print :EnvironmentVariables:INTROSPECT_REFLECTOR_APPLY_MODE" "$HOME_DIR/Library/LaunchAgents/ai.companion.introspect.codex-scanner.plist" | grep -qx "proposal"
 /usr/libexec/PlistBuddy -c "Print :StartInterval" "$HOME_DIR/Library/LaunchAgents/ai.companion.introspect.codex-scanner.plist" | grep -qx "60"
 /usr/libexec/PlistBuddy -c "Print :EnvironmentVariables:PYTHONDONTWRITEBYTECODE" "$HOME_DIR/Library/LaunchAgents/ai.companion.introspect.health.plist" | grep -qx "1"
 if /usr/libexec/PlistBuddy -c "Print :EnvironmentVariables:INTROSPECT_ASSISTANT_FAILURE_MODEL" "$HOME_DIR/Library/LaunchAgents/ai.companion.introspect.codex-scanner.plist" >/dev/null 2>&1; then
@@ -61,6 +64,12 @@ fi
 test ! -f "$HOME_DIR/.introspect/models/assistant-boundary-logreg-v1.json"
 grep -q "$HOME_DIR/.codex/sessions" "$HOME_DIR/Library/LaunchAgents/ai.companion.introspect.codex-scanner.plist"
 grep -q "$HOME_DIR/.claude/projects" "$HOME_DIR/Library/LaunchAgents/ai.companion.introspect.codex-scanner.plist"
+
+HOME="$HOME_DIR" INTROSPECT_SKIP_LAUNCHD=1 "$REPO/bin/introspect" config --runner codex --sensitivity sensitive --apply-mode auto >/dev/null
+grep -q "INTROSPECT_REFLECTOR_APPLY_MODE=auto" "$HOME_DIR/.claude/settings.json"
+/usr/libexec/PlistBuddy -c "Print :EnvironmentVariables:INTROSPECT_REFLECTOR_APPLY_MODE" "$HOME_DIR/Library/LaunchAgents/ai.companion.introspect.codex-scanner.plist" | grep -qx "auto"
+/usr/libexec/PlistBuddy -c "Print :EnvironmentVariables:INTROSPECT_REFLECTOR_RUNNER" "$HOME_DIR/Library/LaunchAgents/ai.companion.introspect.codex-scanner.plist" | grep -qx "codex"
+/usr/libexec/PlistBuddy -c "Print :EnvironmentVariables:INTROSPECT_WAKE_SENSITIVITY" "$HOME_DIR/Library/LaunchAgents/ai.companion.introspect.codex-scanner.plist" | grep -qx "sensitive"
 
 HOME="$HOME_DIR" INTROSPECT_SKIP_LAUNCHD=1 "$REPO/scripts/install-hooks.sh" --uninstall >/dev/null
 

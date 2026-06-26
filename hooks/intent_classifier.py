@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/bin/python3
 """Pure-Python scorer for Introspect wake intent models."""
 
 from __future__ import annotations

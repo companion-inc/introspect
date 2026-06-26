@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/bin/python3
 # UserPromptSubmit hook (Claude Code + Codex — both deliver {"prompt": ...} on
 # stdin).
 #

@@ -58,14 +58,20 @@ introspect uninstall          # remove hooks, scanner, monitor, prompt links
 Examples:
 
 ```bash
-introspect install --reflect-mode immediate --runner codex
-introspect config --sensitivity sensitive --runner codex
-introspect run --host codex --event manual --force
+introspect install --reflect-mode immediate --apply-mode auto --runner codex
+introspect config --sensitivity sensitive --apply-mode auto --runner codex
+introspect run --host codex --event manual --apply auto --force
 introspect runs -n 20
 introspect diff --summary
 ```
 
 No model is pinned by default. Blank, `default`, and `auto` use the selected CLI's own current default model.
+
+Apply mode controls where self-evolution lands:
+
+- `proposal`: project prompt and project skill changes are written as proposals under `~/.introspect/proposals`.
+- `auto`: the reflector can edit and commit the target repo's project `AGENTS.md` or project skills directly.
+- `never`: manual runs index transcript changes without invoking the reflector.
 
 ## What Happens On Install
 
@@ -115,7 +121,7 @@ Running `introspect` shows:
 5. Review-tier near-repeat corrections across chats in the same project can wake through local repetition pressure.
 6. High-confidence or repeated-pressure events are appended to `trigger-queue.jsonl`.
 7. Immediate mode kicks one locked worker; nightly mode waits for the scheduled reflector.
-8. The worker batches nearby events, applies short post-run cooldowns, snapshots relevant agent surfaces, and runs one reflector process.
+8. The worker batches nearby events, applies short post-run cooldowns, snapshots relevant agent surfaces, and runs one reflector process in the configured apply mode.
 9. The reflector inspects the original thread and chooses one target: no change, global prompt, project prompt, home memory, user skill, project skill, or skill pruning.
 10. The worker records the prompt, output, status, notification result, and exact surface diff.
 11. The CLI reads those local artifacts through `introspect runs` and `introspect diff`.
