@@ -158,7 +158,38 @@ def git_short_head(path: Path) -> str:
         return "unknown"
 
 
+def git_file_head(path: Path) -> str:
+    try:
+        root = (
+            subprocess.run(
+                ["git", "-C", str(path.parent), "rev-parse", "--show-toplevel"],
+                capture_output=True,
+                text=True,
+                timeout=5,
+                check=False,
+            ).stdout.strip()
+        )
+        if not root:
+            return "unknown"
+        relative = path.resolve().relative_to(Path(root).resolve())
+        return (
+            subprocess.run(
+                ["git", "-C", root, "log", "-1", "--format=%h", "--", str(relative)],
+                capture_output=True,
+                text=True,
+                timeout=5,
+                check=False,
+            ).stdout.strip()
+            or "unknown"
+        )
+    except Exception:
+        return "unknown"
+
+
 def git_version() -> str:
+    prompt_version = git_file_head(PROMPT_PATH)
+    if prompt_version != "unknown":
+        return prompt_version
     prompt_dir = PROMPT_PATH if PROMPT_PATH.is_dir() else PROMPT_PATH.parent
     for candidate in (prompt_dir, REPO):
         version = git_short_head(candidate)

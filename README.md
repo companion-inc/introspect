@@ -86,7 +86,7 @@ It wires each agent to that home:
 It also installs:
 
 - foreground hooks for Claude and Codex prompts
-- an event-driven transcript scanner for missed direct user messages in Desktop sessions
+- a transcript scanner for missed direct user messages in Desktop sessions, woken by file events plus a 60-second reliability backstop
 - a login health check that repairs drift in links, hooks, scanner state, and skill links
 - a bounded one-time backfill over recent local Claude/Codex transcripts
 - best-effort macOS notifications through `osascript` when a reflector run starts

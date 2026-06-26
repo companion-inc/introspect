@@ -52,6 +52,7 @@ grep -q "/usr/bin/python3 .*hooks/trigger-reflect.sh" "$HOME_DIR/.codex/hooks.js
 /usr/libexec/PlistBuddy -c "Print :ProgramArguments:0" "$HOME_DIR/Library/LaunchAgents/ai.companion.introspect.codex-scanner.plist" | grep -qx "/usr/bin/python3"
 /usr/libexec/PlistBuddy -c "Print :ProgramArguments:1" "$HOME_DIR/Library/LaunchAgents/ai.companion.introspect.codex-scanner.plist" | grep -q "/hooks/codex-transcript-scan.py"
 /usr/libexec/PlistBuddy -c "Print :EnvironmentVariables:PYTHONDONTWRITEBYTECODE" "$HOME_DIR/Library/LaunchAgents/ai.companion.introspect.codex-scanner.plist" | grep -qx "1"
+/usr/libexec/PlistBuddy -c "Print :StartInterval" "$HOME_DIR/Library/LaunchAgents/ai.companion.introspect.codex-scanner.plist" | grep -qx "60"
 /usr/libexec/PlistBuddy -c "Print :EnvironmentVariables:PYTHONDONTWRITEBYTECODE" "$HOME_DIR/Library/LaunchAgents/ai.companion.introspect.health.plist" | grep -qx "1"
 if /usr/libexec/PlistBuddy -c "Print :EnvironmentVariables:INTROSPECT_ASSISTANT_FAILURE_MODEL" "$HOME_DIR/Library/LaunchAgents/ai.companion.introspect.codex-scanner.plist" >/dev/null 2>&1; then
   echo "test-install-paths: scanner should not install assistant-message wake model env" >&2

@@ -698,14 +698,14 @@ data = {
         "INTROSPECT_CODEX_SCAN_MINUTES": "20",
         "PATH": launchd_path,
     },
-    # Event-driven, not polled: launchd wakes the scanner when Codex writes
-    # session history or Claude writes project history. Codex's own hook can
-    # be skipped, so the transcript scanner is the user-message backstop.
+    # WatchPaths wakes quickly on normal transcript writes. StartInterval is
+    # the reliability backstop when file events are missed or coalesced.
     "WatchPaths": [
         str(Path.home() / ".codex" / "history.jsonl"),
         str(Path.home() / ".codex" / "sessions"),
         str(Path.home() / ".claude" / "projects"),
     ],
+    "StartInterval": 60,
     "RunAtLoad": True,
     "StandardOutPath": str(Path(feedback_dir) / "codex-scanner.out.log"),
     "StandardErrorPath": str(Path(feedback_dir) / "codex-scanner.err.log"),
@@ -720,7 +720,7 @@ PY
   launchctl bootout "gui/$(id -u)" "$SCAN_PLIST" >/dev/null 2>&1 || true
   launchctl bootstrap "gui/$(id -u)" "$SCAN_PLIST"
   launchctl enable "gui/$(id -u)/$SCAN_LABEL" >/dev/null 2>&1 || true
-  echo "installed transcript scanner: $SCAN_PLIST (event-driven on Codex/Claude writes; no polling)"
+  echo "installed transcript scanner: $SCAN_PLIST (Codex/Claude writes + 60s backstop)"
   if [[ -n "$WAKE_SHADOW_MODELS" ]]; then
     echo "shadow candidate models: $WAKE_SHADOW_MODELS"
   fi

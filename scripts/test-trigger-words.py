@@ -1330,6 +1330,79 @@ def run_worker_state_preserves_invocation_case() -> None:
             raise AssertionError(f"new session timestamp was not recorded: {state}")
 
 
+def run_worker_new_invocation_clears_terminal_fields_case() -> None:
+    with tempfile.TemporaryDirectory(prefix="introspect-invocation-clean-") as tmp_raw:
+        tmp = Path(tmp_raw)
+        worker = load_worker_module(
+            "trigger_worker_invocation_clean",
+            {"INTROSPECT_FEEDBACK_DIR": str(tmp)},
+        )
+        worker.record_last_invocation(
+            run_id="old",
+            status="completed",
+            exit_code=0,
+            changed_count=4,
+            restored_count=0,
+            pid=111,
+        )
+        worker.record_last_invocation(
+            run_id="new",
+            status="starting",
+            runner="codex",
+            pid=222,
+        )
+        invocation = worker.read_json(worker.STATE, {}).get("last_invocation")
+        if invocation.get("run_id") != "new" or invocation.get("status") != "starting":
+            raise AssertionError(f"new invocation was not recorded cleanly: {invocation}")
+        for stale_key in ("exit_code", "changed_count", "restored_count"):
+            if stale_key in invocation:
+                raise AssertionError(f"new invocation kept stale {stale_key}: {invocation}")
+        worker.record_last_invocation(run_id="new", status="running", notification_status="delivered")
+        invocation = worker.read_json(worker.STATE, {}).get("last_invocation")
+        if invocation.get("pid") != 222 or invocation.get("notification_status") != "delivered":
+            raise AssertionError(f"same invocation update did not preserve live fields: {invocation}")
+        for stale_key in ("exit_code", "changed_count", "restored_count"):
+            if stale_key in invocation:
+                raise AssertionError(f"running invocation kept stale {stale_key}: {invocation}")
+
+
+def run_worker_auto_commit_home_surfaces_case() -> None:
+    with tempfile.TemporaryDirectory(prefix="introspect-home-commit-") as tmp_raw:
+        home = Path(tmp_raw)
+        (home / "AGENTS.md").write_text("# old\n", encoding="utf-8")
+        (home / "introspect" / "codex").mkdir(parents=True)
+        (home / "introspect" / "codex" / "state.json").write_text("{}\n", encoding="utf-8")
+        init_git_repo(home, "seed home")
+        worker = load_worker_module(
+            "trigger_worker_home_commit",
+            {"INTROSPECT_HOME": str(home), "INTROSPECT_FEEDBACK_DIR": str(home / "feedback")},
+        )
+
+        (home / "AGENTS.md").write_text("# new\n", encoding="utf-8")
+        (home / "introspect" / "codex" / "state.json").write_text('{"changed": true}\n', encoding="utf-8")
+        if not worker.commit_introspect_home_surfaces("Test home commit"):
+            raise AssertionError("home surface commit did not run")
+
+        head_subject = subprocess.run(
+            ["git", "-C", str(home), "log", "-1", "--format=%s"],
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+        if head_subject != "Test home commit":
+            raise AssertionError(f"unexpected home commit subject: {head_subject}")
+        status = subprocess.run(
+            ["git", "-C", str(home), "status", "--short"],
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout
+        if "AGENTS.md" in status:
+            raise AssertionError(f"AGENTS.md was not committed: {status}")
+        if "introspect/codex/state.json" not in status:
+            raise AssertionError(f"runtime state should remain uncommitted: {status}")
+
+
 def run_worker_retry_policy_case() -> None:
     worker = load_worker_module("trigger_worker_retry_policy", {"TRIGGER_MAX_REFLECTOR_ATTEMPTS": "2"})
     auth_output = "Failed to authenticate. API Error: 401 Invalid authentication credentials"
@@ -1522,10 +1595,12 @@ def main() -> int:
     run_worker_command_model_case()
     run_worker_restore_failed_surface_case()
     run_worker_state_preserves_invocation_case()
+    run_worker_new_invocation_clears_terminal_fields_case()
+    run_worker_auto_commit_home_surfaces_case()
     run_worker_retry_policy_case()
     run_worker_queue_direct_user_filter_case()
     run_trigger_stats_direct_user_case()
-    print(f"test-trigger-words: ok ({len(cases) + 23} cases)")
+    print(f"test-trigger-words: ok ({len(cases) + 25} cases)")
     return 0
 
 

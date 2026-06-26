@@ -156,7 +156,7 @@ printf "repo: %s\n" "$RUNTIME_REPO"
 printf "runtime commit: "
 git rev-parse --short HEAD 2>/dev/null || printf "unknown\n"
 printf "prompt commit: "
-git -C "$INTROSPECT_HOME_DIR" rev-parse --short HEAD 2>/dev/null || printf "unknown\n"
+git -C "$INTROSPECT_HOME_DIR" log -1 --format=%h -- AGENTS.md 2>/dev/null || printf "unknown\n"
 
 printf "private home: %s\n" "$INTROSPECT_HOME_DIR"
 printf "skill export root: %s/skills\n" "$AGENTS_HOME_DIR"
@@ -345,6 +345,11 @@ def normalized_invocation(invocation):
         return normalized
     pid = int(normalized.get("pid") or 0)
     exit_code = normalized.get("exit_code")
+    if pid and pid_alive(pid):
+        if exit_code is not None:
+            normalized["stale_exit_code"] = exit_code
+            normalized.pop("exit_code", None)
+        return normalized
     if exit_code is not None:
         normalized["reported_status"] = status
         normalized["status"] = "completed" if int(exit_code) == 0 else "failed"

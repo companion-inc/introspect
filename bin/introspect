@@ -78,6 +78,11 @@ def normalized_invocation(invocation: dict) -> dict:
 
     pid = int(normalized.get("pid") or 0)
     exit_code = normalized.get("exit_code")
+    if pid and pid_alive(pid):
+        if exit_code is not None:
+            normalized["stale_exit_code"] = exit_code
+            normalized.pop("exit_code", None)
+        return normalized
     if exit_code is not None:
         normalized["reported_status"] = status
         normalized["status"] = "completed" if int(exit_code) == 0 else "failed"

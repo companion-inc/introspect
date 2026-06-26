@@ -554,6 +554,78 @@ def restore_agent_surfaces(before: dict[str, dict], after: dict[str, dict]) -> i
     return restored
 
 
+def changed_introspect_home_paths() -> list[str]:
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(INTROSPECT_HOME), "status", "--porcelain", "-z"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=False,
+        )
+    except Exception as exc:
+        log(f"failed to inspect Introspect home git status: {exc!r}")
+        return []
+    if result.returncode != 0:
+        log(f"failed to inspect Introspect home git status: {result.stderr.strip()}")
+        return []
+
+    allowed: list[str] = []
+    fields = [field for field in result.stdout.split("\0") if field]
+    index = 0
+    while index < len(fields):
+        entry = fields[index]
+        status = entry[:2]
+        path = entry[3:]
+        index += 1
+        if status.startswith("R") or status.startswith("C"):
+            if index < len(fields):
+                path = fields[index]
+                index += 1
+        if path == "AGENTS.md" or path.startswith(("memory/", "skills/", "proposals/")):
+            allowed.append(path)
+    return sorted(set(allowed))
+
+
+def commit_introspect_home_surfaces(message: str = "Update Introspect home") -> bool:
+    paths = changed_introspect_home_paths()
+    if not paths:
+        return False
+    add = subprocess.run(
+        ["git", "-C", str(INTROSPECT_HOME), "add", "-A", "--", *paths],
+        capture_output=True,
+        text=True,
+        timeout=20,
+        check=False,
+    )
+    if add.returncode != 0:
+        log(f"failed to stage Introspect home changes: {add.stderr.strip()}")
+        return False
+    commit = subprocess.run(
+        [
+            "git",
+            "-C",
+            str(INTROSPECT_HOME),
+            "-c",
+            "user.name=Introspect",
+            "-c",
+            "user.email=introspect@example.invalid",
+            "commit",
+            "-m",
+            message,
+        ],
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+    if commit.returncode != 0:
+        log(f"failed to commit Introspect home changes: {commit.stderr.strip()}")
+        return False
+    log(f"committed Introspect home changes: {message}")
+    return True
+
+
 def available_reflector_runners() -> dict[str, str]:
     runners = {}
     for name in ("claude", "codex"):
@@ -852,6 +924,13 @@ def record_last_invocation(**values) -> None:
     invocation = state.get("last_invocation")
     if not isinstance(invocation, dict):
         invocation = {}
+    run_id = values.get("run_id")
+    if run_id and invocation.get("run_id") != run_id:
+        invocation = {}
+    if values.get("status") in {"starting", "running"}:
+        for key in ("exit_code", "changed_count", "restored_count"):
+            if key not in values:
+                invocation.pop(key, None)
     invocation.update(values)
     invocation["updated_at"] = iso_now()
     state["last_invocation"] = invocation
@@ -1291,11 +1370,13 @@ def invoke_reflector(events: list[dict]) -> int:
             after_surfaces = snapshot_agent_surfaces(events)
             changed_count = write_surface_diff(before_surfaces, after_surfaces, surface_diff_path, batch)
             log(f"surface diff recorded changes={changed_count} path={surface_diff_path}")
+            committed_home_changes = commit_introspect_home_surfaces() if changed_count else False
             record_last_invocation(
                 run_id=run_id,
                 status="completed",
                 exit_code=0,
                 changed_count=changed_count,
+                committed_home_changes=committed_home_changes,
             )
             return 0
         if last_nonretryable:
