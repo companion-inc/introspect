@@ -2,7 +2,7 @@
 
 ## Local Introspect
 
-- `README.md:3-7`: Introspect is a local CLI/TUI for improving coding-agent instructions from real conversations, with local state under `~/.introspect`.
+- `README.md:3-7`: Introspect is a local terminal CLI and background hook runtime for improving coding-agent instructions from real conversations, with local state under `~/.introspect`.
 - `README.md:79-92`: Current install links Claude, Codex, and OpenCode prompt files and installs hooks, scanner, health check, and backfill.
 - `README.md:109-120`: Current pipeline is classifier-scored trigger events, queue, worker, reflector, and surface diff tracking.
 - `README.md:122-140`: Current instruction surfaces differ by host: global `~/.introspect/AGENTS.md`, repo `AGENTS.md`, Claude `CLAUDE.md`, user skills, project skills, and host export roots.
@@ -54,4 +54,3 @@ Subagent Euclid reported these primary sources:
 - `https://opencode.ai/docs/config/`: plugin configuration through `opencode.json`.
 - `https://opencode.ai/docs/commands/`: command surfaces.
 - `/tmp/introspect-opencode-research/packages/plugin/src/index.ts:222`: plugin API source used by the research lane.
-

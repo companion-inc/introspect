@@ -6,7 +6,7 @@ Objective: Understand the real product problem Introspect is meant to solve, usi
 
 Known facts:
 
-- Introspect is currently described as a macOS app and hook engine for improving local Claude/Codex instructions from real trigger signals; its public/private split puts reusable app code in this repo and user-specific Introspect home state under `~/.introspect`. Source: `README.md:3`, `README.md:11`.
+- Introspect is currently described as a local terminal CLI and background hook runtime for improving coding-agent instructions from real conversations; its public/private split puts reusable runtime code in this repo and user-specific Introspect home state under `~/.introspect`. Source: `README.md:3-7`.
 - The installed scanner is not a polling timer: the scanner LaunchAgent uses `RunAtLoad` and `WatchPaths` for `~/.codex/history.jsonl` and `~/.codex/sessions`, with no `StartInterval`; the health LaunchAgent uses `RunAtLoad` with no `StartInterval`. Sources: `~/Library/LaunchAgents/ai.companion.introspect.codex-scanner.plist:42-52`, `~/Library/LaunchAgents/ai.companion.introspect.health.plist:25-30`.
 - The "wake every 0 seconds" symptom is real as repeated wake/noise, but not as a timer interval. The same current prompt was logged by the foreground hook and by the Codex transcript scanner, producing four trigger events for one user intent. Sources: `feedback/events.jsonl:4714-4717`, `feedback/reflector.log:12782-12805`.
 - A deduped local corpus scan found 31,329 Codex user turns with 3,874 trigger turns and 4,325 Claude user turns with 886 trigger turns across 2025-09-07 to 2026-06-14. Source: command output, `python3` transcript dedupe scan run in this session.
