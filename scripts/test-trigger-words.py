@@ -1408,6 +1408,9 @@ def run_worker_retry_policy_case() -> None:
     auth_output = "Failed to authenticate. API Error: 401 Invalid authentication credentials"
     if not worker.is_nonretryable_runner_output(auth_output):
         raise AssertionError("worker did not classify CLI auth failure as non-retryable")
+    weekly_limit_output = "You've hit your weekly limit · resets Jun 27 at 11am"
+    if not worker.is_nonretryable_runner_output(weekly_limit_output):
+        raise AssertionError("worker did not classify CLI weekly limit as non-retryable")
     if worker.is_nonretryable_runner_output("rate limit exceeded, try again"):
         raise AssertionError("worker treated retryable output as non-retryable")
 

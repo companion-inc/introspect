@@ -117,6 +117,7 @@ NONRETRYABLE_RUNNER_MARKERS = (
     "failed to authenticate",
     "invalid authentication credentials",
     "api error: 401",
+    "weekly limit",
 )
 SKIPPED_SURFACE_DIRS = {
     ".build",
