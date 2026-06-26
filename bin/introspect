@@ -56,6 +56,37 @@ def read_jsonl(path: Path) -> list[dict]:
     return rows
 
 
+def pid_alive(pid: int) -> bool:
+    if pid <= 0:
+        return False
+    try:
+        os.kill(pid, 0)
+        return True
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    except Exception:
+        return False
+
+
+def normalized_invocation(invocation: dict) -> dict:
+    normalized = dict(invocation)
+    status = str(normalized.get("status") or "")
+    if status not in {"starting", "running"}:
+        return normalized
+
+    pid = int(normalized.get("pid") or 0)
+    exit_code = normalized.get("exit_code")
+    if exit_code is not None:
+        normalized["reported_status"] = status
+        normalized["status"] = "completed" if int(exit_code) == 0 else "failed"
+    elif pid and not pid_alive(pid):
+        normalized["reported_status"] = status
+        normalized["status"] = "stale"
+    return normalized
+
+
 def short(value: object, fallback: str = "-") -> str:
     text = str(value or "").strip()
     return text or fallback
@@ -672,6 +703,8 @@ def render_dashboard() -> None:
     latest_invocation = state.get("last_invocation") if isinstance(state, dict) else None
     if not isinstance(latest_invocation, dict):
         latest_invocation = {}
+    else:
+        latest_invocation = normalized_invocation(latest_invocation)
     width = terminal_width()
     chart_width = max(18, min(36, width - 84))
     diff_path, diff_lines = latest_diff_summary()
@@ -747,6 +780,7 @@ def runs(args: argparse.Namespace) -> int:
     state = read_json(DEFAULT_FEEDBACK / "reflector-state.json", {})
     latest_invocation = state.get("last_invocation") if isinstance(state, dict) else None
     if isinstance(latest_invocation, dict):
+        latest_invocation = normalized_invocation(latest_invocation)
         print("latest invocation:")
         print(f"  status   {short(latest_invocation.get('status'))}")
         print(f"  runner   {short(latest_invocation.get('runner'))}")

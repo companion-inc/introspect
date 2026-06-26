@@ -290,6 +290,7 @@ printf "\nfeedback:\n"
 if [[ -f "$FEEDBACK_DIR/events.jsonl" ]]; then
   "$SETUP_PYTHON" - "$FEEDBACK_DIR" "$INTROSPECT_HOME_DIR" "$RUNTIME_REPO" <<'PY'
 import json
+import os
 import re
 import sys
 from collections import Counter
@@ -323,6 +324,35 @@ except Exception:
             or stripped.startswith("you are the introspect trigger reflector.")
         )
 active_words = set()
+
+def pid_alive(pid):
+    if pid <= 0:
+        return False
+    try:
+        os.kill(pid, 0)
+        return True
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    except Exception:
+        return False
+
+def normalized_invocation(invocation):
+    normalized = dict(invocation)
+    status = str(normalized.get("status") or "")
+    if status not in {"starting", "running"}:
+        return normalized
+    pid = int(normalized.get("pid") or 0)
+    exit_code = normalized.get("exit_code")
+    if exit_code is not None:
+        normalized["reported_status"] = status
+        normalized["status"] = "completed" if int(exit_code) == 0 else "failed"
+    elif pid and not pid_alive(pid):
+        normalized["reported_status"] = status
+        normalized["status"] = "stale"
+    return normalized
+
 words_file = home / "trigger-words.txt"
 if words_file.exists():
     active_words = {
@@ -428,6 +458,7 @@ if state_path.exists():
     print(f"scheduled retry: {state.get('scheduled_retry_at')}")
     invocation = state.get("last_invocation")
     if isinstance(invocation, dict):
+        invocation = normalized_invocation(invocation)
         started = invocation.get("started_at") or invocation.get("updated_at")
         status = invocation.get("status") or "unknown"
         runner = invocation.get("runner") or "unknown"
@@ -441,6 +472,8 @@ if state_path.exists():
             f"events={event_count}",
             f"notification={notification}",
         ]
+        if invocation.get("reported_status"):
+            parts.append(f"reported={invocation.get('reported_status')}")
         if exit_code is not None:
             parts.append(f"exit={exit_code}")
         print("latest invocation: " + " ".join(parts))
