@@ -115,7 +115,7 @@ Running `introspect` shows:
 5. Review-tier near-repeat corrections across chats in the same project can wake through local repetition pressure.
 6. High-confidence or repeated-pressure events are appended to `trigger-queue.jsonl`.
 7. Immediate mode kicks one locked worker; nightly mode waits for the scheduled reflector.
-8. The worker batches nearby events, applies cooldowns, snapshots relevant agent surfaces, and runs one reflector process.
+8. The worker batches nearby events, applies short post-run cooldowns, snapshots relevant agent surfaces, and runs one reflector process.
 9. The reflector inspects the original thread and chooses one target: no change, global prompt, project prompt, home memory, user skill, project skill, or skill pruning.
 10. The worker records the prompt, output, status, notification result, and exact surface diff.
 11. The CLI reads those local artifacts through `introspect runs` and `introspect diff`.

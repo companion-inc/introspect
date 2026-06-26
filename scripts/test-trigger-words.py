@@ -1419,6 +1419,18 @@ def run_worker_retry_policy_case() -> None:
         raise AssertionError(f"max retry attempt not recorded: {second_retry}")
 
 
+def run_worker_immediate_timing_defaults_case() -> None:
+    worker = load_worker_module("trigger_worker_timing_defaults", {})
+    expected = {
+        "DEBOUNCE_SECONDS": 75.0,
+        "GLOBAL_COOLDOWN_SECONDS": 60.0,
+        "SESSION_COOLDOWN_SECONDS": 60.0,
+    }
+    actual = {name: getattr(worker, name) for name in expected}
+    if actual != expected:
+        raise AssertionError(f"immediate timing defaults drifted: {actual}")
+
+
 def run_worker_queue_direct_user_filter_case() -> None:
     with tempfile.TemporaryDirectory(prefix="agent-loop-worker-queue-filter-") as tmp_raw:
         tmp = Path(tmp_raw)
@@ -1598,9 +1610,10 @@ def main() -> int:
     run_worker_new_invocation_clears_terminal_fields_case()
     run_worker_auto_commit_home_surfaces_case()
     run_worker_retry_policy_case()
+    run_worker_immediate_timing_defaults_case()
     run_worker_queue_direct_user_filter_case()
     run_trigger_stats_direct_user_case()
-    print(f"test-trigger-words: ok ({len(cases) + 25} cases)")
+    print(f"test-trigger-words: ok ({len(cases) + 26} cases)")
     return 0
 
 
