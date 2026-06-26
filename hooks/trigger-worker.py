@@ -343,6 +343,9 @@ def surface_scan_roots(events: list[dict] | None = None) -> list[Path]:
         if cwd_resolved == repo_resolved or repo_resolved in cwd_resolved.parents:
             runtime_roots = [REPO]
             break
+    # The background reflector runs with REFLECTOR_CWD as its writable workspace and
+    # must not edit target product repos. Scanning event cwd roots can trap timeout
+    # cleanup in large product trees; project prompt changes are proposals in home.
     roots = runtime_roots + [
         INTROSPECT_HOME,
         home / ".codex",
@@ -350,10 +353,6 @@ def surface_scan_roots(events: list[dict] | None = None) -> list[Path]:
         home / ".agents",
         home / ".config" / "opencode",
     ]
-    for event in events or []:
-        cwd = event.get("cwd")
-        if isinstance(cwd, str) and cwd.strip():
-            roots.append(Path(os.path.expanduser(cwd.strip())))
     seen: set[str] = set()
     existing: list[Path] = []
     for root in roots:
@@ -851,8 +850,14 @@ def terminate_process_group(pid: int, *, timeout: float = 5.0) -> None:
         except ProcessLookupError:
             return
         except OSError as exc:
-            log(f"failed to signal reflector process group pgid={pgid}: {exc!r}")
-            return
+            log(f"failed to signal reflector process group pgid={pgid}: {exc!r}; signaling pid={pid}")
+            try:
+                os.kill(pid, sig)
+            except ProcessLookupError:
+                return
+            except OSError as direct_exc:
+                log(f"failed to signal reflector pid={pid}: {direct_exc!r}")
+                return
 
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:

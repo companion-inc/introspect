@@ -103,7 +103,9 @@ def main() -> None:
         roots = worker.surface_scan_roots([event])
         if runtime.resolve() in roots:
             fail("CLI runtime must not be snapshotted as an editable surface root for unrelated projects")
-        for expected in [home.resolve(), project.resolve()]:
+        if project.resolve() in roots:
+            fail("target project repo must not be snapshotted by the background reflector")
+        for expected in [home.resolve()]:
             if expected not in roots:
                 fail(f"missing surface root: {expected}")
 
