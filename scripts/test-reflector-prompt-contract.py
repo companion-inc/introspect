@@ -5,7 +5,10 @@ from __future__ import annotations
 
 import importlib.util
 import os
+import subprocess
+import sys
 import tempfile
+import time
 from pathlib import Path
 
 
@@ -36,6 +39,14 @@ def load_worker(home: Path, runtime: Path):
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
+
+
+def process_alive(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+        return True
+    except ProcessLookupError:
+        return False
 
 
 def main() -> None:
@@ -107,6 +118,39 @@ def main() -> None:
             fail("codex reflector command leaked the prompt through argv")
         if "-" not in command:
             fail("codex reflector command should read the prompt from stdin")
+
+        pid_file = base / "child.pid"
+        child_script = (
+            "import pathlib, subprocess, sys, time\n"
+            "p = subprocess.Popen(['sleep', '60'])\n"
+            "pathlib.Path(sys.argv[1]).write_text(str(p.pid))\n"
+            "time.sleep(60)\n"
+        )
+        with open(os.devnull, "w") as devnull:
+            try:
+                worker.run_reflector_subprocess(
+                    [sys.executable, "-c", child_script, str(pid_file)],
+                    cwd=base,
+                    env=os.environ.copy(),
+                    input_text="",
+                    log_file=devnull,
+                    timeout=1,
+                )
+            except subprocess.TimeoutExpired:
+                pass
+            else:
+                fail("timed reflector command unexpectedly completed")
+
+        try:
+            child_pid = int(pid_file.read_text())
+        except Exception as exc:
+            fail(f"child pid was not recorded: {exc!r}")
+        for _ in range(30):
+            if not process_alive(child_pid):
+                break
+            time.sleep(0.1)
+        else:
+            fail("timed-out reflector left a child process alive")
 
     print("test-reflector-prompt-contract: ok")
 

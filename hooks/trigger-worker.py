@@ -761,6 +761,63 @@ def build_reflector_command(runner: str, runner_path: str, prompt: str, allowed_
     raise RuntimeError(f"unsupported reflector runner {runner!r}")
 
 
+def terminate_process_group(pid: int, *, timeout: float = 5.0) -> None:
+    try:
+        pgid = os.getpgid(pid)
+    except ProcessLookupError:
+        return
+    except OSError as exc:
+        log(f"failed to read reflector process group pid={pid}: {exc!r}")
+        return
+
+    for sig in (signal.SIGTERM, signal.SIGKILL):
+        try:
+            os.killpg(pgid, sig)
+        except ProcessLookupError:
+            return
+        except OSError as exc:
+            log(f"failed to signal reflector process group pgid={pgid}: {exc!r}")
+            return
+
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            try:
+                os.kill(pid, 0)
+            except ProcessLookupError:
+                return
+            time.sleep(0.1)
+
+    log(f"reflector process group still alive after kill pgid={pgid} pid={pid}")
+
+
+def run_reflector_subprocess(
+    cmd: list[str],
+    *,
+    cwd: Path,
+    env: dict[str, str],
+    input_text: str,
+    log_file,
+    timeout: float,
+) -> subprocess.CompletedProcess:
+    proc = subprocess.Popen(
+        cmd,
+        cwd=cwd,
+        env=env,
+        stdin=subprocess.PIPE,
+        stdout=log_file,
+        stderr=subprocess.STDOUT,
+        text=True,
+        start_new_session=True,
+    )
+    try:
+        proc.communicate(input=input_text, timeout=timeout)
+    except subprocess.TimeoutExpired as exc:
+        log(f"reflector command timed out after {timeout:.0f}s; terminating process group pid={proc.pid}")
+        terminate_process_group(proc.pid)
+        raise subprocess.TimeoutExpired(cmd, timeout) from exc
+    return subprocess.CompletedProcess(cmd, proc.returncode)
+
+
 def pid_alive(pid: int) -> bool:
     try:
         os.kill(pid, 0)
@@ -1198,14 +1255,12 @@ def invoke_reflector(events: list[dict]) -> int:
             log_file.write(f"{iso_now()} command: {display_cmd}\n")
             log_file.flush()
             try:
-                result = subprocess.run(
+                result = run_reflector_subprocess(
                     cmd,
                     cwd=REFLECTOR_CWD,
                     env=env,
-                    input=prompt,
-                    stdout=log_file,
-                    stderr=subprocess.STDOUT,
-                    text=True,
+                    input_text=prompt,
+                    log_file=log_file,
                     timeout=REFLECTOR_TIMEOUT_SECONDS,
                 )
             except subprocess.TimeoutExpired:
