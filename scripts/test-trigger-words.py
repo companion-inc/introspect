@@ -1249,12 +1249,21 @@ def run_worker_command_model_case() -> None:
         raise AssertionError(f"claude command leaked prompt through argv: {claude_cmd}")
 
     codex_cmd = worker.build_reflector_command("codex", "/usr/local/bin/codex", "prompt", "Read")
-    for expected in ("exec", "--dangerously-bypass-approvals-and-sandbox", "-C", "--model", "gpt-test", "-"):
+    for expected in (
+        "exec",
+        "-c",
+        'approval_policy="never"',
+        'sandbox_mode="workspace-write"',
+        "-C",
+        "--model",
+        "gpt-test",
+        "-",
+    ):
         if expected not in codex_cmd:
             raise AssertionError(f"codex command missing {expected}: {codex_cmd}")
     if "prompt" in codex_cmd:
         raise AssertionError(f"codex command leaked prompt through argv: {codex_cmd}")
-    for removed in ("--ask-for-approval", "--search"):
+    for removed in ("--ask-for-approval", "--search", "--dangerously-bypass-approvals-and-sandbox"):
         if removed in codex_cmd:
             raise AssertionError(f"codex command still uses removed flag {removed}: {codex_cmd}")
 

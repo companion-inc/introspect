@@ -749,7 +749,10 @@ def build_reflector_command(runner: str, runner_path: str, prompt: str, allowed_
         cmd = [
             runner_path,
             "exec",
-            "--dangerously-bypass-approvals-and-sandbox",
+            "-c",
+            'approval_policy="never"',
+            "-c",
+            'sandbox_mode="workspace-write"',
             "-C",
             str(REFLECTOR_CWD),
         ]
@@ -1106,7 +1109,7 @@ Workflow:
 2. Run {REPO}/hooks/trigger-stats.sh and compare the current prompt version against prior versions.
 3. Classify the change target as exactly one of: no_change, core_prompt, project_prompt, home_memory, skill_new, skill_update, project_skill_new, project_skill_update, skill_prune.
     4. Use core_prompt only for an always-loaded invariant that should apply across nearly every task. Edit the live global prompt at {PROMPT_PATH}; do not edit Introspect runtime files under {REPO} unless the source thread is about Introspect itself. Before editing the global prompt, read {SKILLS_DIR}/agent-md-creator/SKILL.md for placement and {SKILLS_DIR}/writing-agent-prompt/SKILL.md for wording, then verify with a realistic response probe drawn from the failure transcript.
-    5. Use project_prompt for repo-specific behavior. Create or update the target repo's AGENTS.md for shared guidance; the target repo is the event cwd or the project proven by the transcript, not the Introspect runtime repo unless the failure is about Introspect itself. Create CLAUDE.md as a symlink to AGENTS.md when no Claude-only additions exist; use a real CLAUDE.md with @AGENTS.md only when Claude needs extra project guidance. Use CLAUDE.local.md for private project notes.
+    5. Use project_prompt for repo-specific behavior. the target repo is the event cwd or the project proven by the transcript, not the Introspect runtime repo unless the failure is about Introspect itself. In the background reflector, do not edit target project source or product code; write a proposal under {INTROSPECT_HOME}/proposals/ when the project prompt needs a foreground apply. Project AGENTS.md/CLAUDE.md edits outside {INTROSPECT_HOME} are for foreground agents after the user asks to apply them.
     6. Use home_memory for durable facts, preferences, user vocabulary, or machine/project state that should be remembered but should not change agent behavior globally. Write it under {INTROSPECT_HOME}/memory only when it is directly supported by the transcript.
 7. Use skill_new or skill_update only for repeatable procedures, tool workflows, domain references, scripts, or assets that future agents should load on demand. Do not create a skill from one noisy event unless it captures a recurring workflow or a corrected procedure that will likely repeat.
 8. Prefer updating an existing umbrella skill or support file over creating a narrow duplicate. Use project_skill_new or project_skill_update when the workflow belongs to one codebase; write Codex/OpenCode project skills under .agents/skills/<slug>/SKILL.md and Claude project skills under .claude/skills/<slug>/SKILL.md in that target repo.
