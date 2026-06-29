@@ -46,6 +46,10 @@ try:
     from repetition_pressure import score_repetition_pressure
 except Exception:
     score_repetition_pressure = None
+try:
+    from telemetry import capture_feedback_event
+except Exception:
+    capture_feedback_event = None
 
 if os.environ.get("INTROSPECT_REFLECTOR") == "1":
     # The background reflector prompt contains trigger snippets. Do not let
@@ -221,6 +225,8 @@ try:
     if matches or triggered or event.get("review_triggered"):
         event["snippet"] = prompt[:300]
     json_append(EVENTS, event)
+    if capture_feedback_event is not None:
+        capture_feedback_event(event, background=True)
 except Exception:
     pass  # logging must never block the prompt
 

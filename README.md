@@ -6,7 +6,7 @@ It ships no graphical bundle or menu-bar process. macOS is the supported runtime
 
 Introspect watches local Claude, Codex, and OpenCode sessions for moments where an agent got stuck, ignored instructions, overclaimed, patched the wrong layer, or needed repeated correction. When a real failure is detected, a locked reflector run inspects the source transcript and updates the right durable surface: global `AGENTS.md`, project `AGENTS.md`, project skills, user-wide skills, or local memory. It can also decide that no change is justified.
 
-All runtime state stays local under `~/.introspect`: prompt links, settings, transcript-derived events, classifier scores, queued runs, reflector prompts, surface diffs, proposals, run history, local memory, and user-wide skills.
+Runtime state lives under `~/.introspect`: prompt links, settings, transcript-derived events, classifier scores, queued runs, reflector prompts, surface diffs, proposals, run history, local memory, and user-wide skills. Optional PostHog telemetry syncs event metadata and content hashes to the configured Introspect project; raw transcript archives are not uploaded.
 
 ## Install
 
@@ -58,9 +58,13 @@ Common configuration:
 ```bash
 introspect install --reflect-mode immediate --apply-mode auto --runner codex
 introspect config --sensitivity sensitive --apply-mode auto --runner codex
+introspect config --telemetry off
+introspect config --telemetry on --telemetry-mode basic --telemetry-token phc_...
 introspect run --host codex --event manual --apply auto --force
 introspect runs -n 20
 introspect diff --summary
+introspect telemetry status
+introspect telemetry flush
 ```
 
 No model is pinned by default. Blank, `default`, and `auto` mean "use the selected CLI's current default model."
@@ -108,6 +112,7 @@ It installs:
 - a login health monitor that repairs drift in links, hook config, scanner state, and skill exports
 - an optional nightly reflector LaunchAgent when `--reflect-mode nightly` is selected
 - a bounded one-time local history backfill
+- a local telemetry queue under `~/.introspect/telemetry` when PostHog telemetry is enabled and configured
 - best-effort local notifications through `osascript`
 
 The backfill scores recent local history into `~/.introspect/feedback/events.jsonl`. It does not queue old history into the reflector, so install does not rewrite prompts from old conversations. Repeated installs skip backfill unless `--force-backfill` is used.
@@ -131,14 +136,15 @@ The terminal dashboard shows:
 
 1. A Claude, Codex, or OpenCode prompt is submitted.
 2. A hook or transcript scanner records direct user prompt metadata under `~/.introspect/feedback`.
-3. The local classifier scores whether the direct user message looks like negative feedback or an agent-boundary failure.
-4. Low scores are logged for audit only.
-5. Review-tier near-repeat corrections across chats in the same project can wake through local repetition pressure.
-6. High-confidence or repeated-pressure events are appended to `trigger-queue.jsonl`.
-7. The locked worker debounces nearby events, batches them, applies cooldowns, snapshots relevant agent surfaces, and runs one reflector process in the configured apply mode.
-8. The reflector reads the source transcript and chooses one target: no change, global prompt, project prompt, home memory, user skill, project skill, or skill pruning.
-9. The worker records the reflector prompt, output, status, notification result, and exact surface diff.
-10. The CLI reads those local artifacts through `introspect status`, `introspect runs`, and `introspect diff`.
+3. If telemetry is enabled and configured, the same metadata is queued for PostHog with hashed content and hashed local paths.
+4. The local classifier scores whether the direct user message looks like negative feedback or an agent-boundary failure.
+5. Low scores are logged for audit only.
+6. Review-tier near-repeat corrections across chats in the same project can wake through local repetition pressure.
+7. High-confidence or repeated-pressure events are appended to `trigger-queue.jsonl`.
+8. The locked worker debounces nearby events, batches them, applies cooldowns, snapshots relevant agent surfaces, and runs one reflector process in the configured apply mode.
+9. The reflector reads the source transcript and chooses one target: no change, global prompt, project prompt, home memory, user skill, project skill, or skill pruning.
+10. The worker records the reflector prompt, output, status, notification result, and exact surface diff.
+11. The CLI reads those local artifacts through `introspect status`, `introspect runs`, and `introspect diff`.
 
 The classifier uses word and character features because the signal is not only exact words; it also catches misspellings, punctuation-heavy frustration, and phrases it has not seen verbatim. Repetition pressure is separate: it counts similar review-tier complaints across distinct recent user turns in the same project, stores hashed local features under the feedback directory, and ignores assistant messages, Codex file/context wrappers, control phrases, pasted context, and hook/scanner duplicate observations.
 
@@ -185,6 +191,7 @@ Requirements:
 /usr/bin/python3 scripts/test-trigger-words.py
 /usr/bin/python3 scripts/test-reflector-prompt-contract.py
 /usr/bin/python3 scripts/test-introspect-run.py
+/usr/bin/python3 scripts/test-telemetry.py
 INTROSPECT_SKILLS_DIR="$PWD/skills" /usr/bin/python3 scripts/validate-skills.py
 ./scripts/test-release-e2e.sh
 ./bin/introspect status
@@ -214,7 +221,10 @@ Introspect is local-first:
 - it reads local Claude, Codex, and OpenCode prompt and transcript files
 - it writes local feedback and run artifacts under `~/.introspect`
 - it uses the installed Claude or Codex CLI only when a reflector run is triggered
-- it does not upload the local transcript archive to a Companion server
+- telemetry can be disabled with `introspect config --telemetry off`
+- basic telemetry sends event names, classifier scores, runtime mode, and hashes of snippets, paths, sessions, and message locators
+- redacted telemetry can be enabled with `introspect config --telemetry-mode redacted`; it includes short redacted snippets for debugging
+- it does not upload the local transcript archive to a Companion server or PostHog
 - it does not install a default banned-word list
 
 ## References

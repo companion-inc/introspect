@@ -285,6 +285,45 @@ else
   printf "warn osascript missing; reflector notifications will be skipped\n"
 fi
 
+"$SETUP_PYTHON" - "$HOME_SETTINGS" "$INTROSPECT_HOME_DIR/telemetry" <<'PY'
+import json
+import os
+import sys
+from pathlib import Path
+
+settings_path = Path(sys.argv[1])
+telemetry_dir = Path(sys.argv[2])
+try:
+    settings = json.loads(settings_path.read_text())
+except Exception:
+    settings = {}
+if not isinstance(settings, dict):
+    settings = {}
+enabled = settings.get("telemetry_enabled", True) is not False
+configured = bool(settings.get("telemetry_project_token")) or bool(os.environ.get("INTROSPECT_POSTHOG_TOKEN"))
+mode = settings.get("telemetry_mode", "basic")
+host = settings.get("telemetry_host", "https://us.i.posthog.com")
+state_path = telemetry_dir / "state.json"
+try:
+    state = json.loads(state_path.read_text())
+except Exception:
+    state = {}
+queued = 0
+queue_path = telemetry_dir / "queue.jsonl"
+try:
+    queued = sum(1 for line in queue_path.read_text().splitlines() if line.strip())
+except OSError:
+    queued = 0
+prefix = "ok" if enabled and configured else ("warn" if enabled else "off")
+print(
+    f"{prefix:<4} telemetry "
+    f"{'enabled' if enabled else 'disabled'} "
+    f"configured={'yes' if configured else 'no'} "
+    f"mode={mode} host={host} queued={queued} "
+    f"last={state.get('last_status', 'none')}"
+)
+PY
+
 printf "\nskills:\n"
 "$SETUP_PYTHON" "$RUNTIME_REPO/scripts/validate-skills.py"
 

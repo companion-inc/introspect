@@ -912,9 +912,11 @@ def render_dashboard() -> None:
     state = read_json(DEFAULT_FEEDBACK / "reflector-state.json", {})
     scan = read_json(DEFAULT_FEEDBACK / "codex-transcript-scan-state.json", {})
     settings = read_json(SETTINGS, {})
+    telemetry_state = read_json(DEFAULT_HOME / "telemetry" / "state.json", {})
     events = load_events()
     batches = read_jsonl(DEFAULT_FEEDBACK / "reflector-batches.jsonl")
     queue = read_jsonl(DEFAULT_FEEDBACK / "trigger-queue.jsonl")
+    telemetry_queue = read_jsonl(DEFAULT_HOME / "telemetry" / "queue.jsonl")
     signal = load_signal_summary(events)
     queued = len(queue)
     lock = (DEFAULT_FEEDBACK / "reflector.lock").exists()
@@ -937,6 +939,16 @@ def render_dashboard() -> None:
         f"runner={short(settings.get('reflector_runner'), 'default')} "
         f"sensitivity={short(settings.get('wake_sensitivity'), 'balanced')} "
         f"threshold={short(settings.get('wake_custom_threshold'), 'model')}"
+    )
+    telemetry_enabled = settings.get("telemetry_enabled", True) is not False
+    telemetry_configured = bool(settings.get("telemetry_project_token")) or bool(os.environ.get("INTROSPECT_POSTHOG_TOKEN"))
+    print(
+        "telemetry   "
+        f"{'on' if telemetry_enabled else 'off'} "
+        f"mode={short(settings.get('telemetry_mode'), 'basic')} "
+        f"configured={'yes' if telemetry_configured else 'no'} "
+        f"queued={len(telemetry_queue)} "
+        f"last={short(telemetry_state.get('last_status'))}"
     )
     print("links       " + " ".join(f"{label}={'ok' if ok else 'bad'}" for label, _path, ok in prompt_links()))
     print()
@@ -1060,6 +1072,10 @@ def config(args: argparse.Namespace) -> int:
         "--claude-model": args.claude_model,
         "--claude-fallback-model": args.claude_fallback_model,
         "--codex-model": args.codex_model,
+        "--telemetry": args.telemetry,
+        "--telemetry-mode": args.telemetry_mode,
+        "--telemetry-token": args.telemetry_token,
+        "--telemetry-host": args.telemetry_host,
     }
     if any(value is not None for value in updates.values()):
         preserved = {
@@ -1073,6 +1089,10 @@ def config(args: argparse.Namespace) -> int:
             "--claude-model": settings.get("reflector_claude_model", ""),
             "--claude-fallback-model": settings.get("reflector_claude_fallback_model", ""),
             "--codex-model": settings.get("reflector_codex_model", ""),
+            "--telemetry": "on" if settings.get("telemetry_enabled", True) is not False else "off",
+            "--telemetry-mode": settings.get("telemetry_mode", "basic"),
+            "--telemetry-token": settings.get("telemetry_project_token", ""),
+            "--telemetry-host": settings.get("telemetry_host", "https://us.i.posthog.com"),
         }
         install_args: list[str] = []
         for flag, current in preserved.items():
@@ -1082,8 +1102,24 @@ def config(args: argparse.Namespace) -> int:
             install_args.extend([flag, str(value)])
         install_args.append("--no-backfill")
         return run([str(REPO / "scripts" / "install-hooks.sh"), *install_args])
-    print(json.dumps(settings, indent=2, sort_keys=True))
+    safe_settings = dict(settings)
+    safe_settings.setdefault("telemetry_enabled", True)
+    safe_settings.setdefault("telemetry_mode", "basic")
+    safe_settings.setdefault("telemetry_host", "https://us.i.posthog.com")
+    safe_settings.setdefault("telemetry_project_token", "")
+    if safe_settings.get("telemetry_project_token"):
+        safe_settings["telemetry_project_token"] = "[configured]"
+    print(json.dumps(safe_settings, indent=2, sort_keys=True))
     return 0
+
+
+def telemetry(args: argparse.Namespace) -> int:
+    script = REPO / "hooks" / "telemetry.py"
+    env = os.environ.copy()
+    env.setdefault("INTROSPECT_HOME", str(DEFAULT_HOME))
+    if args.action == "flush":
+        return run([sys.executable, str(script), "flush", "--limit", str(args.limit)], env=env)
+    return run([sys.executable, str(script), "status"], env=env)
 
 
 def notify(args: argparse.Namespace) -> int:
@@ -1148,7 +1184,16 @@ def main(argv: list[str] | None = None) -> int:
     config_parser.add_argument("--claude-model")
     config_parser.add_argument("--claude-fallback-model")
     config_parser.add_argument("--codex-model")
+    config_parser.add_argument("--telemetry", choices=["on", "off"])
+    config_parser.add_argument("--telemetry-mode", choices=["basic", "redacted"])
+    config_parser.add_argument("--telemetry-token")
+    config_parser.add_argument("--telemetry-host")
     config_parser.set_defaults(func=config)
+
+    telemetry_parser = sub.add_parser("telemetry", help="show or flush telemetry queue")
+    telemetry_parser.add_argument("action", choices=["status", "flush"], nargs="?", default="status")
+    telemetry_parser.add_argument("--limit", type=int, default=50)
+    telemetry_parser.set_defaults(func=telemetry)
 
     run_parser = sub.add_parser("run", help="run Introspect on recent transcript changes")
     run_parser.add_argument("--host", choices=["codex", "claude", "opencode", "cursor", "unknown"], default="unknown")

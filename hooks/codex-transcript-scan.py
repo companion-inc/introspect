@@ -46,6 +46,11 @@ try:
     from repetition_pressure import score_repetition_pressure
 except Exception:
     score_repetition_pressure = None
+try:
+    from telemetry import capture_feedback_event, flush_queue as flush_telemetry_queue
+except Exception:
+    capture_feedback_event = None
+    flush_telemetry_queue = None
 DEFAULT_REPO = Path(__file__).resolve().parent.parent
 REPO = Path(os.path.expanduser(os.environ.get("INTROSPECT_REPO", str(DEFAULT_REPO))))
 AGENTS_HOME = Path(os.path.expanduser(os.environ.get("AGENTS_HOME") or "~/.agents"))
@@ -463,6 +468,8 @@ def scan_file(
 
         if write_events:
             append_json(EVENTS, event)
+            if capture_feedback_event is not None:
+                capture_feedback_event(event)
         processed[key] = iso_now()
         new_events += 1
 
@@ -600,6 +607,12 @@ def main() -> int:
         state["last_backfill_max_events"] = max_events
         state["last_backfill_schema_version"] = BACKFILL_SCHEMA_VERSION
     write_json(STATE, state)
+
+    if flush_telemetry_queue is not None and new_events:
+        try:
+            flush_telemetry_queue()
+        except Exception:
+            pass
 
     print(
         "codex-transcript-scan: "
