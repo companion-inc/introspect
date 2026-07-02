@@ -1194,7 +1194,9 @@ def build_prompt(events: list[dict]) -> str:
         project_prompt_instruction = (
             "Use project_prompt for repo-specific behavior. The target repo is the event cwd or the "
             "project proven by the transcript, not the Introspect runtime repo unless the failure is about "
-            "Introspect itself. Auto-apply mode is enabled: edit the target repo's AGENTS.md/CLAUDE.md "
+            "Introspect itself. Repo file paths, artifact schemas, command conventions, and workflow rules "
+            "belong in project_prompt because future agents load AGENTS.md/CLAUDE.md, not home memory. "
+            "Auto-apply mode is enabled: edit the target repo's AGENTS.md/CLAUDE.md "
             "directly at the narrowest loading scope, verify with a behavior probe, then commit only the "
             "prompt or skill slice you changed in that target repo."
         )
@@ -1213,7 +1215,9 @@ def build_prompt(events: list[dict]) -> str:
     elif REFLECTOR_APPLY_MODE == "never":
         project_prompt_instruction = (
             "Use project_prompt for repo-specific behavior, but apply mode is never: do not edit files. "
-            "Log the exact target repo, target surface, and proposed change in the reflector output only."
+            "Repo file paths, artifact schemas, command conventions, and workflow rules belong in "
+            "project_prompt because future agents load AGENTS.md/CLAUDE.md, not home memory. Log the "
+            "exact target repo, target surface, and proposed change in the reflector output only."
         )
         project_skill_instruction = (
             "Use project_skill_new or project_skill_update only as a classification in apply-never mode; "
@@ -1224,7 +1228,9 @@ def build_prompt(events: list[dict]) -> str:
         project_prompt_instruction = (
             "Use project_prompt for repo-specific behavior. The target repo is the event cwd or the "
             "project proven by the transcript, not the Introspect runtime repo unless the failure is about "
-            "Introspect itself. Proposal mode is enabled: do not edit target project source or product "
+            "Introspect itself. Repo file paths, artifact schemas, command conventions, and workflow rules "
+            "belong in project_prompt because future agents load AGENTS.md/CLAUDE.md, not home memory. "
+            "Proposal mode is enabled: do not edit target project source or product "
             "code; write a proposal under {home}/proposals/ when the project prompt needs a foreground "
             "apply. Project AGENTS.md/CLAUDE.md edits outside {home} are for foreground auto-apply runs."
         ).format(home=INTROSPECT_HOME)
@@ -1276,7 +1282,7 @@ Workflow:
 3. Classify the change target as exactly one of: no_change, core_prompt, project_prompt, home_memory, skill_new, skill_update, project_skill_new, project_skill_update, skill_prune.
     4. Use core_prompt only for an always-loaded invariant that should apply across nearly every task. Edit the live global prompt at {PROMPT_PATH}; do not edit Introspect runtime files under {REPO} unless the source thread is about Introspect itself. Before editing the global prompt, read {SKILLS_DIR}/agent-md-creator/SKILL.md for placement and {SKILLS_DIR}/writing-agent-prompt/SKILL.md for wording, then verify with a realistic response probe drawn from the failure transcript.
     5. {project_prompt_instruction}
-    6. Use home_memory for durable facts, preferences, user vocabulary, or machine/project state that should be remembered but should not change agent behavior globally. Write it under {INTROSPECT_HOME}/memory only when it is directly supported by the transcript.
+    6. Use home_memory for durable facts, preferences, user vocabulary, or machine/project state that should be remembered but should not change loaded agent behavior. Do not use home_memory for repo file paths, artifact schemas, command conventions, or workflow rules that future agents must follow in a repo; route those to project_prompt or project_skill instead. Write memory under {INTROSPECT_HOME}/memory only when it is directly supported by the transcript.
 7. Use skill_new or skill_update only for repeatable procedures, tool workflows, domain references, scripts, or assets that future agents should load on demand. Do not create a skill from one noisy event unless it captures a recurring workflow or a corrected procedure that will likely repeat.
 8. Prefer updating an existing umbrella skill or support file over creating a narrow duplicate. {project_skill_instruction}
 9. Use skill_prune for stale, duplicated, overbroad, unsupported, or harmful skills. Before any skill operation, read skills/skill-creator/SKILL.md, its source map, the skills index, and the closest existing skill. Prefer updating or pruning a close skill over creating a duplicate.
